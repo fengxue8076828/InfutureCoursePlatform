@@ -1,0 +1,5423 @@
+﻿"use client";
+
+import {
+  ArrowUpRight,
+  Bell,
+  Bold,
+  BookOpen,
+  Building2,
+  ChevronRight,
+  ClipboardCheck,
+  Database,
+  Edit3,
+  FileText,
+  GripVertical,
+  HelpCircle,
+  ImagePlus,
+  Italic,
+  LayoutDashboard,
+  Link2,
+  ListChecks,
+  ListOrdered,
+  LogOut,
+  Menu,
+  Newspaper,
+  Plus,
+  Save,
+  Search,
+  Settings,
+  ShieldCheck,
+  Trash2,
+  List,
+  Video,
+  Users,
+  X
+} from "lucide-react";
+import Link from "next/link";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useDeleteConfirmation } from "./DeleteConfirmDialog";
+
+import {
+  adminAccount,
+  adminBlogPosts,
+  adminInstitution,
+  courseRankings,
+  dashboardRanges,
+  fallbackAdminQuestions,
+  gradingQueue,
+  institutionCategoryOptions,
+  teacherUsers,
+  usefulMetrics
+} from "@/lib/admin-data";
+import { clearAdminSession, getAdminRequestHeaders, getAdminSessionUser } from "@/lib/admin-session";
+
+import { QuestionBankManager } from "./QuestionBankManager";
+
+type ModuleKey =
+  | "dashboard"
+  | "institution"
+  | "courseCategories"
+  | "courses"
+  | "questions"
+  | "teachers"
+  | "users"
+  | "grading"
+  | "blogs";
+
+const menuItems: Array<{ key: ModuleKey; label: string; icon: typeof LayoutDashboard }> = [
+  { key: "dashboard", label: "主页面板", icon: LayoutDashboard },
+  { key: "institution", label: "机构信息", icon: Building2 },
+  { key: "users", label: "用户权限管理", icon: ShieldCheck },
+  { key: "courseCategories", label: "课程类别管理", icon: ListChecks },
+  { key: "courses", label: "课程管理", icon: BookOpen },
+  { key: "questions", label: "题库管理", icon: Database },
+  { key: "teachers", label: "老师管理", icon: Users },
+  { key: "grading", label: "测验批改", icon: ClipboardCheck },
+  { key: "blogs", label: "博客管理", icon: Newspaper }
+];
+
+const moduleLabels = menuItems.reduce<Record<ModuleKey, string>>((acc, item) => {
+  acc[item.key] = item.label;
+  return acc;
+}, {} as Record<ModuleKey, string>);
+
+const COURSE_DRAFT_STORAGE_KEY = "infuture-admin-course-draft";
+const ADMIN_SELECTED_COURSE_ID_STORAGE_KEY = "infuture-admin-selected-course-id";
+const ADMIN_LOGO_STORAGE_KEY = "infuture-admin-logo-url";
+const ADMIN_INSTITUTION_NAME_STORAGE_KEY = "infuture-admin-institution-name";
+const ADMIN_PROFILE_STORAGE_KEY = "infuture-admin-profile";
+const COURSE_CATEGORY_CHANGE_EVENT = "infuture-course-categories-change";
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const DEFAULT_TEACHER_AVATAR_URL = "/avatars/default-teacher.svg";
+const DEFAULT_ADMIN_AVATAR =
+  "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'%3E%3Crect width='160' height='160' rx='28' fill='%23f1f5f9'/%3E%3Ccircle cx='80' cy='59' r='28' fill='%2394a3b8'/%3E%3Cpath d='M35 132c6-27 24-43 45-43s39 16 45 43' fill='%2394a3b8'/%3E%3C/svg%3E";
+
+const profileRegionOptions = ["欧洲", "北美洲", "亚洲"];
+
+function normalizeProfileRegion(region?: string | null) {
+  const value = (region ?? "").trim();
+  if (!value || value.toLowerCase() === "europe") {
+    return "欧洲";
+  }
+  if (value.toLowerCase() === "north america") {
+    return "北美洲";
+  }
+  if (value.toLowerCase() === "asia") {
+    return "亚洲";
+  }
+  return profileRegionOptions.includes(value) ? value : "欧洲";
+}
+
+type CourseDraft = {
+  courseId: number;
+  title: string;
+  category: string;
+  level: string;
+  coverUrl: string;
+  teacher: string;
+  teacherId: number | null;
+  introVideoUrl: string;
+  description: string;
+  chapters: CourseChapterDraft[];
+};
+
+type CoursePublicationStatus = "draft" | "published" | "archived";
+
+type AdminCourseSummary = {
+  id: number;
+  title: string;
+  category: string;
+  level: string;
+  teacher: string;
+  teacherId: number | null;
+  image: string;
+  status: string;
+  statusValue: CoursePublicationStatus;
+  institutionId: number | null;
+};
+
+type TeacherOption = {
+  id: number;
+  name: string;
+  title: string;
+  sourceUserId: number | null;
+  slug?: string;
+  bio?: string;
+  avatarUrl?: string;
+  region?: string;
+  email?: string;
+  specialties?: string[];
+  institutionName?: string;
+};
+
+type CourseLessonItemType = "video" | "handout" | "exercise" | "quiz";
+
+type CourseLessonItemBody = {
+  question_ids?: number[];
+  [key: string]: unknown;
+};
+
+type CourseLessonItemDraft = {
+  id?: number;
+  localId: string;
+  title: string;
+  itemType: CourseLessonItemType;
+  contentUrl: string;
+  body: CourseLessonItemBody;
+  requiredMinutes: number;
+  position: number;
+};
+
+type CourseChapterDraft = {
+  id?: number;
+  localId: string;
+  title: string;
+  summary: string;
+  position: number;
+  items: CourseLessonItemDraft[];
+};
+
+type CourseQuestionStatus = "draft" | "saved" | "published";
+
+type CourseQuestion = {
+  id: number;
+  title: string;
+  prompt: string;
+  type: string;
+  difficulty: string;
+  skillArea: string;
+  points: number;
+  status: CourseQuestionStatus;
+  createdByUserId: number | null;
+};
+
+type CourseQuestionOwnerOption = {
+  id: number;
+  name: string;
+  role: ManagedUserRole;
+};
+
+type AdminUploadKind =
+  | "course_cover"
+  | "course_intro_video"
+  | "lesson_video"
+  | "handout"
+  | "logo"
+  | "question_media";
+
+type ApiCourseDetail = {
+  id: number;
+  title: string;
+  category: string;
+  level: string;
+  status?: CoursePublicationStatus;
+  description?: string;
+  hero_image_url: string;
+  intro_video_url?: string;
+  institution?: { id: number };
+  teacher?: { id: number; name: string; title?: string };
+  chapters?: Array<{
+    id: number;
+    title: string;
+    summary: string;
+    position: number;
+    items: Array<{
+      id: number;
+      title: string;
+      item_type: CourseLessonItemType;
+      content_url: string | null;
+      body: CourseLessonItemBody;
+      required_minutes: number;
+      position: number;
+    }>;
+  }>;
+};
+
+type ApiCourseCard = {
+  id: number;
+  title: string;
+  category: string;
+  level: string;
+  status?: CoursePublicationStatus;
+  hero_image_url: string;
+  institution?: { id: number };
+  teacher?: { id: number; name: string; title?: string };
+};
+
+type CourseCategory = {
+  id: number;
+  parentId: number | null;
+  name: string;
+  slug: string;
+  position: number;
+  isActive: boolean;
+};
+
+type ApiCourseCategory = {
+  id: number;
+  parent_id: number | null;
+  name: string;
+  slug: string;
+  position: number;
+  is_active: boolean;
+};
+
+type CourseCategoryDraft = {
+  id: number;
+  parentId: number | null;
+  name: string;
+  position: number;
+  isActive: boolean;
+};
+
+type ApiTeacher = {
+  id: number;
+  name: string;
+  slug?: string;
+  title: string;
+  bio?: string;
+  avatar_url?: string;
+  region?: string;
+  specialties?: {
+    source_user_id?: number;
+    email?: string;
+    items?: unknown;
+    [key: string]: unknown;
+  } | null;
+  institution?: {
+    id: number;
+    name: string;
+    region?: string | null;
+    category?: string | null;
+  } | null;
+};
+
+type AdminRoleValue = "super_admin" | "institution_admin" | "teacher" | "student";
+
+type AdminProfile = {
+  name: string;
+  email: string;
+  role: string;
+  roleValue: AdminRoleValue;
+  title: string;
+  phone: string;
+  region: string;
+  bio: string;
+  avatar: string;
+};
+
+type ApiAdminProfile = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: string;
+  avatar_url: string | null;
+  institution_id: number | null;
+  title: string | null;
+  phone: string | null;
+  region: string | null;
+  bio: string | null;
+};
+
+type ManagedUserRole = "super_admin" | "institution_admin" | "teacher";
+
+type ManagedUser = {
+  id: number;
+  email: string;
+  fullName: string;
+  role: ManagedUserRole;
+  title: string;
+  phone: string;
+  region: string;
+  bio: string;
+  isActive: boolean;
+};
+
+type ApiManagedUser = {
+  id: number;
+  email: string;
+  full_name: string;
+  role: string;
+  title: string | null;
+  phone: string | null;
+  region: string | null;
+  bio: string | null;
+  is_active: boolean;
+};
+
+type ManagedUserSaveResult =
+  | { user: ManagedUser; error?: never }
+  | { user?: never; error: string };
+
+type AdminPasswordCodeResult =
+  | { ok: true; message: string; expiresInSeconds: number; demoCode?: string | null }
+  | { ok: false; message: string };
+
+type AdminPasswordUpdateResult =
+  | { ok: true; profile: AdminProfile }
+  | { ok: false; message: string };
+
+type InstitutionDraft = {
+  name: string;
+  logoUrl: string;
+  category: string;
+  region: string;
+  website: string;
+  phone: string;
+  email: string;
+  address: string;
+  contactPerson: string;
+  description: string;
+};
+
+type ApiInstitution = {
+  id: number;
+  name: string;
+  slug: string;
+  logo_url: string;
+  category: string;
+  region: string;
+  website: string | null;
+  phone: string | null;
+  email: string | null;
+  address: string | null;
+  contact_person: string | null;
+  description: string;
+};
+
+const defaultAdminProfile: AdminProfile = {
+  name: adminAccount.name,
+  email: teacherUsers[0]?.email ?? "admin@example.com",
+  role: adminAccount.role,
+  roleValue: "super_admin",
+  title: teacherUsers[0]?.title ?? "机构管理员",
+  phone: "+49 30 0000 3939",
+  region: normalizeProfileRegion(adminInstitution.region),
+  bio: "负责机构课程、题库和教学运营管理。",
+  avatar: DEFAULT_ADMIN_AVATAR
+};
+
+const defaultInstitutionDraft: InstitutionDraft = {
+  name: adminInstitution.name,
+  logoUrl: adminInstitution.logo_url,
+  category: adminInstitution.category,
+  region: adminInstitution.region,
+  website: adminInstitution.website ?? "",
+  phone: adminInstitution.phone ?? "",
+  email: adminInstitution.email ?? "",
+  address: adminInstitution.address ?? "",
+  contactPerson: adminInstitution.contactPerson ?? "",
+  description: adminInstitution.description
+};
+
+function roleLabel(role: string) {
+  if (role === "institution_admin") {
+    return "管理员";
+  }
+  if (role === "super_admin") {
+    return "超级管理员";
+  }
+  if (role === "teacher") {
+    return "老师";
+  }
+  return role;
+}
+
+const managedUserRoleLabels: Record<ManagedUserRole, string> = {
+  super_admin: "超级管理员",
+  institution_admin: "管理员",
+  teacher: "老师"
+};
+
+const managedUserRoleDescriptions: Record<ManagedUserRole, string> = {
+  super_admin: "可访问后台所有页面",
+  institution_admin: "可访问机构信息、用户权限管理",
+  teacher: "可访问主页面板、课程管理、题库管理、测验批改、博客管理"
+};
+
+const managedUserRoleOptions: ManagedUserRole[] = ["super_admin", "institution_admin", "teacher"];
+
+const menuAccessByRole: Record<ManagedUserRole, ModuleKey[]> = {
+  super_admin: menuItems.map((item) => item.key),
+  institution_admin: ["institution", "users"],
+  teacher: ["dashboard", "courses", "questions", "grading", "blogs"]
+};
+
+function normalizeAdminRoleValue(role: string | undefined): AdminRoleValue {
+  if (role === "super_admin" || role === "institution_admin" || role === "teacher" || role === "student") {
+    return role;
+  }
+  if (role === "超级管理员") {
+    return "super_admin";
+  }
+  if (role === "管理员" || role === "机构管理员") {
+    return "institution_admin";
+  }
+  if (role === "老师") {
+    return "teacher";
+  }
+  return defaultAdminProfile.roleValue;
+}
+
+function visibleMenuItemsForRole(role: AdminRoleValue) {
+  if (role === "super_admin" || role === "institution_admin" || role === "teacher") {
+    const allowedKeys = new Set(menuAccessByRole[role]);
+    return menuItems.filter((item) => allowedKeys.has(item.key));
+  }
+  return [];
+}
+
+function resolveProfileAvatar(avatar: string | null | undefined) {
+  return avatar?.trim() ? avatar : DEFAULT_ADMIN_AVATAR;
+}
+
+function institutionFromApi(institution: ApiInstitution): InstitutionDraft {
+  return {
+    name: institution.name,
+    logoUrl: institution.logo_url || adminInstitution.logo_url,
+    category: institution.category,
+    region: institution.region,
+    website: institution.website ?? "",
+    phone: institution.phone ?? "",
+    email: institution.email ?? "",
+    address: institution.address ?? "",
+    contactPerson: institution.contact_person ?? "",
+    description: institution.description
+  };
+}
+
+function optionalText(value: string) {
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function institutionToApiPayload(draft: InstitutionDraft) {
+  return {
+    name: draft.name.trim(),
+    logo_url: draft.logoUrl.trim() || adminInstitution.logo_url,
+    region: draft.region.trim() || "Europe",
+    website: optionalText(draft.website),
+    phone: optionalText(draft.phone),
+    email: optionalText(draft.email),
+    address: optionalText(draft.address),
+    contact_person: optionalText(draft.contactPerson),
+    description: draft.description.trim()
+  };
+}
+
+function persistAdminBrandFromInstitution(draft: InstitutionDraft) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(ADMIN_LOGO_STORAGE_KEY, draft.logoUrl || adminInstitution.logo_url);
+  window.localStorage.setItem(ADMIN_INSTITUTION_NAME_STORAGE_KEY, draft.name || adminInstitution.name);
+  window.dispatchEvent(new Event("infuture-admin-brand-change"));
+}
+
+async function fetchAdminInstitution(): Promise<InstitutionDraft | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution`, {
+      headers: getAdminRequestHeaders(),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return institutionFromApi((await response.json()) as ApiInstitution);
+  } catch {
+    return null;
+  }
+}
+
+async function saveAdminInstitution(draft: InstitutionDraft): Promise<InstitutionDraft | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution`, {
+      method: "PUT",
+      headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(institutionToApiPayload(draft))
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return institutionFromApi((await response.json()) as ApiInstitution);
+  } catch {
+    return null;
+  }
+}
+
+function profileFromApi(profile: ApiAdminProfile): AdminProfile {
+  const roleValue = normalizeAdminRoleValue(profile.role);
+  return {
+    name: profile.full_name,
+    email: profile.email,
+    role: roleLabel(roleValue),
+    roleValue,
+    title: profile.title ?? defaultAdminProfile.title,
+    phone: profile.phone ?? defaultAdminProfile.phone,
+    region: normalizeProfileRegion(profile.region ?? defaultAdminProfile.region),
+    bio: profile.bio ?? defaultAdminProfile.bio,
+    avatar: resolveProfileAvatar(profile.avatar_url)
+  };
+}
+
+async function fetchAdminProfile(): Promise<AdminProfile | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/profile`, {
+      headers: getAdminRequestHeaders(),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return profileFromApi((await response.json()) as ApiAdminProfile);
+  } catch {
+    return null;
+  }
+}
+
+async function saveAdminProfile(profile: AdminProfile): Promise<AdminProfile | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/profile`, {
+      method: "PUT",
+      headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        email: profile.email,
+        full_name: profile.name,
+        avatar_url: profile.avatar === DEFAULT_ADMIN_AVATAR ? null : profile.avatar,
+        title: profile.title,
+        phone: profile.phone,
+        region: profile.region,
+        bio: profile.bio
+      })
+    });
+    if (!response.ok) {
+      return null;
+    }
+    return profileFromApi((await response.json()) as ApiAdminProfile);
+  } catch {
+    return null;
+  }
+}
+
+async function readSimpleApiDetail(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { detail?: unknown; message?: unknown };
+    const detail = typeof body.detail === "string" ? body.detail : typeof body.message === "string" ? body.message : "";
+    return detail || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+async function requestAdminPasswordChangeCode(): Promise<AdminPasswordCodeResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/profile/password-code`, {
+      method: "POST",
+      headers: getAdminRequestHeaders({ "Content-Type": "application/json" })
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: await readSimpleApiDetail(response, "验证码发送失败，请确认 FastAPI 服务正在运行。")
+      };
+    }
+    const data = (await response.json()) as { message: string; expires_in_seconds: number; demo_code?: string | null };
+    return {
+      ok: true,
+      message: data.message,
+      expiresInSeconds: data.expires_in_seconds,
+      demoCode: data.demo_code ?? null
+    };
+  } catch {
+    return { ok: false, message: "验证码发送失败，请确认 FastAPI 服务正在运行。" };
+  }
+}
+
+async function updateAdminPassword(verificationCode: string, newPassword: string): Promise<AdminPasswordUpdateResult> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/profile/password`, {
+      method: "POST",
+      headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ verification_code: verificationCode, new_password: newPassword })
+    });
+    if (!response.ok) {
+      return {
+        ok: false,
+        message: await readSimpleApiDetail(response, "密码修改失败，请检查验证码是否正确。")
+      };
+    }
+    return { ok: true, profile: profileFromApi((await response.json()) as ApiAdminProfile) };
+  } catch {
+    return { ok: false, message: "密码修改失败，请确认 FastAPI 服务正在运行。" };
+  }
+}
+
+function normalizeManagedUserRole(role: string): ManagedUserRole {
+  if (role === "super_admin" || role === "institution_admin" || role === "teacher") {
+    return role;
+  }
+  return "teacher";
+}
+
+function managedUserFromApi(user: ApiManagedUser): ManagedUser {
+  return {
+    id: user.id,
+    email: user.email,
+    fullName: user.full_name,
+    role: normalizeManagedUserRole(user.role),
+    title: user.title ?? "",
+    phone: user.phone ?? "",
+    region: user.region ?? "",
+    bio: user.bio ?? "",
+    isActive: user.is_active
+  };
+}
+
+function questionOwnerFromApi(user: ApiManagedUser): CourseQuestionOwnerOption {
+  return {
+    id: user.id,
+    name: user.full_name,
+    role: normalizeManagedUserRole(user.role)
+  };
+}
+
+function sortQuestionOwners(
+  owners: CourseQuestionOwnerOption[],
+  currentUserId: number | null
+) {
+  const uniqueOwners = Array.from(new Map(owners.map((owner) => [owner.id, owner])).values());
+  if (!currentUserId) {
+    return uniqueOwners;
+  }
+  return [...uniqueOwners].sort((left, right) => {
+    if (left.id === currentUserId) {
+      return -1;
+    }
+    if (right.id === currentUserId) {
+      return 1;
+    }
+    return left.name.localeCompare(right.name, "zh-Hans-CN");
+  });
+}
+
+function managedUserToApiPayload(user: ManagedUser) {
+  return {
+    email: user.email.trim(),
+    full_name: user.fullName.trim(),
+    role: user.role,
+    title: optionalText(user.title),
+    phone: optionalText(user.phone),
+    region: optionalText(user.region),
+    bio: optionalText(user.bio),
+    is_active: user.isActive
+  };
+}
+
+async function readApiErrorMessage(response: Response, fallback: string) {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    const detail = typeof body.detail === "string" ? body.detail : "";
+    if (detail === "Email already exists") {
+      return "用户保存失败：邮箱已存在，请换一个邮箱。";
+    }
+    if (
+      detail === "Institution admins cannot create super admins" ||
+      detail === "Institution admins cannot assign super admin"
+    ) {
+      return "用户保存失败：只有超级管理员才能创建或授予超级管理员角色。";
+    }
+    if (detail === "User belongs to another institution") {
+      return "用户保存失败：不能编辑其他机构的用户。";
+    }
+    if (detail === "Unsupported user role") {
+      return "用户保存失败：请选择有效的用户角色。";
+    }
+    if (detail) {
+      return `用户保存失败：${detail}`;
+    }
+  } catch {
+    return fallback;
+  }
+  return fallback;
+}
+
+async function fetchManagedUsers(): Promise<ManagedUser[] | null> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/users`, {
+      headers: getAdminRequestHeaders(),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      return null;
+    }
+    const users = (await response.json()) as ApiManagedUser[];
+    return users.map(managedUserFromApi);
+  } catch {
+    return null;
+  }
+}
+
+async function saveManagedUser(user: ManagedUser): Promise<ManagedUserSaveResult> {
+  try {
+    const isNew = user.id < 0;
+    const payload = managedUserToApiPayload(user);
+    const body = isNew
+      ? {
+          email: payload.email,
+          full_name: payload.full_name,
+          role: payload.role,
+          title: payload.title,
+          phone: payload.phone,
+          region: payload.region,
+          bio: payload.bio
+        }
+      : payload;
+    const response = await fetch(`${API_BASE_URL}/admin/users${isNew ? "" : `/${user.id}`}`, {
+      method: isNew ? "POST" : "PUT",
+      headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(body)
+    });
+    if (!response.ok) {
+      return {
+        error: await readApiErrorMessage(response, "用户保存失败，请确认邮箱未重复且 FastAPI 服务正在运行。")
+      };
+    }
+    return { user: managedUserFromApi((await response.json()) as ApiManagedUser) };
+  } catch {
+    return { error: "用户保存失败：无法连接 FastAPI 服务，请确认后端正在运行。" };
+  }
+}
+
+async function deleteManagedUser(userId: number): Promise<boolean> {
+  if (userId < 0) {
+    return true;
+  }
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/users/${userId}`, {
+      method: "DELETE",
+      headers: getAdminRequestHeaders()
+    });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
+const courseLessonItemTypes: Array<{
+  value: CourseLessonItemType;
+  label: string;
+  icon: typeof Video;
+}> = [
+  { value: "video", label: "讲课视频", icon: Video },
+  { value: "handout", label: "讲义", icon: FileText },
+  { value: "exercise", label: "练习", icon: ListChecks },
+  { value: "quiz", label: "测验", icon: HelpCircle }
+];
+
+function courseLessonItemDefaultTitle(itemType: CourseLessonItemType) {
+  return courseLessonItemTypes.find((type) => type.value === itemType)?.label ?? "课程项目";
+}
+
+const fallbackTeacherOptions: TeacherOption[] = teacherUsers.map((teacher) => ({
+  id: teacher.id,
+  name: teacher.name,
+  title: teacher.title,
+  sourceUserId: null
+}));
+
+const courseStatusLabels: Record<CoursePublicationStatus, string> = {
+  draft: "草稿",
+  published: "已发布",
+  archived: "已归档"
+};
+
+const courseStatusClasses: Record<CoursePublicationStatus, string> = {
+  draft: "bg-slate-100 text-slate-500",
+  published: "bg-mint/12 text-mint",
+  archived: "bg-coral/12 text-coral"
+};
+
+function normalizeCourseStatus(status?: string, fallback: CoursePublicationStatus = "draft") {
+  if (status === "draft" || status === "published" || status === "archived") {
+    return status;
+  }
+  return fallback;
+}
+
+function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
+  const statusValue = normalizeCourseStatus(course.status, "draft");
+  return {
+    id: course.id,
+    title: course.title,
+    category: course.category,
+    level: course.level,
+    teacher: course.teacher?.name ?? "未设置老师",
+    teacherId: course.teacher?.id ?? null,
+    image: course.hero_image_url,
+    status: courseStatusLabels[statusValue],
+    statusValue,
+    institutionId: course.institution?.id ?? null
+  };
+}
+
+function courseCategoryFromApi(category: ApiCourseCategory): CourseCategory {
+  return {
+    id: category.id,
+    parentId: category.parent_id,
+    name: category.name,
+    slug: category.slug,
+    position: category.position,
+    isActive: category.is_active
+  };
+}
+
+function courseCategoryDraftFromCategory(category: CourseCategory): CourseCategoryDraft {
+  return {
+    id: category.id,
+    parentId: category.parentId,
+    name: category.name,
+    position: category.position,
+    isActive: category.isActive
+  };
+}
+
+function createBlankCourseCategoryDraft(parentId: number | null = null): CourseCategoryDraft {
+  return {
+    id: -Date.now(),
+    parentId,
+    name: "",
+    position: 0,
+    isActive: true
+  };
+}
+
+function courseCategoryDraftToApiPayload(category: CourseCategoryDraft) {
+  return {
+    parent_id: category.parentId,
+    name: category.name.trim(),
+    position: category.position,
+    is_active: category.isActive
+  };
+}
+
+function buildCourseCategoryLabel(category: CourseCategory, categories: CourseCategory[]) {
+  const parent = category.parentId ? categories.find((item) => item.id === category.parentId) : null;
+  return parent ? `${parent.name} / ${category.name}` : category.name;
+}
+
+function selectableCourseCategoryLabels(categories: CourseCategory[]) {
+  const activeCategories = categories.filter((category) => category.isActive);
+  const parentIds = new Set(activeCategories.map((category) => category.parentId).filter(Boolean));
+  return activeCategories
+    .filter((category) => !parentIds.has(category.id))
+    .sort((left, right) => left.position - right.position || left.name.localeCompare(right.name, "zh-Hans-CN"))
+    .map((category) => buildCourseCategoryLabel(category, activeCategories));
+}
+
+function applyCoursePublicationStatus(
+  course: AdminCourseSummary,
+  statusValue: CoursePublicationStatus
+): AdminCourseSummary {
+  return {
+    ...course,
+    status: courseStatusLabels[statusValue],
+    statusValue
+  };
+}
+
+function normalizeTeacherFromApi(teacher: ApiTeacher): TeacherOption {
+  const specialties =
+    Array.isArray(teacher.specialties?.items)
+      ? teacher.specialties.items.filter(
+          (item): item is string => typeof item === "string" && item.trim().length > 0
+        )
+      : [];
+  return {
+    id: teacher.id,
+    name: teacher.name,
+    title: teacher.title,
+    slug: teacher.slug,
+    bio: teacher.bio ?? "",
+    avatarUrl: teacher.avatar_url ?? "",
+    region: teacher.region ?? "",
+    email: typeof teacher.specialties?.email === "string" ? teacher.specialties.email : "",
+    specialties,
+    institutionName: teacher.institution?.name ?? "",
+    sourceUserId:
+      typeof teacher.specialties?.source_user_id === "number"
+        ? teacher.specialties.source_user_id
+        : null
+  };
+}
+
+const emptyCourseSummary: AdminCourseSummary = {
+  id: 0,
+  title: "",
+  category: "",
+  level: "",
+  teacher: "",
+  teacherId: null,
+  image: "",
+  status: courseStatusLabels.draft,
+  statusValue: "draft",
+  institutionId: null
+};
+
+const courseQuestionStatusLabels: Record<CourseQuestionStatus, string> = {
+  draft: "草稿",
+  saved: "已保存",
+  published: "已发布"
+};
+
+const courseQuestionStatusClasses: Record<CourseQuestionStatus, string> = {
+  draft: "bg-slate-100 text-slate-500",
+  saved: "bg-skysoft/20 text-blue-700",
+  published: "bg-mint/15 text-mint"
+};
+
+const courseQuestionTypeLabels: Record<string, string> = {
+  fill_blank: "填空题",
+  single_choice: "单选题",
+  multiple_choice: "多选题",
+  writing: "开放式答案题",
+  coding: "代码编写题",
+  code_review: "代码修改题",
+  true_false: "判断题",
+  reading: "阅读理解题",
+  listening: "听力题",
+  pronunciation: "口语题",
+  media_upload: "素材上传题"
+};
+
+function courseDraftStorageKey(courseId: number) {
+  return `${COURSE_DRAFT_STORAGE_KEY}-${courseId}`;
+}
+
+function readSelectedCourseIdFromStorage() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const stored = window.sessionStorage.getItem(ADMIN_SELECTED_COURSE_ID_STORAGE_KEY);
+  if (!stored) {
+    return null;
+  }
+  const parsed = Number(stored);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function persistSelectedCourseId(courseId: number) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.setItem(ADMIN_SELECTED_COURSE_ID_STORAGE_KEY, String(courseId));
+}
+
+function createDraftLocalId(prefix: string) {
+  return `${prefix}-${Date.now()}-${Math.floor(Math.random() * 10_000)}`;
+}
+
+function isLocalNewCourse(courseId: number) {
+  return courseId < 0;
+}
+
+function createCourseSlug(title: string) {
+  const base = title
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-|-$/g, "");
+  return `${base || "course"}-${Date.now()}`;
+}
+
+function isUploadedVideoUrl(url: string | null | undefined) {
+  const normalizedUrl = url?.trim();
+  if (!normalizedUrl) {
+    return false;
+  }
+  return (
+    normalizedUrl.startsWith("data:video/") ||
+    normalizedUrl.startsWith("blob:") ||
+    normalizedUrl.startsWith("/uploads/") ||
+    normalizedUrl.includes("/uploads/")
+  );
+}
+
+function getTeacherByName(name: string, teachers: TeacherOption[] = fallbackTeacherOptions) {
+  return teachers.find((teacher) => teacher.name === name);
+}
+
+function getTeacherById(id: number | null | undefined, teachers: TeacherOption[] = fallbackTeacherOptions) {
+  return teachers.find((teacher) => teacher.id === id);
+}
+
+function createDefaultCourseDraft(
+  course: AdminCourseSummary,
+  teachers: TeacherOption[] = fallbackTeacherOptions
+): CourseDraft {
+  const teacher =
+    getTeacherById(course.teacherId, teachers) ?? getTeacherByName(course.teacher, teachers) ?? teachers[0];
+  return {
+    courseId: course.id,
+    title: course.title,
+    category: course.category,
+    level: course.level,
+    coverUrl: course.image,
+    teacher: teacher?.name ?? course.teacher,
+    teacherId: teacher?.id ?? course.teacherId ?? null,
+    introVideoUrl: "",
+    description: "",
+    chapters: []
+  };
+}
+
+function createNewCourseSummary(
+  teachers: TeacherOption[] = fallbackTeacherOptions
+): AdminCourseSummary {
+  const teacher = teachers[0] ?? fallbackTeacherOptions[0];
+  return {
+    id: -Date.now(),
+    title: "新建课程",
+    category: "",
+    level: "",
+    teacher: teacher?.name ?? "未设置老师",
+    teacherId: teacher?.id ?? null,
+    image: "",
+    status: courseStatusLabels.draft,
+    statusValue: "draft",
+    institutionId: null
+  };
+}
+
+function normalizeLessonItemDraft(
+  item: Partial<CourseLessonItemDraft>,
+  fallback: CourseLessonItemDraft,
+  position: number
+): CourseLessonItemDraft {
+  const itemType: CourseLessonItemType =
+    item.itemType && courseLessonItemTypes.some((type) => type.value === item.itemType)
+      ? item.itemType
+      : fallback.itemType;
+  const body = item.body && typeof item.body === "object" ? item.body : fallback.body;
+  return {
+    ...fallback,
+    ...item,
+    localId: item.localId || fallback.localId,
+    title: item.title || fallback.title || courseLessonItemDefaultTitle(itemType),
+    itemType,
+    contentUrl:
+      itemType === "video" && !isUploadedVideoUrl(item.contentUrl)
+        ? ""
+        : item.contentUrl ?? fallback.contentUrl,
+    body,
+    requiredMinutes: Number.isFinite(item.requiredMinutes) ? Number(item.requiredMinutes) : fallback.requiredMinutes,
+    position
+  };
+}
+
+function normalizeCourseDraft(
+  draft: Partial<CourseDraft>,
+  fallback: CourseDraft,
+  teachers: TeacherOption[] = fallbackTeacherOptions
+): CourseDraft {
+  const normalizedChapters =
+    Array.isArray(draft.chapters)
+      ? draft.chapters.map((chapter, chapterIndex) => {
+          const fallbackChapter = fallback.chapters[chapterIndex] ?? {
+            localId: `course-${fallback.courseId}-chapter-${chapterIndex + 1}`,
+            title: `第${chapterIndex + 1}章`,
+            summary: "",
+            position: chapterIndex + 1,
+            items: []
+          };
+          const chapterItems =
+            Array.isArray(chapter.items)
+              ? chapter.items.map((item, itemIndex) =>
+                  normalizeLessonItemDraft(
+                    item,
+                    fallbackChapter.items[itemIndex] ?? {
+                      localId: `course-${fallback.courseId}-chapter-${chapterIndex + 1}-item-${itemIndex + 1}`,
+                      title: `项目 ${itemIndex + 1}`,
+                      itemType: "video",
+                      contentUrl: "",
+                      body: {},
+                      requiredMinutes: 0,
+                      position: itemIndex + 1
+                    },
+                    itemIndex + 1
+                  )
+                )
+              : fallbackChapter.items;
+          return {
+            ...fallbackChapter,
+            ...chapter,
+            localId: chapter.localId || fallbackChapter.localId,
+            title: chapter.title || fallbackChapter.title,
+            summary: chapter.summary ?? fallbackChapter.summary,
+            position: chapterIndex + 1,
+            items: chapterItems
+          };
+        })
+      : fallback.chapters;
+
+  const teacher =
+    getTeacherById(draft.teacherId, teachers) ??
+    getTeacherByName(draft.teacher || fallback.teacher, teachers) ??
+    teachers[0];
+  const introVideoUrl = draft.introVideoUrl ?? "";
+  return {
+    ...fallback,
+    ...draft,
+    courseId: fallback.courseId,
+    title: draft.title || fallback.title,
+    category: draft.category ?? fallback.category,
+    level: draft.level ?? fallback.level,
+    coverUrl: draft.coverUrl || fallback.coverUrl,
+    teacher: teacher?.name ?? draft.teacher ?? fallback.teacher,
+    teacherId: teacher?.id ?? draft.teacherId ?? fallback.teacherId,
+    introVideoUrl: isUploadedVideoUrl(introVideoUrl) ? introVideoUrl : fallback.introVideoUrl,
+    description: draft.description ?? fallback.description,
+    chapters: normalizedChapters
+  };
+}
+
+function hasStoredCourseDraft(courseId: number) {
+  if (typeof window === "undefined") {
+    return false;
+  }
+  return Boolean(window.sessionStorage.getItem(courseDraftStorageKey(courseId)));
+}
+
+function readCourseDraft(defaultDraft: CourseDraft): CourseDraft {
+  if (typeof window === "undefined") {
+    return defaultDraft;
+  }
+  try {
+    const stored = window.sessionStorage.getItem(courseDraftStorageKey(defaultDraft.courseId));
+    if (!stored) {
+      return defaultDraft;
+    }
+    const parsed = JSON.parse(stored) as Partial<CourseDraft>;
+    return normalizeCourseDraft(parsed, defaultDraft);
+  } catch {
+    return defaultDraft;
+  }
+}
+
+function courseDraftForStorage(draft: CourseDraft): CourseDraft {
+  return {
+    ...draft,
+    introVideoUrl: draft.introVideoUrl.startsWith("data:video/") ? "" : draft.introVideoUrl,
+    chapters: draft.chapters.map((chapter) => ({
+      ...chapter,
+      items: chapter.items.map((item) => ({
+        ...item,
+        contentUrl:
+          item.contentUrl.startsWith("data:video/") || item.contentUrl.length > 1_000_000
+            ? ""
+            : item.contentUrl
+      }))
+    }))
+  };
+}
+
+function persistCourseDraft(draft: CourseDraft) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.sessionStorage.setItem(
+      courseDraftStorageKey(draft.courseId),
+      JSON.stringify(courseDraftForStorage(draft))
+    );
+  } catch {
+    window.sessionStorage.removeItem(courseDraftStorageKey(draft.courseId));
+  }
+}
+
+async function uploadAdminFile(file: File, kind: AdminUploadKind) {
+  if (kind === "handout" && !/\.md$/i.test(file.name)) {
+    throw new Error("讲义文件只支持 Markdown .md 文件。");
+  }
+  const formData = new FormData();
+  formData.append("kind", kind);
+  formData.append("file", file);
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}/admin/uploads`, {
+      method: "POST",
+      headers: getAdminRequestHeaders(),
+      body: formData
+    });
+  } catch {
+    throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+  }
+  if (!response.ok) {
+    let detail = "";
+    try {
+      const errorPayload = (await response.json()) as { detail?: unknown };
+      detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
+    } catch {
+      detail = "";
+    }
+    if (response.status === 413) {
+      throw new Error("文件太大，请压缩后再上传。");
+    }
+    throw new Error(detail || `上传失败，服务器返回 ${response.status}。`);
+  }
+  const payload = (await response.json()) as { url: string };
+  if (!payload.url) {
+    throw new Error("上传成功但服务器没有返回文件地址。");
+  }
+  return payload.url;
+}
+
+function uploadFailureMessage(error: unknown, fallback: string) {
+  return error instanceof Error ? error.message : fallback;
+}
+
+function normalizeQuestionForCoursePicker(rawQuestion: unknown): CourseQuestion | null {
+  if (!rawQuestion || typeof rawQuestion !== "object") {
+    return null;
+  }
+  const question = rawQuestion as {
+    id?: unknown;
+    prompt?: unknown;
+    type?: unknown;
+    difficulty?: unknown;
+    skill_area?: unknown;
+    points?: unknown;
+    status?: unknown;
+    created_by_user_id?: unknown;
+    content?: { title?: unknown };
+  };
+  if (typeof question.id !== "number") {
+    return null;
+  }
+  const title = typeof question.content?.title === "string" ? question.content.title : "";
+  const prompt = typeof question.prompt === "string" ? question.prompt : "";
+  const status =
+    question.status === "draft" || question.status === "saved" || question.status === "published"
+      ? question.status
+      : "published";
+  return {
+    id: question.id,
+    title: title || prompt || `题目 ${question.id}`,
+    prompt,
+    type: typeof question.type === "string" ? question.type : "writing",
+    difficulty: typeof question.difficulty === "string" ? question.difficulty : "",
+    skillArea: typeof question.skill_area === "string" ? question.skill_area : "",
+    points: typeof question.points === "number" ? question.points : 0,
+    status,
+    createdByUserId:
+      typeof question.created_by_user_id === "number" ? question.created_by_user_id : null
+  };
+}
+
+function courseDraftFromApi(
+  course: ApiCourseDetail,
+  fallback: CourseDraft,
+  teachers: TeacherOption[] = fallbackTeacherOptions
+): CourseDraft {
+  const apiDraft: Partial<CourseDraft> = {
+    courseId: course.id,
+    title: course.title,
+    category: course.category,
+    level: course.level,
+    coverUrl: course.hero_image_url,
+    teacher: course.teacher?.name,
+    teacherId: course.teacher?.id,
+    introVideoUrl: isUploadedVideoUrl(course.intro_video_url) ? course.intro_video_url : "",
+    description: course.description,
+    chapters: course.chapters?.map((chapter, chapterIndex) => ({
+      id: chapter.id,
+      localId: `api-chapter-${chapter.id}`,
+      title: chapter.title,
+      summary: chapter.summary,
+      position: chapter.position || chapterIndex + 1,
+      items: chapter.items.map((item, itemIndex) => ({
+        id: item.id,
+        localId: `api-item-${item.id}`,
+        title: item.title,
+        itemType: item.item_type,
+        contentUrl:
+          item.item_type === "video" && !isUploadedVideoUrl(item.content_url)
+            ? ""
+            : item.content_url ?? "",
+        body: item.body ?? {},
+        requiredMinutes: item.required_minutes,
+        position: item.position || itemIndex + 1
+      }))
+    }))
+  };
+  return normalizeCourseDraft(apiDraft, fallback, teachers);
+}
+
+function getQuestionIdsFromItem(item: CourseLessonItemDraft) {
+  const questionIds = item.body.question_ids;
+  return Array.isArray(questionIds)
+    ? questionIds.filter((id): id is number => typeof id === "number")
+    : [];
+}
+
+function courseDraftToApiPayload(
+  draft: CourseDraft,
+  teachers: TeacherOption[] = fallbackTeacherOptions,
+  status: CoursePublicationStatus = "draft"
+) {
+  const plainDescription = stripRichText(draft.description);
+  return {
+    title: draft.title,
+    subtitle: plainDescription.slice(0, 120) || `${draft.title || "新建课程"}课程`,
+    category: draft.category || "未分类",
+    level: draft.level || "入门",
+    description: draft.description,
+    hero_image_url: draft.coverUrl,
+    intro_video_url: draft.introVideoUrl,
+    status,
+    teacher_id:
+      getTeacherById(draft.teacherId, teachers)?.id ??
+      getTeacherByName(draft.teacher, teachers)?.id ??
+      teachers[0]?.id ??
+      1,
+    chapters: draft.chapters.map((chapter, chapterIndex) => ({
+      id: chapter.id,
+      title: chapter.title,
+      summary: chapter.summary,
+      position: chapterIndex + 1,
+      items: chapter.items.map((item, itemIndex) => ({
+        id: item.id,
+        title: item.title,
+        item_type: item.itemType,
+        content_url: item.contentUrl || null,
+        body:
+          item.itemType === "exercise" || item.itemType === "quiz"
+            ? { ...item.body, question_ids: getQuestionIdsFromItem(item) }
+            : item.body,
+        required_minutes: item.requiredMinutes,
+        position: itemIndex + 1
+      }))
+    }))
+  };
+}
+
+function courseDraftToCreatePayload(
+  draft: CourseDraft,
+  course: AdminCourseSummary,
+  teachers: TeacherOption[] = fallbackTeacherOptions
+) {
+  const teacherId =
+    getTeacherById(draft.teacherId, teachers)?.id ??
+    getTeacherByName(draft.teacher, teachers)?.id ??
+    teachers[0]?.id ??
+    1;
+  const plainDescription = stripRichText(draft.description);
+  return {
+    title: draft.title || "新建课程",
+    slug: createCourseSlug(draft.title),
+    subtitle: plainDescription.slice(0, 120) || `${draft.title || "新建课程"}课程`,
+    description: draft.description || "新课程介绍",
+    category: draft.category || course.category || "未分类",
+    level: draft.level || course.level || "入门",
+    hero_image_url: draft.coverUrl || course.image,
+    intro_video_url: draft.introVideoUrl,
+    institution_id: course.institutionId ?? adminInstitution.id,
+    teacher_id: teacherId,
+    price_eur_monthly: 39
+  };
+}
+
+function reindexCourseChapters(chapters: CourseChapterDraft[]) {
+  return chapters.map((chapter, chapterIndex) => ({
+    ...chapter,
+    position: chapterIndex + 1,
+    items: chapter.items.map((item, itemIndex) => ({ ...item, position: itemIndex + 1 }))
+  }));
+}
+
+function createNewCourseChapter(position: number): CourseChapterDraft {
+  return {
+    localId: createDraftLocalId("chapter"),
+    title: `第${position}章`,
+    summary: "",
+    position,
+    items: [createNewCourseLessonItem("video", 1)]
+  };
+}
+
+function createNewCourseLessonItem(
+  itemType: CourseLessonItemType,
+  position: number
+): CourseLessonItemDraft {
+  return {
+    localId: createDraftLocalId("item"),
+    title: courseLessonItemDefaultTitle(itemType),
+    itemType,
+    contentUrl: "",
+    body: itemType === "exercise" || itemType === "quiz" ? { question_ids: [] } : {},
+    requiredMinutes: itemType === "video" ? 20 : itemType === "handout" ? 0 : 15,
+    position
+  };
+}
+
+function stripRichText(html: string) {
+  if (!html) {
+    return "";
+  }
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, " ")
+    .replace(/<script[\s\S]*?<\/script>/gi, " ")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function RichTextEditor({
+  value,
+  onChange,
+  disabled,
+  placeholder,
+  minHeightClass = "min-h-44"
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  disabled?: boolean;
+  placeholder: string;
+  minHeightClass?: string;
+}) {
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [focused, setFocused] = useState(false);
+  const [uploading, setUploading] = useState<"image" | "video" | null>(null);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    if (!editor || document.activeElement === editor) {
+      return;
+    }
+    if (editor.innerHTML !== value) {
+      editor.innerHTML = value || "";
+    }
+  }, [value]);
+
+  function syncValue() {
+    onChange(editorRef.current?.innerHTML ?? "");
+  }
+
+  function runCommand(command: string, commandValue?: string) {
+    if (disabled) {
+      return;
+    }
+    editorRef.current?.focus();
+    document.execCommand(command, false, commandValue);
+    syncValue();
+  }
+
+  function insertHtml(html: string) {
+    if (disabled) {
+      return;
+    }
+    editorRef.current?.focus();
+    document.execCommand("insertHTML", false, html);
+    syncValue();
+  }
+
+  async function uploadRichMedia(file: File | undefined, mediaType: "image" | "video") {
+    if (!file || disabled) {
+      return;
+    }
+    setUploading(mediaType);
+    try {
+      const url = await uploadAdminFile(file, mediaType === "image" ? "question_media" : "lesson_video");
+      const safeName = file.name.replace(/[<>"']/g, "");
+      insertHtml(
+        mediaType === "image"
+          ? `<p><img src="${url}" alt="${safeName}" style="max-width:100%;border-radius:12px;" /></p>`
+          : `<p><video controls src="${url}" style="max-width:100%;border-radius:12px;"></video></p>`
+      );
+    } catch (error) {
+      window.alert(uploadFailureMessage(error, "文件上传失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setUploading(null);
+    }
+  }
+
+  const toolbarButtonClass =
+    "focus-ring inline-flex h-9 min-w-9 items-center justify-center rounded-lg border border-slate-200 bg-white px-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50";
+  const hasContent = stripRichText(value).length > 0 || /<(img|video|iframe)\b/i.test(value);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white">
+      <div className="flex flex-wrap items-center gap-2 border-b border-slate-100 bg-slate-50 p-2">
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => runCommand("bold")}
+          disabled={disabled}
+          className={toolbarButtonClass}
+          aria-label="加粗"
+        >
+          <Bold size={16} />
+        </button>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => runCommand("italic")}
+          disabled={disabled}
+          className={toolbarButtonClass}
+          aria-label="斜体"
+        >
+          <Italic size={16} />
+        </button>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => runCommand("insertUnorderedList")}
+          disabled={disabled}
+          className={toolbarButtonClass}
+          aria-label="项目列表"
+        >
+          <List size={16} />
+        </button>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => runCommand("insertOrderedList")}
+          disabled={disabled}
+          className={toolbarButtonClass}
+          aria-label="编号列表"
+        >
+          <ListOrdered size={16} />
+        </button>
+        <button
+          type="button"
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            const url = window.prompt("请输入链接地址");
+            if (url) {
+              runCommand("createLink", url);
+            }
+          }}
+          disabled={disabled}
+          className={toolbarButtonClass}
+          aria-label="添加链接"
+        >
+          <Link2 size={16} />
+        </button>
+        <label className={`${toolbarButtonClass} cursor-pointer`}>
+          <ImagePlus size={16} />
+          <span className="ml-1 hidden sm:inline">{uploading === "image" ? "上传中" : "图片"}</span>
+          <input
+            type="file"
+            accept="image/*"
+            className="sr-only"
+            disabled={disabled || uploading !== null}
+            onChange={(event) => {
+              void uploadRichMedia(event.target.files?.[0], "image");
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+        <label className={`${toolbarButtonClass} cursor-pointer`}>
+          <Video size={16} />
+          <span className="ml-1 hidden sm:inline">{uploading === "video" ? "上传中" : "视频"}</span>
+          <input
+            type="file"
+            accept="video/*"
+            className="sr-only"
+            disabled={disabled || uploading !== null}
+            onChange={(event) => {
+              void uploadRichMedia(event.target.files?.[0], "video");
+              event.currentTarget.value = "";
+            }}
+          />
+        </label>
+      </div>
+      <div className="relative">
+        {!hasContent && !focused ? (
+          <span className="pointer-events-none absolute left-3 top-3 text-sm font-semibold text-slate-400">
+            {placeholder}
+          </span>
+        ) : null}
+        <div
+          ref={editorRef}
+          contentEditable={!disabled}
+          suppressContentEditableWarning
+          onInput={syncValue}
+          onBlur={() => {
+            setFocused(false);
+            syncValue();
+          }}
+          onFocus={() => setFocused(true)}
+          className={`focus-ring w-full rounded-b-lg px-3 py-3 text-sm leading-7 text-slate-700 outline-none [&_a]:font-bold [&_a]:text-coral [&_img]:my-3 [&_img]:max-w-full [&_ol]:ml-5 [&_ol]:list-decimal [&_p]:mb-2 [&_ul]:ml-5 [&_ul]:list-disc [&_video]:my-3 [&_video]:max-w-full ${minHeightClass} ${
+            disabled ? "bg-slate-50 text-slate-500" : "bg-white"
+          }`}
+        />
+      </div>
+    </div>
+  );
+}
+
+function subscribeToAdminBrand(callback: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  window.addEventListener("storage", callback);
+  window.addEventListener("infuture-admin-brand-change", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("infuture-admin-brand-change", callback);
+  };
+}
+
+function getAdminLogoClientSnapshot() {
+  return window.localStorage.getItem(ADMIN_LOGO_STORAGE_KEY) || adminInstitution.logo_url;
+}
+
+function getAdminLogoServerSnapshot() {
+  return adminInstitution.logo_url;
+}
+
+function getAdminInstitutionNameClientSnapshot() {
+  return window.localStorage.getItem(ADMIN_INSTITUTION_NAME_STORAGE_KEY) || adminInstitution.name;
+}
+
+function getAdminInstitutionNameServerSnapshot() {
+  return adminInstitution.name;
+}
+
+function useAdminBrand() {
+  const logoUrl = useSyncExternalStore(
+    subscribeToAdminBrand,
+    getAdminLogoClientSnapshot,
+    getAdminLogoServerSnapshot
+  );
+  const institutionName = useSyncExternalStore(
+    subscribeToAdminBrand,
+    getAdminInstitutionNameClientSnapshot,
+    getAdminInstitutionNameServerSnapshot
+  );
+  return { logoUrl, institutionName };
+}
+
+function subscribeToAdminProfile(callback: () => void) {
+  if (typeof window === "undefined") {
+    return () => {};
+  }
+  window.addEventListener("storage", callback);
+  window.addEventListener("infuture-admin-profile-change", callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener("infuture-admin-profile-change", callback);
+  };
+}
+
+function getAdminProfileClientSnapshot() {
+  return window.localStorage.getItem(ADMIN_PROFILE_STORAGE_KEY) ?? JSON.stringify(defaultAdminProfile);
+}
+
+function getAdminProfileServerSnapshot() {
+  return JSON.stringify(defaultAdminProfile);
+}
+
+function parseAdminProfile(value: string): AdminProfile {
+  try {
+    const profile = { ...defaultAdminProfile, ...(JSON.parse(value) as Partial<AdminProfile>) };
+    const roleValue = normalizeAdminRoleValue(profile.roleValue ?? profile.role);
+    return {
+      ...profile,
+      roleValue,
+      role: roleLabel(roleValue),
+      avatar: resolveProfileAvatar(profile.avatar),
+      region: normalizeProfileRegion(profile.region)
+    };
+  } catch {
+    return defaultAdminProfile;
+  }
+}
+
+function persistAdminProfile(profile: AdminProfile) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.localStorage.setItem(ADMIN_PROFILE_STORAGE_KEY, JSON.stringify(profile));
+  window.dispatchEvent(new Event("infuture-admin-profile-change"));
+}
+
+function useAdminProfile() {
+  const profileSnapshot = useSyncExternalStore(
+    subscribeToAdminProfile,
+    getAdminProfileClientSnapshot,
+    getAdminProfileServerSnapshot
+  );
+  return parseAdminProfile(profileSnapshot);
+}
+
+export function AdminPortal() {
+  const [activeModule, setActiveModule] = useState<ModuleKey>("dashboard");
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [profileOpen, setProfileOpen] = useState(false);
+  const profile = useAdminProfile();
+  const visibleMenuItems = useMemo(() => visibleMenuItemsForRole(profile.roleValue), [profile.roleValue]);
+  const effectiveActiveModule = useMemo(() => {
+    if (visibleMenuItems.some((item) => item.key === activeModule)) {
+      return activeModule;
+    }
+    return visibleMenuItems[0]?.key ?? activeModule;
+  }, [activeModule, visibleMenuItems]);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchAdminProfile().then((remoteProfile) => {
+      if (!isMounted || !remoteProfile) {
+        return;
+      }
+      persistAdminProfile(remoteProfile);
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  return (
+    <div className="min-h-screen bg-mist text-ink">
+      <AdminTopbar
+        onOpenProfile={() => setProfileOpen(true)}
+        onOpenSidebar={() => setSidebarOpen(true)}
+      />
+      <div className="mx-auto grid max-w-[96rem] gap-5 px-4 py-5 lg:grid-cols-[17rem_1fr]">
+        <aside className="hidden lg:block">
+          <AdminSidebar activeModule={effectiveActiveModule} items={visibleMenuItems} onChange={setActiveModule} />
+        </aside>
+
+        {sidebarOpen ? (
+          <div className="fixed inset-0 z-40 bg-ink/40 lg:hidden" onClick={() => setSidebarOpen(false)}>
+            <aside
+              className="h-full w-80 max-w-[86vw] bg-white p-4 shadow-soft"
+              onClick={(event) => event.stopPropagation()}
+            >
+              <div className="mb-4 flex justify-end">
+                <button
+                  aria-label="关闭菜单"
+                  onClick={() => setSidebarOpen(false)}
+                  className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <AdminSidebar
+                activeModule={effectiveActiveModule}
+                items={visibleMenuItems}
+                onChange={(key) => {
+                  setActiveModule(key);
+                  setSidebarOpen(false);
+                }}
+              />
+            </aside>
+          </div>
+        ) : null}
+
+        <main className="min-w-0">
+          <AdminPageHeader activeModule={effectiveActiveModule} />
+          <div className={effectiveActiveModule === "dashboard" ? "block" : "hidden"}>
+            <DashboardPanel />
+          </div>
+          <div className={effectiveActiveModule === "institution" ? "block" : "hidden"}>
+            <InstitutionPanel />
+          </div>
+          <div className={effectiveActiveModule === "courseCategories" ? "block" : "hidden"}>
+            <CourseCategoryManagement />
+          </div>
+          <div className={effectiveActiveModule === "courses" ? "block" : "hidden"}>
+            <CourseManagement />
+          </div>
+          <div className={effectiveActiveModule === "questions" ? "block" : "hidden"}>
+            <QuestionBankPanel />
+          </div>
+          <div className={effectiveActiveModule === "teachers" ? "block" : "hidden"}>
+            <TeacherManagement />
+          </div>
+          <div className={effectiveActiveModule === "users" ? "block" : "hidden"}>
+            <UserPermissionManagement />
+          </div>
+          <div className={effectiveActiveModule === "grading" ? "block" : "hidden"}>
+            <GradingPanel />
+          </div>
+          <div className={effectiveActiveModule === "blogs" ? "block" : "hidden"}>
+            <BlogManagement />
+          </div>
+        </main>
+      </div>
+      {profileOpen ? <ProfileEditorModal onClose={() => setProfileOpen(false)} /> : null}
+    </div>
+  );
+}
+
+function AdminTopbar({
+  onOpenProfile,
+  onOpenSidebar
+}: {
+  onOpenProfile: () => void;
+  onOpenSidebar: () => void;
+}) {
+  const { logoUrl, institutionName } = useAdminBrand();
+
+  return (
+    <header className="sticky top-0 z-30 border-b border-slate-200/80 bg-white/90 backdrop-blur">
+      <div className="mx-auto flex max-w-[96rem] items-center gap-4 px-4 py-3">
+        <button
+          aria-label="打开菜单"
+          onClick={onOpenSidebar}
+          className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 lg:hidden"
+        >
+          <Menu size={18} />
+        </button>
+        <Link href="/" className="flex items-center gap-3">
+          <div className="grid h-16 w-[120px] place-items-center overflow-hidden rounded-lg bg-white">
+            <img src={logoUrl} alt={`${institutionName} Logo`} className="h-full w-full object-contain" />
+          </div>
+          <div>
+            <p className="font-bold text-ink">{institutionName}</p>
+            <p className="text-sm text-slate-500">Europe · 机构工作台</p>
+          </div>
+        </Link>
+        <div className="ml-auto hidden w-full max-w-sm items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-400 md:flex">
+          <Search size={17} />
+          <span>搜索课程、题目、老师、文章</span>
+        </div>
+        <button
+          onClick={onOpenProfile}
+          className="focus-ring hidden items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 font-bold md:inline-flex"
+        >
+          <Settings size={17} /> 个人资料
+        </button>
+        <Link
+          href="/admin/login"
+          onClick={clearAdminSession}
+          className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 font-bold text-white"
+        >
+          <LogOut size={17} /> 登出
+        </Link>
+      </div>
+    </header>
+  );
+}
+
+function AdminSidebar({
+  activeModule,
+  items,
+  onChange
+}: {
+  activeModule: ModuleKey;
+  items: Array<{ key: ModuleKey; label: string; icon: typeof LayoutDashboard }>;
+  onChange: (key: ModuleKey) => void;
+}) {
+  const profile = useAdminProfile();
+
+  return (
+    <div className="panel rounded-lg p-4">
+      <div className="rounded-lg bg-ink p-4 text-white">
+        <p className="text-sm font-semibold text-white/70">当前登录</p>
+        <div className="mt-4 flex items-center gap-3">
+          <img src={profile.avatar} alt={profile.name} className="h-12 w-12 rounded-lg object-cover" />
+          <div>
+            <p className="font-bold">{profile.name}</p>
+            <p className="text-sm text-white/60">{profile.role}</p>
+          </div>
+        </div>
+      </div>
+      <nav className="mt-4 grid gap-2">
+        {items.map((item) => (
+          <button
+            key={item.key}
+            onClick={() => onChange(item.key)}
+            className={`focus-ring flex items-center justify-between rounded-lg px-4 py-3 text-left font-bold ${
+              activeModule === item.key ? "bg-mint text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+            }`}
+          >
+            <span className="flex items-center gap-3">
+              <item.icon size={19} /> {item.label}
+            </span>
+            <ChevronRight size={17} />
+          </button>
+        ))}
+      </nav>
+    </div>
+  );
+}
+
+function AdminPageHeader({ activeModule }: { activeModule: ModuleKey }) {
+  return (
+    <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
+      <div>
+        <p className="font-bold text-coral">机构后台管理系统</p>
+        <h1 className="mt-2 text-3xl font-black text-ink">{moduleLabels[activeModule]}</h1>
+      </div>
+      <div className="flex items-center gap-2">
+        <button className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 font-bold">
+          <Bell size={18} /> 通知
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ProfileEditorModal({ onClose }: { onClose: () => void }) {
+  const profile = useAdminProfile();
+  const [draft, setDraft] = useState<AdminProfile>(profile);
+  const [status, setStatus] = useState("修改后点击保存，资料会同步到当前后台会话。");
+  const [saving, setSaving] = useState(false);
+  const [passwordDraft, setPasswordDraft] = useState({ verificationCode: "", newPassword: "", confirmPassword: "" });
+  const [passwordStatus, setPasswordStatus] = useState("通过邮箱验证码设置新密码。");
+  const [passwordDemoCode, setPasswordDemoCode] = useState("");
+  const [requestingPasswordCode, setRequestingPasswordCode] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchAdminProfile().then((remoteProfile) => {
+      if (!isMounted || !remoteProfile) {
+        return;
+      }
+      persistAdminProfile(remoteProfile);
+      setDraft(remoteProfile);
+      setStatus("已从服务器加载个人资料。");
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  function updateDraft(field: keyof AdminProfile, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updatePasswordDraft(field: keyof typeof passwordDraft, value: string) {
+    setPasswordDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function handleAvatarUpload(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setStatus("请上传图片格式的头像。");
+      return;
+    }
+    if (file.size > 600 * 1024) {
+      setStatus("头像图片请控制在 600KB 以内。");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl) {
+        setStatus("头像读取失败，请重新选择图片。");
+        return;
+      }
+      updateDraft("avatar", dataUrl);
+      setStatus("头像已上传，可预览后保存。");
+    };
+    reader.readAsDataURL(file);
+  }
+
+  async function saveProfile() {
+    setSaving(true);
+    const savedProfile = await saveAdminProfile(draft);
+    persistAdminProfile(savedProfile ?? draft);
+    setStatus(savedProfile ? "个人资料已保存。" : "API 不可用，已保存到本地演示状态。");
+    setSaving(false);
+    onClose();
+  }
+
+  async function sendPasswordCode() {
+    setRequestingPasswordCode(true);
+    setPasswordDemoCode("");
+    setPasswordStatus("正在发送邮箱验证码...");
+    const result = await requestAdminPasswordChangeCode();
+    if (result.ok) {
+      setPasswordDemoCode(result.demoCode ?? "");
+      setPasswordStatus(
+        result.demoCode
+          ? `已生成验证码。本地演示验证码：${result.demoCode}，${Math.floor(result.expiresInSeconds / 60)} 分钟内有效。`
+          : "验证码已发送到当前绑定邮箱。"
+      );
+    } else {
+      setPasswordStatus(result.message);
+    }
+    setRequestingPasswordCode(false);
+  }
+
+  async function savePassword() {
+    if (!passwordDraft.verificationCode.trim()) {
+      setPasswordStatus("请先输入邮箱验证码。");
+      return;
+    }
+    if (passwordDraft.newPassword.length < 8) {
+      setPasswordStatus("新密码至少需要 8 位。");
+      return;
+    }
+    if (passwordDraft.newPassword !== passwordDraft.confirmPassword) {
+      setPasswordStatus("两次输入的新密码不一致。");
+      return;
+    }
+    setSavingPassword(true);
+    setPasswordStatus("正在修改密码...");
+    const result = await updateAdminPassword(passwordDraft.verificationCode, passwordDraft.newPassword);
+    if (result.ok) {
+      persistAdminProfile(result.profile);
+      setDraft(result.profile);
+      setPasswordDraft({ verificationCode: "", newPassword: "", confirmPassword: "" });
+      setPasswordDemoCode("");
+      setPasswordStatus("密码已修改，下次登录请使用新密码。");
+    } else {
+      setPasswordStatus(result.message);
+    }
+    setSavingPassword(false);
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 px-4 py-8">
+      <section className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-soft">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="text-sm font-bold text-coral">个人资料</p>
+            <h2 className="mt-1 text-2xl font-black text-ink">编辑个人资料</h2>
+          </div>
+          <button
+            onClick={onClose}
+            className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200"
+            aria-label="关闭个人资料编辑"
+          >
+            <X size={18} />
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-5 md:grid-cols-[11rem_1fr]">
+          <aside className="rounded-lg bg-slate-50 p-4">
+            <img src={draft.avatar} alt={draft.name} className="h-36 w-36 rounded-lg object-cover" />
+            <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+              <ImagePlus size={16} /> 上传头像
+              <input
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={(event) => handleAvatarUpload(event.target.files?.[0])}
+              />
+            </label>
+          </aside>
+
+          <div className="grid gap-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                姓名
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.name}
+                  onChange={(event) => updateDraft("name", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                Email
+                <input
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                  type="email"
+                  value={draft.email}
+                  readOnly
+                  aria-readonly="true"
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                角色
+                <input
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                  value={draft.role}
+                  readOnly
+                  aria-readonly="true"
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                职务
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.title}
+                  onChange={(event) => updateDraft("title", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                电话
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.phone}
+                  onChange={(event) => updateDraft("phone", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                所属地区
+                <select
+                  className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                  value={draft.region}
+                  onChange={(event) => updateDraft("region", event.target.value)}
+                >
+                  {profileRegionOptions.map((region) => (
+                    <option key={region} value={region}>
+                      {region}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              个人简介
+              <textarea
+                className="focus-ring min-h-28 rounded-lg border border-slate-200 px-3 py-2 leading-7"
+                value={draft.bio}
+                onChange={(event) => updateDraft("bio", event.target.value)}
+              />
+            </label>
+
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="font-bold text-ink">修改密码</h3>
+                  <p className="mt-1 text-sm text-slate-500">验证码将发送到当前绑定邮箱，验证通过后才能设置新密码。</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={sendPasswordCode}
+                  disabled={requestingPasswordCode || savingPassword}
+                  className="focus-ring rounded-lg border border-mint/40 bg-white px-3 py-2 text-sm font-bold text-mint disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {requestingPasswordCode ? "发送中" : "发送验证码"}
+                </button>
+              </div>
+              {passwordDemoCode ? (
+                <button
+                  type="button"
+                  onClick={() => updatePasswordDraft("verificationCode", passwordDemoCode)}
+                  className="focus-ring mt-3 rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-slate-600"
+                >
+                  使用本地演示验证码：{passwordDemoCode}
+                </button>
+              ) : null}
+              <div className="mt-4 grid gap-3 md:grid-cols-3">
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  验证码
+                  <input
+                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                    inputMode="numeric"
+                    value={passwordDraft.verificationCode}
+                    onChange={(event) => updatePasswordDraft("verificationCode", event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  新密码
+                  <input
+                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                    type="password"
+                    value={passwordDraft.newPassword}
+                    onChange={(event) => updatePasswordDraft("newPassword", event.target.value)}
+                  />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  确认新密码
+                  <input
+                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                    type="password"
+                    value={passwordDraft.confirmPassword}
+                    onChange={(event) => updatePasswordDraft("confirmPassword", event.target.value)}
+                  />
+                </label>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                <p className="text-sm text-slate-500">{passwordStatus}</p>
+                <button
+                  type="button"
+                  onClick={savePassword}
+                  disabled={savingPassword || requestingPasswordCode}
+                  className="focus-ring rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {savingPassword ? "修改中" : "确认修改密码"}
+                </button>
+              </div>
+            </section>
+
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <p className="text-sm text-slate-500">{status}</p>
+              <div className="flex gap-2">
+                <button
+                  onClick={onClose}
+                  className="focus-ring rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700"
+                >
+                  取消
+                </button>
+                <button
+                  onClick={saveProfile}
+                  disabled={saving}
+                  className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white"
+                >
+                  {saving ? "保存中..." : "保存资料"}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function DashboardPanel() {
+  const [range, setRange] = useState(dashboardRanges[1].key);
+  const activeRange = dashboardRanges.find((item) => item.key === range) ?? dashboardRanges[1];
+
+  return (
+    <div className="grid gap-5">
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        {usefulMetrics.map((metric) => (
+          <div key={metric.label} className="panel rounded-lg p-5">
+            <p className="text-sm font-semibold text-slate-500">{metric.label}</p>
+            <p className="mt-3 text-3xl font-black text-ink">{metric.value}</p>
+            <p className="mt-2 text-sm font-semibold text-mint">{metric.hint}</p>
+          </div>
+        ))}
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-[1fr_24rem]">
+        <div className="panel rounded-lg p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-ink">课程订阅增长</h2>
+              <p className="mt-1 text-sm text-slate-500">
+                {activeRange.label}新增 {activeRange.total} 人，增长 {activeRange.growth}
+              </p>
+            </div>
+            <div className="flex rounded-lg bg-slate-100 p-1">
+              {dashboardRanges.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => setRange(item.key)}
+                  className={`rounded-md px-3 py-1.5 text-sm font-bold ${
+                    range === item.key ? "bg-white text-ink shadow-sm" : "text-slate-500"
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="mt-6 grid gap-4">
+            {courseRankings.map((course) => (
+              <div key={course.id} className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="truncate font-bold text-ink">{course.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">{course.teacher} · 完课率 {course.completionRate}%</p>
+                  </div>
+                  <p className="font-black text-coral">{course.subscriptions} 订阅</p>
+                </div>
+                <div className="mt-4 flex h-20 items-end gap-2">
+                  {course.trend.map((value, index) => (
+                    <div
+                      key={`${course.id}-${index}`}
+                      className="flex-1 rounded-t-md bg-mint/70"
+                      style={{ height: `${Math.max(18, value / 2)}%` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <aside className="panel h-fit rounded-lg p-5">
+          <h3 className="font-bold text-ink">课程订阅排行</h3>
+          <div className="mt-4 grid gap-3">
+            {courseRankings.map((course, index) => (
+              <div key={course.id} className="flex items-center gap-3 rounded-lg bg-slate-50 p-3">
+                <span className="grid h-9 w-9 place-items-center rounded-lg bg-white font-black text-coral">
+                  {index + 1}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate font-bold text-ink">{course.title}</p>
+                  <p className="text-sm text-slate-500">{course.revenue} 欧元/月</p>
+                </div>
+                <ArrowUpRight size={18} className="text-mint" />
+              </div>
+            ))}
+          </div>
+        </aside>
+      </section>
+    </div>
+  );
+}
+
+function InstitutionPanel() {
+  const [draft, setDraft] = useState<InstitutionDraft>(defaultInstitutionDraft);
+  const [status, setStatus] = useState("修改机构信息后点击更新。");
+  const [saving, setSaving] = useState(false);
+  const [uploadingLogo, setUploadingLogo] = useState(false);
+  const categoryLabel =
+    institutionCategoryOptions.find((option) => option.value === draft.category)?.label ?? draft.category;
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchAdminInstitution().then((remoteInstitution) => {
+      if (!isMounted || !remoteInstitution) {
+        return;
+      }
+      setDraft(remoteInstitution);
+      persistAdminBrandFromInstitution(remoteInstitution);
+      setStatus("已从服务器加载机构信息。");
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  function updateDraft(field: keyof InstitutionDraft, value: string) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function handleLogoUpload(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setStatus("请上传图片格式的机构 Logo。");
+      return;
+    }
+    setUploadingLogo(true);
+    setStatus("正在上传机构 Logo...");
+    try {
+      const logoUrl = await uploadAdminFile(file, "logo");
+      setDraft((current) => ({ ...current, logoUrl }));
+      persistAdminBrandFromInstitution({ ...draft, logoUrl });
+      setStatus("机构 Logo 已上传，点击更新机构信息后保存。");
+    } catch (error) {
+      setStatus(`机构 Logo 上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingLogo(false);
+    }
+  }
+
+  async function updateInstitution() {
+    setSaving(true);
+    setStatus("正在更新机构信息...");
+    const savedInstitution = await saveAdminInstitution(draft);
+    if (savedInstitution) {
+      setDraft(savedInstitution);
+      persistAdminBrandFromInstitution(savedInstitution);
+      setStatus("机构信息已更新。");
+    } else {
+      setStatus("机构信息更新失败，请确认 FastAPI 服务正在运行。");
+    }
+    setSaving(false);
+  }
+
+  return (
+    <section className="panel rounded-lg p-5">
+      <div className="grid gap-5 xl:grid-cols-[1fr_18rem]">
+        <div>
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-ink">机构资料</h2>
+              <p className="mt-1 text-sm text-slate-500">{status}</p>
+            </div>
+            <button
+              onClick={updateInstitution}
+              disabled={saving}
+              className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {saving ? "更新中" : "更新机构信息"}
+            </button>
+          </div>
+          <div className="mt-5 grid gap-4 md:grid-cols-2">
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              机构类别
+              <select
+                className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                value={draft.category}
+                disabled
+                aria-label={`机构类别：${categoryLabel}`}
+              >
+                {institutionCategoryOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              机构名称
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.name}
+                onChange={(event) => updateDraft("name", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              联系电话
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.phone}
+                onChange={(event) => updateDraft("phone", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              邮箱
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                type="email"
+                value={draft.email}
+                onChange={(event) => updateDraft("email", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              地址
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.address}
+                onChange={(event) => updateDraft("address", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              网站
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.website}
+                onChange={(event) => updateDraft("website", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              联系人
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.contactPerson}
+                onChange={(event) => updateDraft("contactPerson", event.target.value)}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              所在地区
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                value={draft.region}
+                onChange={(event) => updateDraft("region", event.target.value)}
+              />
+            </label>
+          </div>
+          <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
+            机构介绍
+            <textarea
+              className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-2 leading-7"
+              value={draft.description}
+              onChange={(event) => updateDraft("description", event.target.value)}
+            />
+          </label>
+        </div>
+        <aside className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <p className="text-sm font-bold text-slate-700">机构 Logo</p>
+          <div className="mt-3 grid aspect-square place-items-center overflow-hidden rounded-lg bg-white p-4 text-mint">
+            {draft.logoUrl ? (
+              <img src={draft.logoUrl} alt={`${draft.name} Logo`} className="h-full w-full object-contain" />
+            ) : (
+              <Building2 size={56} />
+            )}
+          </div>
+          <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 font-bold text-white">
+            <ImagePlus size={16} /> {uploadingLogo ? "上传中" : "上传新 Logo"}
+            <input
+              type="file"
+              accept="image/*"
+              className="sr-only"
+              disabled={uploadingLogo}
+              onChange={(event) => {
+                void handleLogoUpload(event.target.files?.[0]);
+                event.currentTarget.value = "";
+              }}
+            />
+          </label>
+        </aside>
+      </div>
+    </section>
+  );
+}
+
+function CourseCategoryManagement() {
+  const [categories, setCategories] = useState<CourseCategory[]>([]);
+  const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);
+  const [draft, setDraft] = useState<CourseCategoryDraft>(() => createBlankCourseCategoryDraft());
+  const [status, setStatus] = useState("正在加载课程类别...");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+
+  const parentCategories = useMemo(
+    () =>
+      categories
+        .filter((category) => category.parentId === null)
+        .sort((left, right) => left.position - right.position || left.name.localeCompare(right.name, "zh-Hans-CN")),
+    [categories]
+  );
+  const selectedCategory = categories.find((category) => category.id === selectedCategoryId) ?? null;
+  const childCategories = useMemo(
+    () =>
+      categories
+        .filter((category) => category.parentId === selectedCategory?.id)
+        .sort((left, right) => left.position - right.position || left.name.localeCompare(right.name, "zh-Hans-CN")),
+    [categories, selectedCategory]
+  );
+  const parentOptions = parentCategories.filter((category) => category.id !== draft.id);
+
+  async function loadCategories() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/course-categories`, {
+        headers: getAdminRequestHeaders(),
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error("Course category API unavailable");
+      }
+      const nextCategories = ((await response.json()) as ApiCourseCategory[]).map((category) =>
+        courseCategoryFromApi(category)
+      );
+      setCategories(nextCategories);
+      setSelectedCategoryId((currentId) =>
+          currentId && nextCategories.some((category) => category.id === currentId)
+            ? currentId
+            : nextCategories.find((category) => category.parentId === null)?.id ?? nextCategories[0]?.id ?? null
+      );
+      setStatus(nextCategories.length ? "已从数据库加载课程类别。" : "还没有课程类别，可以先新增一个大类。");
+    } catch {
+      setCategories([]);
+      setSelectedCategoryId(null);
+      setDraft(createBlankCourseCategoryDraft());
+      setStatus("课程类别 API 暂时不可用，请确认 FastAPI 服务正在运行。");
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadCategories();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      if (!selectedCategory) {
+        setDraft(createBlankCourseCategoryDraft());
+        return;
+      }
+      setDraft(courseCategoryDraftFromCategory(selectedCategory));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [selectedCategory]);
+
+  function addParentCategory() {
+    const nextDraft = createBlankCourseCategoryDraft();
+    setSelectedCategoryId(null);
+    setDraft(nextDraft);
+    setStatus("正在创建新的课程大类。");
+  }
+
+  function addChildCategory(parentId: number) {
+    const nextDraft = createBlankCourseCategoryDraft(parentId);
+    setSelectedCategoryId(null);
+    setDraft(nextDraft);
+    setStatus("正在创建新的课程子类。");
+  }
+
+  async function saveCategory() {
+    if (!draft.name.trim()) {
+      setStatus("请填写类别名称。");
+      return;
+    }
+    setSaving(true);
+    setStatus("正在保存课程类别...");
+    try {
+      const isNew = draft.id < 0;
+      const response = await fetch(`${API_BASE_URL}/admin/course-categories${isNew ? "" : `/${draft.id}`}`, {
+        method: isNew ? "POST" : "PUT",
+        headers: {
+          ...getAdminRequestHeaders(),
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify(courseCategoryDraftToApiPayload(draft))
+      });
+      if (!response.ok) {
+        const errorPayload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+        const detail = typeof errorPayload?.detail === "string" ? errorPayload.detail : "课程类别保存失败。";
+        throw new Error(detail);
+      }
+      const savedCategory = courseCategoryFromApi((await response.json()) as ApiCourseCategory);
+      setCategories((currentCategories) => {
+        if (isNew) {
+          return [savedCategory, ...currentCategories];
+        }
+        return currentCategories.map((category) =>
+          category.id === savedCategory.id ? savedCategory : category
+        );
+      });
+      setSelectedCategoryId(savedCategory.id);
+      setDraft(courseCategoryDraftFromCategory(savedCategory));
+      setStatus("课程类别已保存。");
+      window.dispatchEvent(new Event(COURSE_CATEGORY_CHANGE_EVENT));
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "课程类别保存失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteCategory(category: CourseCategory) {
+    const confirmed = await confirmDelete({
+      title: "\u5220\u9664\u8bfe\u7a0b\u7c7b\u522b",
+      itemName: category.name,
+      description:
+        category.parentId === null
+          ? "\u5220\u9664\u5927\u7c7b\u4f1a\u540c\u65f6\u79fb\u9664\u5b83\u4e0b\u9762\u7684\u5b50\u7c7b\u3002\u8bf7\u786e\u8ba4\u662f\u5426\u7ee7\u7eed\u3002"
+          : "\u5220\u9664\u540e\uff0c\u8be5\u7c7b\u522b\u4f1a\u4ece\u8bfe\u7a0b\u7c7b\u522b\u5217\u8868\u4e2d\u79fb\u9664\u3002",
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setStatus("正在删除课程类别...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/course-categories/${category.id}`, {
+        method: "DELETE",
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(`服务器返回 ${response.status}`);
+      }
+      const removedIds = new Set([
+        category.id,
+        ...categories.filter((item) => item.parentId === category.id).map((item) => item.id)
+      ]);
+      const nextCategories = categories.filter((item) => !removedIds.has(item.id));
+      setCategories(nextCategories);
+      const nextSelected = nextCategories.find((item) => item.parentId === null) ?? nextCategories[0] ?? null;
+      setSelectedCategoryId(nextSelected?.id ?? null);
+      setDraft(nextSelected ? courseCategoryDraftFromCategory(nextSelected) : createBlankCourseCategoryDraft());
+      setStatus("课程类别已删除。");
+      window.dispatchEvent(new Event(COURSE_CATEGORY_CHANGE_EVENT));
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "课程类别删除失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[22rem_1fr]">
+      {deleteConfirmDialog}
+      <section className="panel rounded-lg p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">课程类别</h2>
+            <p className="mt-1 text-sm text-slate-500">{status}</p>
+          </div>
+          <button
+            type="button"
+            onClick={addParentCategory}
+            className="focus-ring inline-flex h-11 min-w-[7.5rem] shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg bg-coral px-4 text-sm font-bold text-white shadow-sm hover:bg-[#f25f54]"
+          >
+            <Plus size={16} className="shrink-0" /> 新增大类
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3">
+          {parentCategories.map((category) => (
+            <button
+              key={category.id}
+              type="button"
+              onClick={() => setSelectedCategoryId(category.id)}
+              className={`focus-ring rounded-lg border p-4 text-left transition ${
+                selectedCategoryId === category.id
+                  ? "border-mint bg-mint/10"
+                  : "border-slate-200 bg-white hover:border-mint/50"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-ink">{category.name}</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {categories.filter((item) => item.parentId === category.id).length} 个子类
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                    category.isActive ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {category.isActive ? "启用" : "停用"}
+                </span>
+              </div>
+            </button>
+          ))}
+          {parentCategories.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+              暂无课程大类。
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">类别编辑</h2>
+            <p className="mt-1 text-sm text-slate-500">课程类别最多支持大类和子类两级。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {selectedCategory ? (
+              <button
+                type="button"
+                onClick={() => void addChildCategory(selectedCategory.parentId ? selectedCategory.parentId : selectedCategory.id)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+              >
+                <Plus size={16} /> 新增子类
+              </button>
+            ) : null}
+            {draft.id > 0 ? (
+              <button
+                type="button"
+                onClick={() => void deleteCategory(draft as CourseCategory)}
+                disabled={deleting}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/40 bg-white px-3 py-2 text-sm font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={16} /> 删除
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={() => void saveCategory()}
+              disabled={saving}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Save size={16} /> {saving ? "保存中" : "保存类别"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 md:grid-cols-[minmax(0,1fr)_14rem_10rem]">
+          <label className="grid gap-2 text-sm font-semibold text-slate-700">
+            类别名称
+            <input
+              className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+              value={draft.name}
+              onChange={(event) => setDraft((current) => ({ ...current, name: event.target.value }))}
+              placeholder="例如：语言教育"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-semibold text-slate-700">
+            所属大类
+            <select
+              className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+              value={String(draft.parentId ?? "")}
+              onChange={(event) =>
+                setDraft((current) => ({
+                  ...current,
+                  parentId: event.target.value ? Number(event.target.value) : null
+                }))
+              }
+              disabled={childCategories.length > 0}
+            >
+              <option value="">作为大类</option>
+              {parentOptions.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm font-semibold text-slate-700">
+            排序
+            <input
+              className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+              type="number"
+              min={0}
+              value={draft.position}
+              onChange={(event) =>
+                setDraft((current) => ({ ...current, position: Number(event.target.value) || 0 }))
+              }
+            />
+          </label>
+          <label className="flex items-center gap-3 rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm font-bold text-slate-700 md:col-span-3">
+            <input
+              type="checkbox"
+              checked={draft.isActive}
+              onChange={(event) => setDraft((current) => ({ ...current, isActive: event.target.checked }))}
+              className="accent-coral"
+            />
+            启用这个课程类别
+          </label>
+        </div>
+
+        <div className="mt-6">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <h3 className="font-bold text-ink">当前大类下的子类</h3>
+            {selectedCategory && selectedCategory.parentId === null ? (
+              <button
+                type="button"
+                onClick={() => addChildCategory(selectedCategory.id)}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+              >
+                <Plus size={15} /> 添加子类
+              </button>
+            ) : null}
+          </div>
+          <div className="mt-3 grid gap-3 md:grid-cols-2">
+            {childCategories.map((child) => (
+              <button
+                key={child.id}
+                type="button"
+                onClick={() => setSelectedCategoryId(child.id)}
+                className="focus-ring rounded-lg border border-slate-200 bg-slate-50 p-4 text-left hover:border-mint/50"
+              >
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-ink">{child.name}</p>
+                    <p className="mt-1 text-sm text-slate-500">排序 {child.position}</p>
+                  </div>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                      child.isActive ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {child.isActive ? "启用" : "停用"}
+                  </span>
+                </div>
+              </button>
+            ))}
+            {childCategories.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 p-5 text-sm text-slate-500 md:col-span-2">
+                当前大类还没有子类。
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CourseManagement() {
+  const profile = useAdminProfile();
+  const [courses, setCourses] = useState<AdminCourseSummary[]>([]);
+  const [courseCategories, setCourseCategories] = useState<CourseCategory[]>([]);
+  const [courseLevelOptions, setCourseLevelOptions] = useState<string[]>([]);
+  const [teacherOptions, setTeacherOptions] = useState<TeacherOption[]>([]);
+  const [selectedCourseId, setSelectedCourseId] = useState(emptyCourseSummary.id);
+  const [courseDetailReloadToken, setCourseDetailReloadToken] = useState(0);
+  const [currentAdminUserId, setCurrentAdminUserId] = useState<number | null>(null);
+  const [courseTeacherFilter, setCourseTeacherFilter] = useState<number | "all" | "self">("self");
+  const isSuperAdmin = profile.roleValue === "super_admin";
+  const currentTeacherOption =
+    teacherOptions.find((teacher) => teacher.sourceUserId === currentAdminUserId) ?? null;
+  const currentTeacherId = currentTeacherOption?.id ?? null;
+  const resolvedCourseTeacherFilter =
+    isSuperAdmin && courseTeacherFilter === "self"
+      ? currentTeacherId ?? "all"
+      : courseTeacherFilter;
+  const visibleCourses = useMemo(() => {
+    if (!isSuperAdmin || resolvedCourseTeacherFilter === "all") {
+      return courses;
+    }
+    return courses.filter((course) => course.teacherId === resolvedCourseTeacherFilter);
+  }, [courses, isSuperAdmin, resolvedCourseTeacherFilter]);
+  const hasVisibleCourses = visibleCourses.length > 0;
+  const selectedCourse =
+    visibleCourses.find((course) => course.id === selectedCourseId) ??
+    visibleCourses[0] ??
+    emptyCourseSummary;
+  const defaultCourseDraft = createDefaultCourseDraft(selectedCourse, teacherOptions);
+  const [courseDraft, setCourseDraft] = useState<CourseDraft>(defaultCourseDraft);
+  const courseDraftRef = useRef<CourseDraft>(defaultCourseDraft);
+  const courseDetailRequestKeyRef = useRef(0);
+  const [availableQuestions, setAvailableQuestions] = useState<CourseQuestion[]>(() =>
+    fallbackAdminQuestions
+      .map((question) => normalizeQuestionForCoursePicker(question))
+      .filter((question): question is CourseQuestion => Boolean(question))
+  );
+  const [questionOwnerOptions, setQuestionOwnerOptions] = useState<CourseQuestionOwnerOption[]>([]);
+  const [courseMessage, setCourseMessage] = useState("课程编辑内容会保留在本地草稿中。");
+  const [savingCourse, setSavingCourse] = useState(false);
+  const [publishingCourse, setPublishingCourse] = useState(false);
+  const [deletingCourse, setDeletingCourse] = useState(false);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadingIntroVideo, setUploadingIntroVideo] = useState(false);
+  const selectedCourseTeacherId = courseDraft.teacherId ?? selectedCourse.teacherId;
+  const selectedCourseBelongsToCurrentUser = Boolean(
+    currentTeacherId && selectedCourseTeacherId === currentTeacherId
+  );
+  const isViewingAnotherTeacher =
+    isSuperAdmin &&
+    resolvedCourseTeacherFilter !== "all" &&
+    resolvedCourseTeacherFilter !== currentTeacherId;
+  const canEditSelectedCourse =
+    !isSuperAdmin ||
+    selectedCourseBelongsToCurrentUser ||
+    (!isViewingAnotherTeacher && isLocalNewCourse(courseDraft.courseId));
+  const shouldShowCourseEditor =
+    hasVisibleCourses || (!isViewingAnotherTeacher && isLocalNewCourse(selectedCourse.id));
+  const canUseCourseActions = shouldShowCourseEditor && canEditSelectedCourse;
+  const selectedCourseStatus =
+    courses.find((course) => course.id === courseDraft.courseId)?.statusValue ?? "draft";
+  const isSelectedCoursePublished = selectedCourseStatus === "published";
+  const canModifyCourseContent = canUseCourseActions && !isSelectedCoursePublished;
+  const canSaveSelectedCourse = canModifyCourseContent;
+  const courseCategoryOptions = useMemo(
+    () => selectableCourseCategoryLabels(courseCategories),
+    [courseCategories]
+  );
+  const visibleCourseLevelOptions = useMemo(() => {
+    if (courseLevelOptions.length > 0) {
+      return courseLevelOptions;
+    }
+    if (courseDraft.level) {
+      return [courseDraft.level];
+    }
+    return [];
+  }, [courseDraft.level, courseLevelOptions]);
+
+  function replaceCourseDraft(nextDraft: CourseDraft) {
+    courseDraftRef.current = nextDraft;
+    setCourseDraft(nextDraft);
+  }
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function loadCourseCatalog() {
+      const sessionUser = getAdminSessionUser();
+      if (!ignore) {
+        setCurrentAdminUserId(sessionUser?.id ?? null);
+      }
+      let loadedTeachers: TeacherOption[] = [];
+      try {
+        const [coursesResponse, teachersResponse, categoriesResponse, levelsResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/admin/courses`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          }),
+          fetch(`${API_BASE_URL}/admin/teachers`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          }),
+          fetch(`${API_BASE_URL}/admin/course-categories`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          }),
+          fetch(`${API_BASE_URL}/admin/difficulty-levels`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          })
+        ]);
+        if (ignore) {
+          return;
+        }
+        if (teachersResponse.ok) {
+          const teachers = ((await teachersResponse.json()) as ApiTeacher[]).map((teacher) =>
+            normalizeTeacherFromApi(teacher)
+          );
+          loadedTeachers = teachers;
+          setTeacherOptions(teachers);
+        }
+        if (categoriesResponse.ok) {
+          const categories = ((await categoriesResponse.json()) as ApiCourseCategory[]).map((category) =>
+            courseCategoryFromApi(category)
+          );
+          setCourseCategories(categories);
+        } else {
+          setCourseCategories([]);
+        }
+        if (levelsResponse.ok) {
+          const levelsData = (await levelsResponse.json()) as { levels?: unknown };
+          const levels = Array.isArray(levelsData.levels)
+            ? levelsData.levels.filter((level): level is string => typeof level === "string")
+            : [];
+          setCourseLevelOptions(levels);
+        } else {
+          setCourseLevelOptions([]);
+        }
+        if (coursesResponse.ok) {
+          const apiCourses = ((await coursesResponse.json()) as ApiCourseCard[]).map((course) =>
+            normalizeCourseCardFromApi(course)
+          );
+          setCourses(apiCourses);
+          if (apiCourses.length > 0) {
+            const storedCourseId = readSelectedCourseIdFromStorage();
+            const ownTeacher = sessionUser
+              ? loadedTeachers.find((teacher) => teacher.sourceUserId === sessionUser.id)
+              : null;
+            const ownCourseId = ownTeacher
+              ? apiCourses.find((course) => course.teacherId === ownTeacher.id)?.id ?? null
+              : null;
+            setSelectedCourseId((currentId) => {
+              const sessionIsSuperAdmin = sessionUser?.role === "super_admin";
+              const preferredCourseId =
+                sessionIsSuperAdmin && ownCourseId ? ownCourseId : storedCourseId ?? ownCourseId ?? currentId;
+              const nextCourseId = apiCourses.some((course) => course.id === preferredCourseId)
+                ? preferredCourseId
+                : ownCourseId ?? apiCourses[0].id;
+              persistSelectedCourseId(nextCourseId);
+              return nextCourseId;
+            });
+          } else {
+            setSelectedCourseId(emptyCourseSummary.id);
+            persistSelectedCourseId(emptyCourseSummary.id);
+            replaceCourseDraft(createDefaultCourseDraft(emptyCourseSummary, loadedTeachers));
+            setCourseMessage("当前数据库中还没有课程，请先新增课程。");
+          }
+        }
+      } catch {
+        if (!ignore) {
+          setCourses([]);
+          setCourseCategories([]);
+          setCourseLevelOptions([]);
+          setTeacherOptions([]);
+          setSelectedCourseId(emptyCourseSummary.id);
+          replaceCourseDraft(createDefaultCourseDraft(emptyCourseSummary, []));
+          setCourseMessage("后台课程列表暂时不可连接，未显示本地演示课程。");
+        }
+      }
+    }
+
+    void loadCourseCatalog();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let ignore = false;
+
+    async function refreshCourseCategories() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/admin/course-categories`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        });
+        if (!response.ok || ignore) {
+          return;
+        }
+        const categories = ((await response.json()) as ApiCourseCategory[]).map((category) =>
+          courseCategoryFromApi(category)
+        );
+        setCourseCategories(categories);
+      } catch {
+        if (!ignore) {
+          setCourseCategories([]);
+        }
+      }
+    }
+
+    const handleCourseCategoryChange = () => {
+      void refreshCourseCategories();
+    };
+    window.addEventListener(COURSE_CATEGORY_CHANGE_EVENT, handleCourseCategoryChange);
+    return () => {
+      ignore = true;
+      window.removeEventListener(COURSE_CATEGORY_CHANGE_EVENT, handleCourseCategoryChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    const nextDefaultDraft = createDefaultCourseDraft(selectedCourse, teacherOptions);
+    let ignore = false;
+
+    if (selectedCourse.id === emptyCourseSummary.id) {
+      const emptyDraftTimer = window.setTimeout(() => {
+        if (ignore) return;
+        replaceCourseDraft(nextDefaultDraft);
+        setCourseMessage("当前数据库中还没有课程，请先新增课程。");
+      }, 0);
+      return () => {
+        ignore = true;
+        window.clearTimeout(emptyDraftTimer);
+      };
+    }
+
+    if (isLocalNewCourse(selectedCourse.id)) {
+      const localDraftTimer = window.setTimeout(() => {
+        if (ignore) return;
+        replaceCourseDraft(nextDefaultDraft);
+        setCourseMessage("正在编辑新课程草稿。");
+      }, 0);
+      return () => {
+        ignore = true;
+        window.clearTimeout(localDraftTimer);
+      };
+    }
+
+    const requestKey = courseDetailRequestKeyRef.current + 1;
+    courseDetailRequestKeyRef.current = requestKey;
+    const loadingMessageTimer = window.setTimeout(() => {
+      if (!ignore && requestKey === courseDetailRequestKeyRef.current) {
+        setCourseMessage("正在加载课程详情...");
+      }
+    }, 0);
+
+    async function loadCourseDetail() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/admin/courses/${selectedCourse.id}`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        });
+        if (ignore || requestKey !== courseDetailRequestKeyRef.current) {
+          return;
+        }
+        window.clearTimeout(loadingMessageTimer);
+        if (!response.ok) {
+          if (hasStoredCourseDraft(selectedCourse.id)) {
+            replaceCourseDraft(readCourseDraft(nextDefaultDraft));
+            setCourseMessage("后台课程详情暂时不可连接，已加载本地草稿。");
+          } else {
+            replaceCourseDraft(nextDefaultDraft);
+            setCourseMessage(`课程详情加载失败，服务器返回 ${response.status}。`);
+          }
+          return;
+        }
+        const detail = (await response.json()) as ApiCourseDetail;
+        if (ignore || requestKey !== courseDetailRequestKeyRef.current) {
+          return;
+        }
+        const nextDraft = courseDraftFromApi(detail, nextDefaultDraft, teacherOptions);
+        replaceCourseDraft(nextDraft);
+        persistCourseDraft(nextDraft);
+        setCourseMessage("课程编辑内容会保留在本地草稿中。");
+      } catch {
+        window.clearTimeout(loadingMessageTimer);
+        if (!ignore && requestKey === courseDetailRequestKeyRef.current) {
+          if (hasStoredCourseDraft(selectedCourse.id)) {
+            replaceCourseDraft(readCourseDraft(nextDefaultDraft));
+            setCourseMessage("后台暂时不可连接，当前使用本地课程草稿。");
+          } else {
+            replaceCourseDraft(nextDefaultDraft);
+            setCourseMessage("后台暂时不可连接，当前显示课程列表中的基础信息。");
+          }
+        }
+      }
+    }
+    void loadCourseDetail();
+
+    return () => {
+      ignore = true;
+      window.clearTimeout(loadingMessageTimer);
+    };
+  }, [selectedCourse, teacherOptions, courseDetailReloadToken]);
+
+  useEffect(() => {
+    let ignore = false;
+    async function loadQuestions() {
+      const sessionUser = getAdminSessionUser();
+      if (!ignore) {
+        setCurrentAdminUserId(sessionUser?.id ?? null);
+      }
+      try {
+        const [questionsResponse, creatorsResponse] = await Promise.all([
+          fetch(`${API_BASE_URL}/admin/question-pool`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          }),
+          fetch(`${API_BASE_URL}/admin/question-creators`, {
+            headers: getAdminRequestHeaders(),
+            cache: "no-store"
+          })
+        ]);
+        if (ignore) {
+          return;
+        }
+        if (creatorsResponse.ok) {
+          const owners = ((await creatorsResponse.json()) as ApiManagedUser[]).map(questionOwnerFromApi);
+          setQuestionOwnerOptions(sortQuestionOwners(owners, sessionUser?.id ?? null));
+        } else if (sessionUser) {
+          setQuestionOwnerOptions(
+            sortQuestionOwners(
+              [
+                {
+                  id: sessionUser.id,
+                  name: sessionUser.full_name,
+                  role: normalizeManagedUserRole(sessionUser.role)
+                }
+              ],
+              sessionUser.id
+            )
+          );
+        }
+        if (questionsResponse.ok) {
+          const questions = ((await questionsResponse.json()) as unknown[])
+            .map((question) => normalizeQuestionForCoursePicker(question))
+            .filter((question): question is CourseQuestion => Boolean(question));
+          setAvailableQuestions(questions);
+        } else if (sessionUser) {
+          setAvailableQuestions((currentQuestions) =>
+            currentQuestions.map((question) =>
+              question.createdByUserId === null
+                ? { ...question, createdByUserId: sessionUser.id }
+                : question
+            )
+          );
+        }
+      } catch {
+        // Keep bundled demo questions when the local API is not running.
+        if (!ignore && sessionUser) {
+          setAvailableQuestions((currentQuestions) =>
+            currentQuestions.map((question) =>
+              question.createdByUserId === null
+                ? { ...question, createdByUserId: sessionUser.id }
+                : question
+            )
+          );
+          setQuestionOwnerOptions(
+            sortQuestionOwners(
+              [
+                {
+                  id: sessionUser.id,
+                  name: sessionUser.full_name,
+                  role: normalizeManagedUserRole(sessionUser.role)
+                }
+              ],
+              sessionUser.id
+            )
+          );
+        }
+      }
+    }
+    void loadQuestions();
+
+    return () => {
+      ignore = true;
+    };
+  }, []);
+
+  function updateCourseDraftWith(updater: (current: CourseDraft) => CourseDraft) {
+    if (!canModifyCourseContent) {
+      setCourseMessage(
+        isSelectedCoursePublished
+          ? "课程已发布，请先取消发布后再编辑。"
+          : "当前正在查看其他老师的课程，只能查看，不能编辑。"
+      );
+      return;
+    }
+    const next = normalizeCourseDraft(updater(courseDraftRef.current), defaultCourseDraft, teacherOptions);
+    replaceCourseDraft(next);
+    persistCourseDraft(next);
+    setCourseMessage("已保存到本地草稿。");
+  }
+
+  function selectCourse(courseId: number) {
+    const course = courses.find((item) => item.id === courseId);
+    if (!course) {
+      return;
+    }
+    if (course.id === selectedCourseId) {
+      setCourseDetailReloadToken((current) => current + 1);
+      setCourseMessage("正在加载课程详情...");
+      return;
+    }
+    const nextDefaultDraft = createDefaultCourseDraft(course, teacherOptions);
+    setSelectedCourseId(course.id);
+    persistSelectedCourseId(course.id);
+    if (isLocalNewCourse(course.id)) {
+      replaceCourseDraft(nextDefaultDraft);
+    }
+    setCourseMessage(
+      isLocalNewCourse(course.id) ? "正在编辑新课程草稿。" : "正在加载课程详情..."
+    );
+  }
+
+  function changeCourseTeacherFilter(nextFilter: number | "all" | "self") {
+    setCourseTeacherFilter(nextFilter);
+    const nextResolvedFilter =
+      isSuperAdmin && nextFilter === "self" ? currentTeacherId ?? "all" : nextFilter;
+    const nextVisibleCourses =
+      !isSuperAdmin || nextResolvedFilter === "all"
+        ? courses
+        : courses.filter((course) => course.teacherId === nextResolvedFilter);
+    const nextCourse = nextVisibleCourses[0] ?? null;
+    if (!nextCourse) {
+      setSelectedCourseId(emptyCourseSummary.id);
+      persistSelectedCourseId(emptyCourseSummary.id);
+      replaceCourseDraft(createDefaultCourseDraft(emptyCourseSummary, teacherOptions));
+      setCourseMessage("该老师暂时还没有课程。");
+      return;
+    }
+    setSelectedCourseId(nextCourse.id);
+    persistSelectedCourseId(nextCourse.id);
+    setCourseMessage("正在加载课程详情...");
+  }
+
+  function startNewCourse() {
+    if (isViewingAnotherTeacher) {
+      setCourseMessage("当前正在查看其他老师的课程，不能新增课程。");
+      return;
+    }
+    if (teacherOptions.length === 0) {
+      setCourseMessage("请先在用户权限管理中创建角色为老师的真实用户。");
+      return;
+    }
+    if (isSuperAdmin && !currentTeacherOption) {
+      setCourseMessage("正在同步当前账号的老师资料，请稍后再新增课程。");
+      return;
+    }
+    const ownerTeacherOptions =
+      isSuperAdmin && currentTeacherOption ? [currentTeacherOption] : teacherOptions;
+    const newCourse = createNewCourseSummary(ownerTeacherOptions);
+    const newDraft = createDefaultCourseDraft(newCourse, ownerTeacherOptions);
+    setCourses((current) => [newCourse, ...current]);
+    setSelectedCourseId(newCourse.id);
+    persistSelectedCourseId(newCourse.id);
+    replaceCourseDraft(newDraft);
+    persistCourseDraft(newDraft);
+    setCourseMessage("正在编辑新课程草稿。填写信息后点击保存课程。");
+  }
+
+  function updateCourseDraft(field: keyof CourseDraft, value: string) {
+    updateCourseDraftWith((current) => ({ ...current, [field]: value }));
+  }
+
+  useEffect(() => {
+    if (!canModifyCourseContent || courseLevelOptions.length === 0) {
+      return;
+    }
+    if (courseDraft.level && courseLevelOptions.includes(courseDraft.level)) {
+      return;
+    }
+    const nextLevel = courseLevelOptions[0];
+    const timer = window.setTimeout(() => {
+      const nextDraft = { ...courseDraftRef.current, level: nextLevel };
+      courseDraftRef.current = nextDraft;
+      setCourseDraft(nextDraft);
+      persistCourseDraft(nextDraft);
+      setCourseMessage("已自动使用当前机构的课程级别。");
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [canModifyCourseContent, courseDraft.courseId, courseDraft.level, courseLevelOptions]);
+
+  function updateCourseTeacher(teacherId: string) {
+    const teacher = getTeacherById(Number(teacherId), teacherOptions);
+    if (!teacher) {
+      return;
+    }
+    updateCourseDraftWith((current) => ({
+      ...current,
+      teacher: teacher.name,
+      teacherId: teacher.id
+    }));
+  }
+
+  async function handleCoverUpload(file: File | undefined) {
+    if (!file || !file.type.startsWith("image/")) {
+      return;
+    }
+    setUploadingCover(true);
+    setCourseMessage("正在上传课程封面...");
+    try {
+      const url = await uploadAdminFile(file, "course_cover");
+      updateCourseDraft("coverUrl", url);
+      setCourseMessage("课程封面已上传。");
+    } catch (error) {
+      setCourseMessage(`课程封面上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingCover(false);
+    }
+  }
+
+  async function handleIntroVideoUpload(file: File | undefined) {
+    if (!file || !file.type.startsWith("video/")) {
+      return;
+    }
+    setUploadingIntroVideo(true);
+    setCourseMessage("正在上传介绍视频...");
+    try {
+      const url = await uploadAdminFile(file, "course_intro_video");
+      updateCourseDraft("introVideoUrl", url);
+      setCourseMessage("介绍视频已上传。");
+    } catch (error) {
+      setCourseMessage(`介绍视频上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingIntroVideo(false);
+    }
+  }
+
+  function addChapter() {
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters([
+        ...current.chapters,
+        createNewCourseChapter(current.chapters.length + 1)
+      ])
+    }));
+  }
+
+  function updateChapter(chapterLocalId: string, patch: Partial<CourseChapterDraft>) {
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters(
+        current.chapters.map((chapter) =>
+          chapter.localId === chapterLocalId ? { ...chapter, ...patch } : chapter
+        )
+      )
+    }));
+  }
+
+  async function removeChapter(chapterLocalId: string) {
+    const chapter = courseDraftRef.current?.chapters.find((entry) => entry.localId === chapterLocalId);
+    const confirmed = await confirmDelete({
+      title: "\u5220\u9664\u7ae0\u8282",
+      itemName: chapter?.title.trim() || "\u672a\u547d\u540d\u7ae0\u8282",
+      description: "\u5220\u9664\u7ae0\u8282\u4f1a\u540c\u65f6\u79fb\u9664\u8be5\u7ae0\u8282\u4e0b\u7684\u6240\u6709\u8bfe\u7a0b\u9879\u76ee\u3002\u4fdd\u5b58\u8bfe\u7a0b\u540e\u751f\u6548\u3002",
+    });
+    if (!confirmed) return;
+
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters(current.chapters.filter((chapter) => chapter.localId !== chapterLocalId))
+    }));
+  }
+
+  function addLessonItem(chapterLocalId: string, itemType: CourseLessonItemType) {
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters(
+        current.chapters.map((chapter) =>
+          chapter.localId === chapterLocalId
+            ? {
+                ...chapter,
+                items: [
+                  ...chapter.items,
+                  createNewCourseLessonItem(itemType, chapter.items.length + 1)
+                ]
+              }
+            : chapter
+        )
+      )
+    }));
+  }
+
+  function updateLessonItem(
+    chapterLocalId: string,
+    itemLocalId: string,
+    patch: Partial<CourseLessonItemDraft>
+  ) {
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters(
+        current.chapters.map((chapter) =>
+          chapter.localId === chapterLocalId
+            ? {
+                ...chapter,
+                items: chapter.items.map((item) =>
+                  item.localId === itemLocalId ? { ...item, ...patch } : item
+                )
+              }
+            : chapter
+        )
+      )
+    }));
+  }
+
+  async function removeLessonItem(chapterLocalId: string, itemLocalId: string) {
+    const chapter = courseDraftRef.current?.chapters.find((entry) => entry.localId === chapterLocalId);
+    const item = chapter?.items.find((entry) => entry.localId === itemLocalId);
+    const confirmed = await confirmDelete({
+      title: `\u5220\u9664${item ? courseLessonItemDefaultTitle(item.itemType) : "\u8bfe\u7a0b\u9879\u76ee"}`,
+      itemName: item?.title.trim() || (item ? courseLessonItemDefaultTitle(item.itemType) : "\u8bfe\u7a0b\u9879\u76ee"),
+      description: "\u8be5\u9879\u76ee\u4f1a\u4ece\u5f53\u524d\u7ae0\u8282\u4e2d\u79fb\u9664\u3002\u4fdd\u5b58\u8bfe\u7a0b\u540e\u751f\u6548\u3002",
+    });
+    if (!confirmed) return;
+
+    updateCourseDraftWith((current) => ({
+      ...current,
+      chapters: reindexCourseChapters(
+        current.chapters.map((chapter) =>
+          chapter.localId === chapterLocalId
+            ? {
+                ...chapter,
+                items: chapter.items.filter((item) => item.localId !== itemLocalId)
+              }
+            : chapter
+        )
+      )
+    }));
+  }
+
+  async function persistCourse(status: CoursePublicationStatus) {
+    if (!canEditSelectedCourse) {
+      throw new Error("当前正在查看其他老师的课程，只能查看，不能编辑。");
+    }
+    const isPublishing = status === "published";
+    setCourseMessage(isPublishing ? "正在发布课程..." : "正在保存课程草稿...");
+    const currentDraft = courseDraftRef.current;
+    if (!currentDraft.title.trim()) {
+      throw new Error("请填写课程标题。");
+    }
+    if (!currentDraft.category.trim()) {
+      throw new Error("请选择课程类别。");
+    }
+    if (!currentDraft.level.trim()) {
+      throw new Error("请选择课程级别。");
+    }
+    const selectedTeacher =
+      getTeacherById(currentDraft.teacherId, teacherOptions) ??
+      getTeacherByName(currentDraft.teacher, teacherOptions);
+    if (!selectedTeacher) {
+      throw new Error("请先在用户权限管理中创建角色为老师的用户，并在课程编辑中选择授课老师。");
+    }
+    const selectedSummary = courses.find((course) => course.id === currentDraft.courseId) ?? selectedCourse;
+    let targetCourseId = currentDraft.courseId;
+    const creatingNewCourse = isLocalNewCourse(currentDraft.courseId);
+
+    if (creatingNewCourse) {
+      setCourseMessage(isPublishing ? "正在创建并发布新课程..." : "正在创建新课程草稿...");
+      let createResponse: Response;
+      try {
+        createResponse = await fetch(`${API_BASE_URL}/admin/courses`, {
+          method: "POST",
+          headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(courseDraftToCreatePayload(currentDraft, selectedSummary, teacherOptions))
+        });
+      } catch {
+        throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+      }
+      if (!createResponse.ok) {
+        let detail = "";
+        try {
+          const errorPayload = (await createResponse.json()) as { detail?: unknown };
+          detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
+        } catch {
+          detail = "";
+        }
+        throw new Error(detail || `新课程创建失败，服务器返回 ${createResponse.status}。`);
+      }
+      const createdCourse = (await createResponse.json()) as ApiCourseCard;
+      targetCourseId = createdCourse.id;
+    }
+
+    const draftForSave = { ...currentDraft, courseId: targetCourseId };
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/admin/courses/${targetCourseId}`, {
+        method: "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(courseDraftToApiPayload(draftForSave, teacherOptions, status))
+      });
+    } catch {
+      throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+    }
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const errorPayload = (await response.json()) as { detail?: unknown };
+        detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
+      } catch {
+        detail = "";
+      }
+      if (response.status === 404) {
+        throw new Error("课程不存在，请刷新课程列表后再保存。");
+      }
+      throw new Error(detail || `课程保存失败，服务器返回 ${response.status}。`);
+    }
+    const detail = (await response.json()) as ApiCourseDetail;
+    const updatedSummary = applyCoursePublicationStatus(normalizeCourseCardFromApi(detail), status);
+    const nextDraft = courseDraftFromApi(
+      detail,
+      createDefaultCourseDraft(updatedSummary, teacherOptions),
+      teacherOptions
+    );
+    setCourses((current) => {
+      const withoutLocalDraft = current.filter((course) => course.id !== currentDraft.courseId);
+      return withoutLocalDraft.some((course) => course.id === updatedSummary.id)
+        ? withoutLocalDraft.map((course) =>
+            course.id === updatedSummary.id ? updatedSummary : course
+          )
+        : [updatedSummary, ...withoutLocalDraft];
+    });
+    setSelectedCourseId(updatedSummary.id);
+    persistSelectedCourseId(updatedSummary.id);
+    replaceCourseDraft(nextDraft);
+    persistCourseDraft(nextDraft);
+    if (creatingNewCourse && typeof window !== "undefined") {
+      window.sessionStorage.removeItem(courseDraftStorageKey(currentDraft.courseId));
+    }
+    setCourseMessage(isPublishing ? "课程已发布，学生端可以看到。" : "课程已保存为草稿。");
+    return detail;
+  }
+
+  async function saveCourse() {
+    if (!canUseCourseActions) {
+      setCourseMessage("当前正在查看其他老师的课程，只能查看，不能保存。");
+      return;
+    }
+    const currentDraft = courseDraftRef.current;
+    const currentStatus =
+      courses.find((course) => course.id === currentDraft.courseId)?.statusValue ?? "draft";
+    if (currentStatus === "published") {
+      setCourseMessage("课程已发布，请先取消发布后再编辑和保存。");
+      return;
+    }
+    setSavingCourse(true);
+    try {
+      await persistCourse("draft");
+      setCourseMessage("课程已保存为草稿。");
+    } catch (error) {
+      persistCourseDraft(courseDraftRef.current);
+      setCourseMessage(`课程保存失败：${uploadFailureMessage(error, "当前内容已保留在本地草稿。")}`);
+    } finally {
+      setSavingCourse(false);
+    }
+  }
+
+  async function updateCourseStatusOnly(status: CoursePublicationStatus) {
+    if (!canUseCourseActions) {
+      throw new Error("当前正在查看其他老师的课程，只能查看，不能发布或取消发布。");
+    }
+    const currentDraft = courseDraftRef.current;
+    if (isLocalNewCourse(currentDraft.courseId)) {
+      throw new Error("新课程需要先保存课程，再发布。");
+    }
+    let response: Response;
+    try {
+      response = await fetch(`${API_BASE_URL}/admin/courses/${currentDraft.courseId}`, {
+        method: "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status })
+      });
+    } catch {
+      throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+    }
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const errorPayload = (await response.json()) as { detail?: unknown };
+        detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
+      } catch {
+        detail = "";
+      }
+      throw new Error(detail || `课程状态更新失败，服务器返回 ${response.status}。`);
+    }
+    const detail = (await response.json()) as ApiCourseDetail;
+    const updatedSummary = applyCoursePublicationStatus(normalizeCourseCardFromApi(detail), status);
+    const nextDraft = courseDraftFromApi(
+      detail,
+      createDefaultCourseDraft(updatedSummary, teacherOptions),
+      teacherOptions
+    );
+    setCourses((current) =>
+      current.some((course) => course.id === updatedSummary.id)
+        ? current.map((course) => (course.id === updatedSummary.id ? updatedSummary : course))
+        : [updatedSummary, ...current]
+    );
+    setSelectedCourseId(updatedSummary.id);
+    persistSelectedCourseId(updatedSummary.id);
+    replaceCourseDraft(nextDraft);
+    persistCourseDraft(nextDraft);
+    setCourseMessage(
+      status === "published" ? "课程已发布，学生端可以看到。" : "课程已取消发布，可以继续编辑和保存。"
+    );
+    return detail;
+  }
+
+  async function publishCourse() {
+    if (!canUseCourseActions) {
+      setCourseMessage("当前正在查看其他老师的课程，只能查看，不能发布或取消发布。");
+      return;
+    }
+    setPublishingCourse(true);
+    const currentDraft = courseDraftRef.current;
+    const currentStatus =
+      courses.find((course) => course.id === currentDraft.courseId)?.statusValue ?? "draft";
+    const nextStatus: CoursePublicationStatus = currentStatus === "published" ? "draft" : "published";
+    try {
+      if (nextStatus === "published") {
+        await persistCourse("published");
+      } else {
+        await updateCourseStatusOnly("draft");
+      }
+    } catch (error) {
+      persistCourseDraft(courseDraftRef.current);
+      setCourseMessage(
+        `${nextStatus === "published" ? "课程发布失败" : "取消发布失败"}：${uploadFailureMessage(
+          error,
+          "当前内容已保留在本地草稿。"
+        )}`
+      );
+    } finally {
+      setPublishingCourse(false);
+    }
+  }
+
+  async function deleteCourse() {
+    if (!canUseCourseActions) {
+      setCourseMessage("当前正在查看其他老师的课程，只能查看，不能删除。");
+      return;
+    }
+    const currentDraft = courseDraftRef.current;
+    const currentCourse = courses.find((course) => course.id === currentDraft.courseId) ?? selectedCourse;
+    const confirmed = await confirmDelete({
+      title: "\u5220\u9664\u8bfe\u7a0b",
+      itemName: currentCourse.title,
+      description: "\u8bfe\u7a0b\u4f1a\u4ece\u540e\u53f0\u5217\u8868\u4e2d\u79fb\u9664\u3002\u5df2\u6709\u8ba2\u9605\u6216\u5b66\u4e60\u8bb0\u5f55\u7684\u8bfe\u7a0b\u4f1a\u88ab\u5f52\u6863\u3002",
+    });
+    if (!confirmed) return;
+    setDeletingCourse(true);
+    try {
+      if (!isLocalNewCourse(currentDraft.courseId)) {
+        const response = await fetch(`${API_BASE_URL}/admin/courses/${currentDraft.courseId}`, {
+          method: "DELETE",
+          headers: getAdminRequestHeaders()
+        });
+        if (!response.ok) {
+          let detail = "";
+          try {
+            const errorPayload = (await response.json()) as { detail?: unknown };
+            detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
+          } catch {
+            detail = "";
+          }
+          throw new Error(detail || `课程删除失败，服务器返回 ${response.status}。`);
+        }
+        const result = (await response.json()) as { archived?: boolean };
+        setCourseMessage(result.archived ? "课程已有订阅或学习记录，已归档并从列表隐藏。" : "课程已删除。");
+      } else {
+        setCourseMessage("本地新课程草稿已删除。");
+      }
+
+      if (typeof window !== "undefined") {
+        window.sessionStorage.removeItem(courseDraftStorageKey(currentDraft.courseId));
+      }
+      const remainingCourses = courses.filter((course) => course.id !== currentDraft.courseId);
+      const nextCourses = remainingCourses;
+      const nextCourse = nextCourses[0] ?? emptyCourseSummary;
+      const nextDraft = createDefaultCourseDraft(nextCourse, teacherOptions);
+      setCourses(nextCourses);
+      setSelectedCourseId(nextCourse.id);
+      persistSelectedCourseId(nextCourse.id);
+      replaceCourseDraft(nextDraft);
+      if (nextCourse.id === emptyCourseSummary.id) {
+        setCourseMessage("课程已删除，当前数据库中还没有课程。");
+      } else if (isLocalNewCourse(nextCourse.id)) {
+        persistCourseDraft(nextDraft);
+      }
+    } catch (error) {
+      setCourseMessage(`课程删除失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setDeletingCourse(false);
+    }
+  }
+
+  const courseActionBusy = savingCourse || publishingCourse || deletingCourse;
+  const publicationActionLabel = selectedCourseStatus === "published" ? "取消发布" : "发布课程";
+  const publicationActionBusyLabel = selectedCourseStatus === "published" ? "取消中" : "发布中";
+  const shouldShowLegacyCourseCategory =
+    Boolean(courseDraft.category) && !courseCategoryOptions.includes(courseDraft.category);
+
+  return (
+    <div className="grid gap-5">
+      {deleteConfirmDialog}
+      <section className="panel overflow-hidden rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">课程列表</h2>
+            {isSuperAdmin ? (
+              <p className="mt-1 text-sm text-slate-500">超级管理员可以切换老师查看课程，非本人课程为只读。</p>
+            ) : null}
+          </div>
+          <div className="flex flex-wrap items-end gap-3">
+            {isSuperAdmin ? (
+              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                查看老师
+                <select
+                  className="focus-ring min-w-52 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                  value={String(resolvedCourseTeacherFilter)}
+                  onChange={(event) =>
+                    changeCourseTeacherFilter(
+                      event.target.value === "all" ? "all" : Number(event.target.value)
+                    )
+                  }
+                >
+                  {currentTeacherOption ? (
+                    <option value={currentTeacherOption.id}>我自己 · {currentTeacherOption.name}</option>
+                  ) : null}
+                  <option value="all">全部老师</option>
+                  {teacherOptions.filter((teacher) => teacher.id !== currentTeacherId).map((teacher) => (
+                    <option key={teacher.id} value={teacher.id}>
+                      {teacher.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            <button
+              onClick={startNewCourse}
+              disabled={
+                courseActionBusy ||
+                isViewingAnotherTeacher ||
+                teacherOptions.length === 0 ||
+                (isSuperAdmin && !currentTeacherOption)
+              }
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Plus size={16} /> 新增课程
+            </button>
+          </div>
+        </div>
+        <div className="mt-5 grid min-w-0 grid-cols-[repeat(auto-fill,minmax(18rem,24rem))] justify-start gap-4">
+          {visibleCourses.map((course) => (
+            <button
+              key={course.id}
+              onClick={() => selectCourse(course.id)}
+              className={`focus-ring h-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-white p-4 text-left transition ${
+                course.id === selectedCourse.id ? "border-mint shadow-soft" : "border-slate-200"
+              }`}
+            >
+              {course.image ? (
+                <img src={course.image} alt={course.title} className="h-32 w-full max-w-full rounded-lg object-cover" />
+              ) : (
+                <div className="grid h-32 w-full place-items-center rounded-lg border border-dashed border-slate-200 bg-slate-50 text-sm font-bold text-slate-500">
+                  尚未上传图片
+                </div>
+              )}
+              <div className="mt-4 flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-ink">{course.title}</p>
+                  <p className="mt-1 truncate text-sm text-slate-500">{course.category} · {course.level}</p>
+                  <p className="mt-1 truncate text-xs text-slate-400">{course.teacher}</p>
+                </div>
+                <span
+                  className={`rounded-full px-2.5 py-1 text-xs font-bold ${courseStatusClasses[course.statusValue]}`}
+                >
+                  {course.status}
+                </span>
+              </div>
+            </button>
+          ))}
+          {visibleCourses.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+              该老师暂时还没有课程。
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="grid gap-5">
+        <div className="panel rounded-lg p-5">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-ink">课程编辑</h2>
+              <p className="mt-1 text-sm text-slate-500">{courseMessage}</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={deleteCourse}
+                disabled={courseActionBusy || !canUseCourseActions}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/40 bg-white px-4 py-2 text-sm font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={16} /> {deletingCourse ? "删除中" : "删除课程"}
+              </button>
+              <button
+                onClick={publishCourse}
+                disabled={courseActionBusy || !canUseCourseActions}
+                className={`focus-ring inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60 ${
+                  selectedCourseStatus === "published"
+                    ? "border border-slate-200 bg-white text-slate-700"
+                    : "bg-mint text-white"
+                }`}
+              >
+                <ArrowUpRight size={16} /> {publishingCourse ? publicationActionBusyLabel : publicationActionLabel}
+              </button>
+              <button
+                onClick={saveCourse}
+                disabled={courseActionBusy || !canSaveSelectedCourse}
+                className={`focus-ring inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm font-bold disabled:cursor-not-allowed ${
+                  canSaveSelectedCourse && !courseActionBusy
+                    ? "bg-ink text-white"
+                    : "bg-slate-200 text-slate-500"
+                }`}
+              >
+                <Save size={16} /> {savingCourse ? "保存中" : "保存课程"}
+              </button>
+            </div>
+          </div>
+          {!shouldShowCourseEditor ? (
+            <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+              该老师暂时还没有课程，请切换其他老师查看。
+            </div>
+          ) : null}
+          {shouldShowCourseEditor && !canEditSelectedCourse ? (
+            <div className="mt-5 rounded-lg border border-mint/30 bg-mint/10 p-4 text-sm font-semibold text-mint">
+              当前正在查看其他老师的课程，可以浏览课程内容，但不能编辑、删除、发布或取消发布。
+            </div>
+          ) : null}
+          {shouldShowCourseEditor && canEditSelectedCourse && isSelectedCoursePublished ? (
+            <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-600">
+              课程已发布，当前内容处于只读状态。请先点击“取消发布”，再编辑并保存课程。
+            </div>
+          ) : null}
+          {shouldShowCourseEditor ? (
+            <>
+          <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_17rem_13rem_18rem]">
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              课程标题
+              <input
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                value={courseDraft.title}
+                onChange={(event) => updateCourseDraft("title", event.target.value)}
+                disabled={!canModifyCourseContent}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              课程类别
+              <select
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                value={courseDraft.category}
+                onChange={(event) => updateCourseDraft("category", event.target.value)}
+                disabled={!canModifyCourseContent}
+              >
+                <option value="" disabled>
+                  {courseCategoryOptions.length === 0 ? "请先创建课程类别" : "请选择课程类别"}
+                </option>
+                {shouldShowLegacyCourseCategory ? (
+                  <option value={courseDraft.category}>{courseDraft.category}</option>
+                ) : null}
+                {courseCategoryOptions.map((categoryLabel) => (
+                  <option key={categoryLabel} value={categoryLabel}>
+                    {categoryLabel}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              课程级别
+              <select
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                value={courseDraft.level}
+                onChange={(event) => updateCourseDraft("level", event.target.value)}
+                disabled={!canModifyCourseContent}
+              >
+                <option value="" disabled>
+                  {visibleCourseLevelOptions.length === 0 ? "暂无可选级别" : "请选择级别"}
+                </option>
+                {visibleCourseLevelOptions.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              授课老师
+              <select
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                value={String(getTeacherById(courseDraft.teacherId, teacherOptions)?.id ?? "")}
+                onChange={(event) => updateCourseTeacher(event.target.value)}
+                disabled={teacherOptions.length === 0 || !canModifyCourseContent || isSuperAdmin}
+              >
+                <option value="" disabled>
+                  {teacherOptions.length === 0
+                    ? "请先在用户权限管理中创建老师账号"
+                    : "请选择授课老师"}
+                </option>
+                {teacherOptions.map((teacher) => (
+                  <option key={teacher.id} value={teacher.id}>
+                    {teacher.name} · {teacher.title}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="grid gap-3 md:col-span-2">
+              <span className="text-sm font-semibold text-slate-700">课程封面图</span>
+              <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-[16rem_1fr]">
+                {courseDraft.coverUrl ? (
+                  <img
+                    src={courseDraft.coverUrl}
+                    alt={courseDraft.title || "课程封面图"}
+                    className="h-40 w-full rounded-lg bg-white object-cover"
+                  />
+                ) : (
+                  <div className="grid h-40 w-full place-items-center rounded-lg border border-dashed border-slate-200 bg-white text-sm font-bold text-slate-500">
+                    尚未上传图片
+                  </div>
+                )}
+                <div className="grid content-center gap-3">
+                  <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+                    <ImagePlus size={16} /> {uploadingCover ? "上传中" : "选择封面图片"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="sr-only"
+                      disabled={uploadingCover || !canModifyCourseContent}
+                      onChange={(event) => {
+                        void handleCoverUpload(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <p className="text-sm text-slate-500">上传后会立即预览，并保留在当前课程编辑草稿中。</p>
+                </div>
+              </div>
+            </div>
+            <div className="grid gap-3 md:col-span-2">
+              <span className="text-sm font-semibold text-slate-700">介绍视频</span>
+              <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-[16rem_1fr]">
+                <div className="grid min-h-36 place-items-center overflow-hidden rounded-lg bg-ink text-sm font-bold text-white">
+                  {courseDraft.introVideoUrl ? (
+                    <video controls src={courseDraft.introVideoUrl} className="h-full max-h-48 w-full object-contain" />
+                  ) : (
+                    <span>尚未上传视频</span>
+                  )}
+                </div>
+                <div className="grid content-center gap-3">
+                  <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+                    <Video size={16} /> {uploadingIntroVideo ? "上传中" : "选择介绍视频"}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="sr-only"
+                      disabled={uploadingIntroVideo || !canModifyCourseContent}
+                      onChange={(event) => {
+                        void handleIntroVideoUpload(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  <p className="text-sm text-slate-500">介绍视频仅通过本地文件上传，上传后会保留在当前课程编辑草稿中。</p>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2">
+            <span className="text-sm font-semibold text-slate-700">课程简介</span>
+            <RichTextEditor
+              value={courseDraft.description}
+              onChange={(value) => updateCourseDraft("description", value)}
+              disabled={!canModifyCourseContent}
+              placeholder="编辑课程简介，可以加入文字排版、图片和视频素材。"
+            />
+          </div>
+          <div className="mt-6 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-ink">章节与项目</h3>
+              <p className="mt-1 text-sm text-slate-500">每章可添加多个项目，项目可配置为讲课视频、讲义、练习或测验。</p>
+            </div>
+            <button
+              onClick={addChapter}
+              disabled={!canModifyCourseContent}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Plus size={16} /> 添加章节
+            </button>
+          </div>
+          <div className="mt-4 grid gap-4">
+            {courseDraft.chapters.map((chapter, chapterIndex) => (
+              <CourseChapterEditor
+                key={chapter.localId}
+                chapter={chapter}
+                chapterIndex={chapterIndex}
+                availableQuestions={availableQuestions}
+                questionOwnerOptions={questionOwnerOptions}
+                currentUserId={currentAdminUserId}
+                readOnly={!canModifyCourseContent}
+                onUpdate={(patch) => updateChapter(chapter.localId, patch)}
+                onRemove={() => { void removeChapter(chapter.localId); }}
+                onAddItem={(itemType) => addLessonItem(chapter.localId, itemType)}
+                onUpdateItem={(itemLocalId, patch) =>
+                  updateLessonItem(chapter.localId, itemLocalId, patch)
+                }
+                onRemoveItem={(itemLocalId) => { void removeLessonItem(chapter.localId, itemLocalId); }}
+              />
+            ))}
+          </div>
+          <div className="mt-5 flex justify-end">
+            <button
+              onClick={saveCourse}
+              disabled={courseActionBusy || !canSaveSelectedCourse}
+              className={`focus-ring inline-flex items-center gap-2 rounded-lg px-5 py-2.5 text-sm font-bold disabled:cursor-not-allowed ${
+                canSaveSelectedCourse && !courseActionBusy
+                  ? "bg-ink text-white"
+                  : "bg-slate-200 text-slate-500"
+              }`}
+            >
+              <Save size={16} /> {savingCourse ? "保存中" : "保存课程"}
+            </button>
+          </div>
+            </>
+          ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function CourseChapterEditor({
+  chapter,
+  chapterIndex,
+  availableQuestions,
+  questionOwnerOptions,
+  currentUserId,
+  readOnly,
+  onUpdate,
+  onRemove,
+  onAddItem,
+  onUpdateItem,
+  onRemoveItem
+}: {
+  chapter: CourseChapterDraft;
+  chapterIndex: number;
+  availableQuestions: CourseQuestion[];
+  questionOwnerOptions: CourseQuestionOwnerOption[];
+  currentUserId: number | null;
+  readOnly: boolean;
+  onUpdate: (patch: Partial<CourseChapterDraft>) => void;
+  onRemove: () => void;
+  onAddItem: (itemType: CourseLessonItemType) => void;
+  onUpdateItem: (itemLocalId: string, patch: Partial<CourseLessonItemDraft>) => void;
+  onRemoveItem: (itemLocalId: string) => void;
+}) {
+  const [collapsed, setCollapsed] = useState(chapterIndex > 0);
+
+  return (
+    <section className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-white p-4">
+      <div className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setCollapsed((current) => !current)}
+          className="focus-ring flex min-w-0 flex-1 basis-0 items-center gap-3 overflow-hidden rounded-lg px-2 py-2 text-left"
+          aria-expanded={!collapsed}
+        >
+          <ChevronRight
+            size={18}
+            className={`shrink-0 text-slate-500 transition ${collapsed ? "" : "rotate-90"}`}
+          />
+          <span className="shrink-0 rounded-full bg-mint/12 px-2.5 py-1 text-xs font-bold text-mint">
+            第{chapterIndex + 1}章
+          </span>
+          <span className="min-w-0 flex-1 overflow-hidden">
+            <span className="block truncate font-bold text-ink">{chapter.title}</span>
+            <span className="mt-1 block truncate text-sm text-slate-500">
+              {chapter.items.length} 个项目
+            </span>
+          </span>
+        </button>
+        <button
+          onClick={onRemove}
+          disabled={readOnly}
+          className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 text-coral"
+          aria-label={`删除第${chapterIndex + 1}章`}
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      {!collapsed ? (
+        <>
+          <div className="mt-4 grid gap-4">
+            <label className="grid max-w-2xl min-w-0 gap-2 text-sm font-semibold text-slate-700">
+              章节标题
+              <input
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                value={chapter.title}
+                onChange={(event) => onUpdate({ title: event.target.value })}
+                disabled={readOnly}
+              />
+            </label>
+            <div className="grid min-w-0 gap-2 text-sm font-semibold text-slate-700">
+              章节简介
+              <RichTextEditor
+                value={chapter.summary}
+                onChange={(value) => onUpdate({ summary: value })}
+                disabled={readOnly}
+                placeholder="编辑本章介绍，可以加入文字排版、图片和视频素材。"
+                minHeightClass="min-h-28"
+              />
+            </div>
+          </div>
+
+          <div className="mt-4 grid gap-3">
+            {chapter.items.map((item, itemIndex) => (
+              <CourseLessonItemEditor
+                key={item.localId}
+                item={item}
+                itemIndex={itemIndex}
+                availableQuestions={availableQuestions}
+                questionOwnerOptions={questionOwnerOptions}
+                currentUserId={currentUserId}
+                readOnly={readOnly}
+                onUpdate={(patch) => onUpdateItem(item.localId, patch)}
+                onRemove={() => onRemoveItem(item.localId)}
+              />
+            ))}
+          </div>
+
+          <div className="mt-4 flex flex-wrap gap-2">
+            {courseLessonItemTypes.map(({ value, label, icon: Icon }) => (
+              <button
+                key={value}
+                onClick={() => onAddItem(value)}
+                disabled={readOnly}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Icon size={15} /> 添加{label}
+              </button>
+            ))}
+          </div>
+        </>
+      ) : null}
+    </section>
+  );
+}
+
+function CourseLessonItemEditor({
+  item,
+  itemIndex,
+  availableQuestions,
+  questionOwnerOptions,
+  currentUserId,
+  readOnly,
+  onUpdate,
+  onRemove
+}: {
+  item: CourseLessonItemDraft;
+  itemIndex: number;
+  availableQuestions: CourseQuestion[];
+  questionOwnerOptions: CourseQuestionOwnerOption[];
+  currentUserId: number | null;
+  readOnly: boolean;
+  onUpdate: (patch: Partial<CourseLessonItemDraft>) => void;
+  onRemove: () => void;
+}) {
+  const [collapsed, setCollapsed] = useState(itemIndex > 0);
+  const [uploadMessage, setUploadMessage] = useState("");
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const itemTypeMeta =
+    courseLessonItemTypes.find((type) => type.value === item.itemType) ?? courseLessonItemTypes[0];
+  const ItemIcon = itemTypeMeta.icon;
+
+  function handleTypeChange(nextType: CourseLessonItemType) {
+    const questionIds = getQuestionIdsFromItem(item);
+    const isQuestionItem = nextType === "exercise" || nextType === "quiz";
+    onUpdate({
+      itemType: nextType,
+      title: courseLessonItemDefaultTitle(nextType),
+      contentUrl: nextType === item.itemType && !isQuestionItem ? item.contentUrl : "",
+      body: isQuestionItem ? { question_ids: questionIds } : {}
+    });
+  }
+
+  async function handleContentFileUpload(file: File | undefined, kind: AdminUploadKind) {
+    if (!file) {
+      return;
+    }
+    setUploadingFile(true);
+    setUploadMessage("正在上传文件...");
+    try {
+      const url = await uploadAdminFile(file, kind);
+      onUpdate({ contentUrl: url });
+      setUploadMessage("文件已上传。");
+    } catch (error) {
+      setUploadMessage(`文件上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingFile(false);
+    }
+  }
+
+  const selectedQuestionIds = getQuestionIdsFromItem(item);
+
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <button
+          type="button"
+          onClick={() => setCollapsed((current) => !current)}
+          className="focus-ring flex min-w-0 flex-1 basis-0 items-center gap-3 overflow-hidden rounded-lg px-2 py-2 text-left"
+          aria-expanded={!collapsed}
+        >
+          <ChevronRight
+            size={17}
+            className={`shrink-0 text-slate-500 transition ${collapsed ? "" : "rotate-90"}`}
+          />
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white text-mint">
+            <ItemIcon size={16} />
+          </span>
+          <span className="min-w-0 flex-1 overflow-hidden">
+            <span className="block truncate font-bold text-ink">{item.title}</span>
+            <span className="mt-1 block text-sm text-slate-500">
+              {itemTypeMeta.label} · {item.requiredMinutes} 分钟
+              {selectedQuestionIds.length > 0 ? ` · ${selectedQuestionIds.length} 道题` : ""}
+            </span>
+          </span>
+        </button>
+        <button
+          onClick={onRemove}
+          disabled={readOnly}
+          className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-coral disabled:cursor-not-allowed disabled:opacity-60"
+          aria-label="删除项目"
+        >
+          <Trash2 size={16} />
+        </button>
+      </div>
+
+      {!collapsed ? (
+        <>
+          <div className="mt-4 grid gap-3 md:grid-cols-[minmax(12rem,1fr)_12rem_7rem] xl:grid-cols-[minmax(16rem,1fr)_13rem_7rem]">
+            <label className="grid min-w-0 gap-2 text-sm font-semibold text-slate-700">
+              项目标题
+              <input
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                value={item.title}
+                onChange={(event) => onUpdate({ title: event.target.value })}
+                disabled={readOnly}
+              />
+            </label>
+            <label className="grid min-w-0 gap-2 text-sm font-semibold text-slate-700">
+              项目类型
+              <select
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2"
+                value={item.itemType}
+                onChange={(event) => handleTypeChange(event.target.value as CourseLessonItemType)}
+                disabled={readOnly}
+              >
+                {courseLessonItemTypes.map((type) => (
+                  <option key={type.value} value={type.value}>
+                    {type.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid min-w-0 gap-2 text-sm font-semibold text-slate-700">
+              建议分钟
+              <input
+                type="number"
+                min={0}
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-center"
+                value={item.requiredMinutes}
+                onChange={(event) => onUpdate({ requiredMinutes: Number(event.target.value) })}
+                disabled={readOnly}
+              />
+            </label>
+          </div>
+
+          {item.itemType === "video" ? (
+            <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-bold text-ink">讲课视频</p>
+                  <p className="mt-1 text-sm text-slate-500">视频仅支持本地文件上传。</p>
+                </div>
+                <label className="focus-ring inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">
+                  <Video size={16} /> {uploadingFile ? "上传中" : "选择视频"}
+                  <input
+                    type="file"
+                    accept="video/*"
+                    className="sr-only"
+                    disabled={uploadingFile || readOnly}
+                    onChange={(event) => {
+                      void handleContentFileUpload(event.target.files?.[0], "lesson_video");
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              {uploadMessage ? <p className="text-sm text-slate-500">{uploadMessage}</p> : null}
+              {item.contentUrl ? (
+                <video controls src={item.contentUrl} className="max-h-64 rounded-lg bg-ink" />
+              ) : (
+                <div className="grid h-32 place-items-center rounded-lg border border-dashed border-slate-200 text-sm text-slate-500">
+                  尚未上传视频
+                </div>
+              )}
+            </div>
+          ) : null}
+
+          {item.itemType === "handout" ? (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="font-bold text-ink">讲义文件</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {item.contentUrl ? "已选择 Markdown 讲义文件。" : "请选择 Markdown .md 文件。"}
+                  </p>
+                </div>
+                <label className="focus-ring inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">
+                  <FileText size={16} /> {uploadingFile ? "上传中" : "选择讲义"}
+                  <input
+                    type="file"
+                    accept=".md,text/markdown,text/plain"
+                    className="sr-only"
+                    disabled={uploadingFile || readOnly}
+                    onChange={(event) => {
+                      void handleContentFileUpload(event.target.files?.[0], "handout");
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+              </div>
+              {uploadMessage ? <p className="mt-3 text-sm text-slate-500">{uploadMessage}</p> : null}
+            </div>
+          ) : null}
+
+          {item.itemType === "exercise" || item.itemType === "quiz" ? (
+            <QuestionPicker
+              questions={availableQuestions}
+              ownerOptions={questionOwnerOptions}
+              currentUserId={currentUserId}
+              readOnly={readOnly}
+              selectedQuestionIds={selectedQuestionIds}
+              onChange={(questionIds) => onUpdate({ body: { ...item.body, question_ids: questionIds } })}
+            />
+          ) : null}
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function QuestionPicker({
+  questions,
+  ownerOptions,
+  currentUserId,
+  readOnly,
+  selectedQuestionIds,
+  onChange
+}: {
+  questions: CourseQuestion[];
+  ownerOptions: CourseQuestionOwnerOption[];
+  currentUserId: number | null;
+  readOnly: boolean;
+  selectedQuestionIds: number[];
+  onChange: (questionIds: number[]) => void;
+}) {
+  const [query, setQuery] = useState("");
+  const [selectedOwnerId, setSelectedOwnerId] = useState<number | "all" | "self">("self");
+  const [selectedType, setSelectedType] = useState("all");
+  const [draggingQuestionId, setDraggingQuestionId] = useState<number | null>(null);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+
+  const normalizedQuery = query.trim().toLowerCase();
+  const typeOptions = Array.from(new Set(questions.map((question) => question.type))).filter(Boolean);
+  const currentUserIsQuestionOwner = Boolean(
+    currentUserId && ownerOptions.some((owner) => owner.id === currentUserId)
+  );
+  const selectedOwnerExists =
+    typeof selectedOwnerId === "number" && ownerOptions.some((owner) => owner.id === selectedOwnerId);
+  const resolvedOwnerId =
+    selectedOwnerId === "self"
+      ? currentUserIsQuestionOwner
+        ? currentUserId ?? "all"
+        : "all"
+      : selectedOwnerId === "all" || selectedOwnerExists
+        ? selectedOwnerId
+        : "all";
+  const filteredQuestions = questions.filter((question) => {
+    if (resolvedOwnerId !== "all" && question.createdByUserId !== resolvedOwnerId) {
+      return false;
+    }
+    if (selectedType !== "all" && question.type !== selectedType) {
+      return false;
+    }
+    if (!normalizedQuery) {
+      return true;
+    }
+    return [question.title, question.prompt, question.skillArea, question.difficulty]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery);
+  });
+  const selectedQuestions = selectedQuestionIds
+    .map((questionId) => questions.find((question) => question.id === questionId))
+    .filter((question): question is CourseQuestion => Boolean(question));
+
+  function toggleQuestion(question: CourseQuestion) {
+    if (readOnly) {
+      return;
+    }
+    if (question.status !== "published") {
+      return;
+    }
+    const exists = selectedQuestionIds.includes(question.id);
+    onChange(
+      exists
+        ? selectedQuestionIds.filter((id) => id !== question.id)
+        : [...selectedQuestionIds, question.id]
+    );
+  }
+
+  async function removeQuestion(questionId: number) {
+    if (readOnly) {
+      return;
+    }
+    const question = selectedQuestions.find((entry) => entry.id === questionId);
+    const confirmed = await confirmDelete({
+      title: "\u79fb\u9664\u9898\u76ee",
+      itemName: question?.title || question?.prompt || "\u9898\u76ee",
+      description: "\u8be5\u9898\u76ee\u4f1a\u4ece\u5f53\u524d\u7ec3\u4e60\u6216\u6d4b\u9a8c\u4e2d\u79fb\u9664\uff0c\u4e0d\u4f1a\u5220\u9664\u9898\u5e93\u4e2d\u7684\u539f\u9898\u3002",
+    });
+    if (!confirmed) return;
+    onChange(selectedQuestionIds.filter((id) => id !== questionId));
+  }
+
+  function moveQuestion(sourceId: number, targetId: number) {
+    if (readOnly) {
+      return;
+    }
+    if (sourceId === targetId) {
+      return;
+    }
+    const sourceIndex = selectedQuestionIds.indexOf(sourceId);
+    const targetIndex = selectedQuestionIds.indexOf(targetId);
+    if (sourceIndex < 0 || targetIndex < 0) {
+      return;
+    }
+    const nextIds = [...selectedQuestionIds];
+    const [movingId] = nextIds.splice(sourceIndex, 1);
+    nextIds.splice(targetIndex, 0, movingId);
+    onChange(nextIds);
+  }
+
+  const noMatchMessage = normalizedQuery
+    ? `没有找到包含“${query.trim()}”的题目。`
+    : "当前筛选条件下没有可选题目。";
+
+  return (
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+      {deleteConfirmDialog}
+      <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <p className="font-bold text-ink">已选择题目</p>
+            <p className="mt-1 text-sm text-slate-500">
+              {readOnly ? "当前为只读查看，题目顺序和内容不可修改。" : "可拖动题目卡片调整练习或测验中的显示顺序。"}
+            </p>
+          </div>
+          <span className="rounded-full bg-mint/12 px-3 py-1 text-xs font-bold text-mint">
+            {selectedQuestions.length} 道题
+          </span>
+        </div>
+        {selectedQuestions.length > 0 ? (
+          <div className="mt-3 grid gap-2">
+            {selectedQuestions.map((question) => (
+              <SelectedCourseQuestionCard
+                key={question.id}
+                question={question}
+                draggingQuestionId={draggingQuestionId}
+                readOnly={readOnly}
+                onDragStart={() => setDraggingQuestionId(question.id)}
+                onDragEnd={() => setDraggingQuestionId(null)}
+                onDropOn={() => {
+                  if (draggingQuestionId) {
+                    moveQuestion(draggingQuestionId, question.id);
+                  }
+                  setDraggingQuestionId(null);
+                }}
+                onRemove={() => removeQuestion(question.id)}
+              />
+            ))}
+          </div>
+        ) : (
+          <div className="mt-3 rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+            {readOnly ? "当前项目还没有配置题目。" : "还没有选择题目，可以从下方题库中添加。"}
+          </div>
+        )}
+      </div>
+
+      {!readOnly ? (
+        <>
+          <div className="mt-5 grid gap-3 border-t border-slate-100 pt-5 xl:grid-cols-[minmax(9rem,0.8fr)_minmax(11rem,1fr)_minmax(9rem,0.8fr)_minmax(16rem,1.4fr)]">
+            <div>
+              <p className="font-bold text-ink">题库题目</p>
+              <p className="mt-1 text-sm text-slate-500">只显示已发布题目。</p>
+            </div>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              选择老师
+              <select
+                className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                value={String(resolvedOwnerId)}
+                onChange={(event) =>
+                  setSelectedOwnerId(event.target.value === "all" ? "all" : Number(event.target.value))
+                }
+              >
+                <option value="all">全部老师</option>
+                {ownerOptions.map((owner) => (
+                  <option key={owner.id} value={owner.id}>
+                    {owner.name}
+                    {owner.id === currentUserId ? "（自己）" : ""}
+                    {owner.role === "super_admin" ? " · 超级管理员" : ""}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              题型
+              <select
+                className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                value={selectedType}
+                onChange={(event) => setSelectedType(event.target.value)}
+              >
+                <option value="all">全部题型</option>
+                {typeOptions.map((type) => (
+                  <option key={type} value={type}>
+                    {courseQuestionTypeLabels[type] ?? type}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+              关键词搜索
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                value={query}
+                onChange={(event) => setQuery(event.target.value)}
+                placeholder="搜索标题、题干、知识点、难度"
+              />
+            </label>
+          </div>
+
+          <div className="mt-4 grid max-h-80 gap-2 overflow-auto pr-1">
+            {filteredQuestions.map((question) => {
+              const selected = selectedQuestionIds.includes(question.id);
+              const selectable = question.status === "published";
+              return (
+                <button
+                  key={question.id}
+                  onClick={() => toggleQuestion(question)}
+                  disabled={!selectable}
+                  className={`focus-ring flex items-start gap-3 rounded-lg border p-3 text-left text-sm transition ${
+                    selected ? "border-mint bg-mint/10" : "border-slate-200 bg-slate-50"
+                  } ${selectable ? "" : "cursor-not-allowed opacity-60"}`}
+                >
+                  <span
+                    className={`mt-1 grid h-5 w-5 shrink-0 place-items-center rounded border ${
+                      selected ? "border-mint bg-mint text-white" : "border-slate-300 bg-white"
+                    }`}
+                  >
+                    {selected ? "✓" : ""}
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block font-bold text-ink">{question.title}</span>
+                    <span className="mt-1 block text-slate-500">
+                      {courseQuestionTypeLabels[question.type] ?? question.type} · {question.difficulty || "未分级"} · {question.points} 分
+                    </span>
+                  </span>
+                  <span
+                    className={`rounded-full px-2.5 py-1 text-xs font-bold ${courseQuestionStatusClasses[question.status]}`}
+                  >
+                    {courseQuestionStatusLabels[question.status]}
+                  </span>
+                </button>
+              );
+            })}
+            {filteredQuestions.length === 0 ? (
+              <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+                {noMatchMessage}
+              </div>
+            ) : null}
+          </div>
+        </>
+      ) : null}
+    </div>
+  );
+}
+
+function SelectedCourseQuestionCard({
+  question,
+  draggingQuestionId,
+  readOnly,
+  onDragStart,
+  onDragEnd,
+  onDropOn,
+  onRemove
+}: {
+  question: CourseQuestion;
+  draggingQuestionId: number | null;
+  readOnly: boolean;
+  onDragStart: () => void;
+  onDragEnd: () => void;
+  onDropOn: () => void;
+  onRemove: () => void;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const isDragging = draggingQuestionId === question.id;
+
+  return (
+    <article
+      draggable={!readOnly}
+      onDragStart={() => {
+        if (!readOnly) {
+          onDragStart();
+        }
+      }}
+      onDragEnd={onDragEnd}
+      onDragOver={(event) => {
+        if (!readOnly) {
+          event.preventDefault();
+        }
+      }}
+      onDrop={() => {
+        if (!readOnly) {
+          onDropOn();
+        }
+      }}
+      className={`rounded-lg border bg-slate-50 p-3 transition ${
+        isDragging ? "border-mint opacity-60" : "border-slate-200"
+      }`}
+    >
+      <div className="flex items-center gap-3">
+        <span
+          className={`grid h-8 w-8 shrink-0 place-items-center rounded-lg bg-white ${
+            readOnly ? "cursor-default text-slate-300" : "cursor-grab text-slate-400"
+          }`}
+        >
+          <GripVertical size={16} />
+        </span>
+        <button
+          type="button"
+          onClick={() => setExpanded((current) => !current)}
+          className="focus-ring flex min-w-0 flex-1 items-center gap-2 rounded-lg px-1 py-1 text-left"
+          aria-expanded={expanded}
+        >
+          <ChevronRight
+            size={16}
+            className={`shrink-0 text-slate-500 transition ${expanded ? "rotate-90" : ""}`}
+          />
+          <span className="min-w-0 flex-1 overflow-hidden">
+            <span className="block truncate font-bold text-ink">{question.title}</span>
+            <span className="mt-1 flex flex-wrap gap-2 text-xs text-slate-500">
+              <span>{courseQuestionTypeLabels[question.type] ?? question.type}</span>
+              <span>{question.difficulty || "未分级"}</span>
+              <span>{question.points} 分</span>
+            </span>
+          </span>
+        </button>
+        {!readOnly ? (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="focus-ring grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-coral"
+            aria-label="移除题目"
+          >
+            <Trash2 size={15} />
+          </button>
+        ) : null}
+      </div>
+
+      {expanded ? (
+        <div className="mt-3 rounded-lg bg-white p-3 text-sm text-slate-600">
+          <p className="font-semibold text-ink">题干</p>
+          <p className="mt-1 whitespace-pre-wrap">{question.prompt || "暂无题干内容。"}</p>
+          <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
+            <span className="rounded-full bg-skysoft/20 px-2.5 py-1 text-blue-700">
+              {question.skillArea || "未设置知识点"}
+            </span>
+            <span
+              className={`rounded-full px-2.5 py-1 ${courseQuestionStatusClasses[question.status]}`}
+            >
+              {courseQuestionStatusLabels[question.status]}
+            </span>
+          </div>
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function QuestionBankPanel() {
+  return <QuestionBankManager />;
+}
+
+function createBlankManagedUser(defaultRole: ManagedUserRole = "teacher"): ManagedUser {
+  return {
+    id: -Date.now(),
+    email: "",
+    fullName: "",
+    role: defaultRole,
+    title: "",
+    phone: "",
+    region: "",
+    bio: "",
+    isActive: true
+  };
+}
+
+function UserPermissionManagement() {
+  const profile = useAdminProfile();
+  const roleOptions: ManagedUserRole[] =
+    profile.roleValue === "super_admin"
+      ? managedUserRoleOptions
+      : ["institution_admin", "teacher"];
+  const [users, setUsers] = useState<ManagedUser[]>([]);
+  const [selectedUserId, setSelectedUserId] = useState<number | null>(null);
+  const [status, setStatus] = useState("正在加载用户列表...");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+  const selectedUser = users.find((user) => user.id === selectedUserId) ?? users[0] ?? null;
+
+  useEffect(() => {
+    let isMounted = true;
+    fetchManagedUsers().then((remoteUsers) => {
+      if (!isMounted) {
+        return;
+      }
+      if (!remoteUsers) {
+        setStatus("用户 API 暂时不可用，请确认 FastAPI 服务正在运行。");
+        return;
+      }
+      setUsers(remoteUsers);
+      setSelectedUserId(remoteUsers[0]?.id ?? null);
+      setStatus(remoteUsers.length ? "已从服务器加载用户列表。" : "当前还没有后台用户，可以先新增一个。");
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  function updateSelectedUser(field: keyof ManagedUser, value: string | boolean) {
+    if (!selectedUser) {
+      return;
+    }
+    setUsers((currentUsers) =>
+      currentUsers.map((user) => (user.id === selectedUser.id ? { ...user, [field]: value } : user))
+    );
+  }
+
+  function addUser() {
+    const newUser = createBlankManagedUser("teacher");
+    setUsers((currentUsers) => [newUser, ...currentUsers]);
+    setSelectedUserId(newUser.id);
+    setStatus("正在创建新用户，保存后初始密码为 888888。");
+  }
+
+  async function saveUser() {
+    if (!selectedUser) {
+      return;
+    }
+    if (!selectedUser.fullName.trim() || !selectedUser.email.trim()) {
+      setStatus("请填写用户姓名和邮箱。");
+      return;
+    }
+    setSaving(true);
+    setStatus("正在保存用户...");
+    const isNew = selectedUser.id < 0;
+    const result = await saveManagedUser(selectedUser);
+    if (!result.user) {
+      setStatus(result.error ?? "用户保存失败。");
+      setSaving(false);
+      return;
+    }
+    const savedUser = result.user;
+    setUsers((currentUsers) =>
+      currentUsers.map((user) => (user.id === selectedUser.id ? savedUser : user))
+    );
+    setSelectedUserId(savedUser.id);
+    setStatus(isNew ? "用户已创建，初始密码为 888888。" : "用户信息已更新。");
+    setSaving(false);
+  }
+
+  async function removeUser(user: ManagedUser) {
+    const confirmed = await confirmDelete({
+      title: "\u5220\u9664\u7528\u6237",
+      itemName: `${user.fullName || "\u672a\u547d\u540d\u7528\u6237"} \u00b7 ${user.email || "\u672a\u586b\u5199\u90ae\u7bb1"}`,
+      description: "\u5220\u9664\u540e\u8be5\u7528\u6237\u5c06\u4e0d\u80fd\u518d\u767b\u5f55\u673a\u6784\u540e\u53f0\u3002\u82e5\u7528\u6237\u5df2\u6709\u5173\u8054\u6570\u636e\uff0c\u540e\u7aef\u53ef\u80fd\u4f1a\u62d2\u7edd\u5220\u9664\u3002",
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setStatus("正在删除用户...");
+    const deleted = await deleteManagedUser(user.id);
+    if (!deleted) {
+      setStatus("用户删除失败，不能删除当前登录账号或该用户仍有关联数据。");
+      setDeleting(false);
+      return;
+    }
+    setUsers((currentUsers) => {
+      const nextUsers = currentUsers.filter((currentUser) => currentUser.id !== user.id);
+      setSelectedUserId(nextUsers[0]?.id ?? null);
+      return nextUsers;
+    });
+    setStatus("用户已删除。");
+    setDeleting(false);
+  }
+
+  return (
+    <section className="grid gap-5 xl:grid-cols-[24rem_1fr]">
+      {deleteConfirmDialog}
+      <aside className="panel h-fit rounded-lg p-5">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">用户列表</h2>
+            <p className="mt-1 text-sm text-slate-500">{status}</p>
+          </div>
+          <button
+            onClick={addUser}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-3 py-2 text-sm font-bold text-white"
+          >
+            <Plus size={16} /> 新增用户
+          </button>
+        </div>
+        <div className="mt-5 grid gap-3">
+          {users.map((user) => (
+            <button
+              key={user.id}
+              onClick={() => setSelectedUserId(user.id)}
+              className={`focus-ring rounded-lg border p-4 text-left transition ${
+                selectedUser?.id === user.id
+                  ? "border-mint bg-mint/5"
+                  : "border-slate-200 bg-white hover:border-slate-300"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-ink">{user.fullName || "未命名用户"}</p>
+                  <p className="mt-1 truncate text-sm text-slate-500">{user.email || "尚未填写邮箱"}</p>
+                </div>
+                <span className="shrink-0 rounded-full bg-slate-100 px-2.5 py-1 text-xs font-bold text-slate-600">
+                  {managedUserRoleLabels[user.role]}
+                </span>
+              </div>
+              <p className="mt-3 text-xs font-semibold text-slate-500">
+                {user.isActive ? "启用中" : "已停用"} · {managedUserRoleDescriptions[user.role]}
+              </p>
+            </button>
+          ))}
+          {users.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-5 text-sm text-slate-500">
+              还没有可管理的用户。
+            </div>
+          ) : null}
+        </div>
+      </aside>
+
+      <div className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">用户资料与角色</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              新建用户保存后，初始密码统一为 888888。
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {selectedUser ? (
+              <button
+                onClick={() => void removeUser(selectedUser)}
+                disabled={deleting}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/30 px-4 py-2 text-sm font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={16} /> 删除用户
+              </button>
+            ) : null}
+            <button
+              onClick={() => void saveUser()}
+              disabled={!selectedUser || saving}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Save size={16} /> {saving ? "保存中" : "保存用户"}
+            </button>
+          </div>
+        </div>
+
+        {selectedUser ? (
+          <div className="mt-5 grid gap-5">
+            <div className="grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                姓名
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={selectedUser.fullName}
+                  onChange={(event) => updateSelectedUser("fullName", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                邮箱
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  type="email"
+                  value={selectedUser.email}
+                  onChange={(event) => updateSelectedUser("email", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                用户角色
+                <select
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={selectedUser.role}
+                  onChange={(event) => updateSelectedUser("role", event.target.value as ManagedUserRole)}
+                >
+                  {roleOptions.map((role) => (
+                    <option key={role} value={role}>
+                      {managedUserRoleLabels[role]}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                职务/头衔
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={selectedUser.title}
+                  onChange={(event) => updateSelectedUser("title", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                电话
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={selectedUser.phone}
+                  onChange={(event) => updateSelectedUser("phone", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                地区
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={selectedUser.region}
+                  onChange={(event) => updateSelectedUser("region", event.target.value)}
+                />
+              </label>
+            </div>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              个人简介
+              <textarea
+                className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-2 leading-7"
+                value={selectedUser.bio}
+                onChange={(event) => updateSelectedUser("bio", event.target.value)}
+              />
+            </label>
+            <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-[1fr_auto]">
+              <div>
+                <p className="font-bold text-ink">当前角色权限</p>
+                <p className="mt-1 text-sm text-slate-500">{managedUserRoleDescriptions[selectedUser.role]}</p>
+              </div>
+              <label className="flex items-center gap-3 rounded-lg bg-white px-4 py-3 text-sm font-bold text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={selectedUser.isActive}
+                  onChange={(event) => updateSelectedUser("isActive", event.target.checked)}
+                  className="accent-coral"
+                />
+                启用该用户
+              </label>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">
+            请选择一个用户，或点击“新增用户”开始创建。
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function hasUploadedTeacherAvatar(avatarUrl?: string) {
+  const value = avatarUrl?.trim();
+  return Boolean(
+    value &&
+      value !== DEFAULT_ADMIN_AVATAR &&
+      value !== DEFAULT_TEACHER_AVATAR_URL &&
+      !value.endsWith(DEFAULT_TEACHER_AVATAR_URL)
+  );
+}
+
+function TeacherAvatarSlot({
+  teacher,
+  variant
+}: {
+  teacher: TeacherOption;
+  variant: "card" | "detail";
+}) {
+  const uploadedAvatar = hasUploadedTeacherAvatar(teacher.avatarUrl);
+  const className =
+    variant === "detail"
+      ? "h-40 w-full rounded-lg object-cover"
+      : "h-14 w-14 shrink-0 rounded-lg object-cover";
+  if (uploadedAvatar) {
+    return <img src={teacher.avatarUrl} alt={teacher.name} className={className} />;
+  }
+  return (
+    <div
+      className={`grid place-items-center rounded-lg border border-dashed border-slate-200 bg-slate-100 px-2 text-center font-bold text-slate-400 ${
+        variant === "detail" ? "h-40 w-full text-sm" : "h-14 w-14 text-[10px] leading-tight"
+      }`}
+    >
+      尚未上传头像
+    </div>
+  );
+}
+
+function TeacherManagement() {
+  const [teachers, setTeachers] = useState<TeacherOption[]>([]);
+  const [courses, setCourses] = useState<AdminCourseSummary[]>([]);
+  const [selectedTeacherId, setSelectedTeacherId] = useState<number | null>(null);
+  const [status, setStatus] = useState("正在加载老师列表...");
+  const selectedTeacher = useMemo(
+    () => teachers.find((teacher) => teacher.id === selectedTeacherId) ?? teachers[0] ?? null,
+    [selectedTeacherId, teachers]
+  );
+  const selectedTeacherCourses = useMemo(
+    () => (selectedTeacher ? courses.filter((course) => course.teacherId === selectedTeacher.id) : []),
+    [courses, selectedTeacher]
+  );
+
+  useEffect(() => {
+    let isMounted = true;
+    async function loadTeachers() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/admin/teachers`, {
+          headers: getAdminRequestHeaders()
+        });
+        if (!response.ok) {
+          throw new Error("Teacher API unavailable");
+        }
+        const nextTeachers = ((await response.json()) as ApiTeacher[]).map((teacher) =>
+          normalizeTeacherFromApi(teacher)
+        );
+        let nextCourses: AdminCourseSummary[] = [];
+        try {
+          const coursesResponse = await fetch(`${API_BASE_URL}/admin/courses`, {
+            headers: getAdminRequestHeaders()
+          });
+          if (coursesResponse.ok) {
+            nextCourses = ((await coursesResponse.json()) as ApiCourseCard[]).map((course) =>
+              normalizeCourseCardFromApi(course)
+            );
+          }
+        } catch {
+          nextCourses = [];
+        }
+        if (!isMounted) {
+          return;
+        }
+        setTeachers(nextTeachers);
+        setCourses(nextCourses);
+        setSelectedTeacherId((currentId) =>
+          currentId && nextTeachers.some((teacher) => teacher.id === currentId)
+            ? currentId
+            : nextTeachers[0]?.id ?? null
+        );
+        setStatus(nextTeachers.length ? "已从数据库加载老师列表。" : "当前机构还没有老师。");
+      } catch {
+        if (!isMounted) {
+          return;
+        }
+        setTeachers([]);
+        setCourses([]);
+        setSelectedTeacherId(null);
+        setStatus("老师 API 暂时不可用，请确认 FastAPI 服务正在运行。");
+      }
+    }
+    loadTeachers();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  return (
+    <div className="grid gap-5">
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">老师列表</h2>
+            <p className="mt-1 text-sm text-slate-500">{status}</p>
+          </div>
+        </div>
+        {teachers.length > 0 ? (
+          <div className="mt-5 grid gap-4 lg:grid-cols-3">
+            {teachers.map((teacher) => {
+              const selected = selectedTeacher?.id === teacher.id;
+              return (
+                <button
+                  key={teacher.id}
+                  type="button"
+                  onClick={() => setSelectedTeacherId(teacher.id)}
+                  className={`focus-ring h-full min-w-0 max-w-full overflow-hidden rounded-lg border bg-white p-4 text-left transition ${
+                    selected ? "border-mint shadow-soft" : "border-slate-200 hover:border-mint/50"
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <TeacherAvatarSlot teacher={teacher} variant="card" />
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-ink">{teacher.name}</p>
+                      <p className="truncate text-sm text-slate-500">{teacher.title || "授课老师"}</p>
+                    </div>
+                  </div>
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {(teacher.specialties?.length ? teacher.specialties : [teacher.region || "Europe"])
+                      .slice(0, 3)
+                      .map((item) => (
+                        <span
+                          key={item}
+                          className="rounded-full bg-mint/12 px-2.5 py-1 text-xs font-bold text-mint"
+                        >
+                          {item}
+                        </span>
+                      ))}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">
+            {status}
+          </div>
+        )}
+      </section>
+
+      <section className="panel rounded-lg p-5">
+        <h2 className="text-xl font-bold text-ink">老师详细信息</h2>
+        {selectedTeacher ? (
+          <div className="mt-5 grid gap-5 xl:grid-cols-[18rem_1fr]">
+            <aside className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <TeacherAvatarSlot teacher={selectedTeacher} variant="detail" />
+              <p className="mt-4 text-lg font-bold text-ink">{selectedTeacher.name}</p>
+              <p className="mt-1 text-sm text-slate-500">{selectedTeacher.title || "授课老师"}</p>
+            </aside>
+            <div className="grid content-start gap-4">
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <p className="font-bold text-ink">个人简介</p>
+                <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-600">
+                  {selectedTeacher.bio || "暂未填写个人简介。"}
+                </p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <p className="font-bold text-ink">教授课程</p>
+                  <span className="rounded-full bg-mint/12 px-3 py-1 text-xs font-bold text-mint">
+                    {selectedTeacherCourses.length} 门
+                  </span>
+                </div>
+                {selectedTeacherCourses.length > 0 ? (
+                  <div className="mt-3 grid gap-2">
+                    {selectedTeacherCourses.map((course) => (
+                      <div
+                        key={course.id}
+                        className="rounded-lg border border-slate-200 bg-slate-50 px-4 py-3"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="truncate font-bold text-ink">{course.title}</p>
+                            <p className="mt-1 text-sm text-slate-500">
+                              {[course.category, course.level].filter(Boolean).join(" · ") || "未设置分类"}
+                            </p>
+                          </div>
+                          <span
+                            className={`rounded-full px-2.5 py-1 text-xs font-bold ${courseStatusClasses[course.statusValue]}`}
+                          >
+                            {course.status}
+                          </span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="mt-3 rounded-lg border border-dashed border-slate-200 p-4 text-sm text-slate-500">
+                    当前老师还没有关联课程。
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm text-slate-500">
+            请选择一个老师查看详细资料。
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function GradingPanel() {
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1fr_22rem]">
+      <section className="panel rounded-lg p-5">
+        <h2 className="text-xl font-bold text-ink">待手动批改</h2>
+        <div className="mt-5 grid gap-4">
+          {gradingQueue.map((item) => (
+            <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="font-bold text-ink">{item.question}</p>
+                  <p className="mt-1 text-sm text-slate-500">{item.student} · {item.course} · {item.submittedAt}</p>
+                </div>
+                <span className="rounded-full bg-coral/10 px-2.5 py-1 text-xs font-bold text-coral">{item.type}</span>
+              </div>
+              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_9rem]">
+                <textarea className="focus-ring min-h-24 rounded-lg border border-slate-200 px-3 py-2 text-sm leading-6" placeholder="填写批改反馈" />
+                <div className="grid gap-2">
+                  <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="分数" />
+                  <button className="focus-ring rounded-lg bg-mint px-3 py-2 text-sm font-bold text-white">提交批改</button>
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <aside className="panel h-fit rounded-lg p-5">
+        <h3 className="font-bold text-ink">评分维度</h3>
+        <div className="mt-4 grid gap-3">
+          {gradingQueue[0].rubric.map((item) => (
+            <div key={item} className="rounded-lg bg-slate-50 p-3">
+              <p className="font-semibold text-ink">{item}</p>
+              <p className="mt-1 text-xs text-slate-500">0-10 分，可附文字反馈</p>
+            </div>
+          ))}
+        </div>
+      </aside>
+    </div>
+  );
+}
+
+function BlogManagement() {
+  return (
+    <div className="grid gap-5 xl:grid-cols-[1fr_24rem]">
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-xl font-bold text-ink">博客文章</h2>
+          <button className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white">
+            <Plus size={16} /> 新增文章
+          </button>
+        </div>
+        <div className="mt-5 grid gap-4">
+          {adminBlogPosts.map((post) => (
+            <div key={post.id} className="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-[9rem_1fr_auto]">
+              <img src={post.cover_url} alt={post.title} className="h-28 w-full rounded-lg object-cover" />
+              <div>
+                <p className="font-bold text-ink">{post.title}</p>
+                <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{post.excerpt}</p>
+                <p className="mt-2 text-xs font-semibold text-slate-500">{post.channel} · {post.views} 浏览</p>
+              </div>
+              <div className="flex items-start gap-2">
+                <span className="rounded-full bg-mint/12 px-2.5 py-1 text-xs font-bold text-mint">{post.status}</span>
+                <button className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200">
+                  <Edit3 size={15} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      <aside className="panel h-fit rounded-lg p-5">
+        <h3 className="font-bold text-ink">文章编辑</h3>
+        <div className="mt-4 grid gap-3">
+          <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="文章标题" defaultValue="海外中文学习方法" />
+          <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="封面图 URL" />
+          <textarea className="focus-ring min-h-40 rounded-lg border border-slate-200 px-3 py-2 text-sm leading-6" placeholder="文章正文" />
+          <button className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white">
+            <ImagePlus size={16} /> 保存文章
+          </button>
+        </div>
+      </aside>
+    </div>
+  );
+}
