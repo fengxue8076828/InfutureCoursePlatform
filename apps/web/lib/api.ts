@@ -5,6 +5,7 @@ import type {
   CourseCategory,
   Enrollment,
   Institution,
+  Question,
   StudentLeaderboard,
   Teacher
 } from "./types";
@@ -49,6 +50,10 @@ export function getTeachers(): Promise<Teacher[]> {
 
 export function getStudentLeaderboard(): Promise<StudentLeaderboard> {
   return fetchJson("/leaderboard", { total_points: [], rising: [] });
+}
+
+export function getPublishedQuestions(): Promise<Question[]> {
+  return fetchJson("/learn/questions", []);
 }
 
 export async function getTeacher(slug: string): Promise<Teacher | undefined> {

@@ -6,8 +6,6 @@ import {
   ChevronRight,
   Globe2,
   GraduationCap,
-  Layers3,
-  Lightbulb,
   PlayCircle,
   Rocket,
   Search,
@@ -25,8 +23,8 @@ import { CourseCard } from "@/components/CourseCard";
 import { ScrollRow } from "@/components/ScrollRow";
 import { SectionTitle } from "@/components/SectionTitle";
 import { TeacherCard } from "@/components/TeacherCard";
-import { getCourses, getInstitutions, getStudentLeaderboard, getTeachers } from "@/lib/api";
-import type { Institution, StudentLeaderboardEntry } from "@/lib/types";
+import { getBlogPosts, getCourses, getInstitutions, getPublishedQuestions, getStudentLeaderboard, getTeachers } from "@/lib/api";
+import type { Institution, Question, StudentLeaderboardEntry } from "@/lib/types";
 
 const platformHighlights = [
   {
@@ -54,11 +52,6 @@ const pointRules = [
 ];
 
 
-const questionBankFeatures = [
-  { title: "按级别练", text: "从语言等级到学科年级，按学习阶段逐步提升。", icon: Layers3 },
-  { title: "看提示", text: "遇到难题时先获得提示，再继续独立思考。", icon: Lightbulb },
-  { title: "拿积分", text: "练习完成和高分测验都会进入积分成长体系。", icon: Trophy }
-];
 
 const learningSteps = [
   ["选择课程", "按类别、机构、级别快速筛选适合自己的课程。"],
@@ -66,6 +59,38 @@ const learningSteps = [
   ["完成章节", "视频、讲义、练习和测验组成清晰学习节奏。"],
   ["获得积分", "越快完成、测验分数越高，积分和排名提升越明显。"]
 ];
+
+
+const questionTypeLabels: Record<string, string> = {
+  single_choice: "\u5355\u9009\u9898",
+  multiple_choice: "\u591a\u9009\u9898",
+  fill_blank: "\u586b\u7a7a\u9898",
+  coding: "\u4ee3\u7801\u7f16\u5199\u9898",
+  code_review: "\u4ee3\u7801\u4fee\u6539\u9898",
+  true_false: "\u5224\u65ad\u9898",
+  reading: "\u9605\u8bfb\u7406\u89e3",
+  listening: "\u542c\u529b\u9898",
+  pronunciation: "\u53d1\u97f3\u53e3\u8bed\u9898",
+  writing: "\u5199\u4f5c\u9898",
+  media_upload: "\u7d20\u6750\u4e0a\u4f20\u9898"
+};
+
+const fallbackInstitutionCategories = ["IT\u6559\u80b2\u7c7b", "\u8bed\u8a00\u6559\u80b2\u7c7b", "\u8bfe\u5916\u8865\u4e60\u7c7b", "\u827a\u672f\u6559\u80b2\u7c7b"];
+
+const fallbackHotQuestions = [
+  { title: "\u5173\u952e\u8bcd\u8bed\u586b\u586b\u7a7a", type: "\u586b\u7a7a\u9898", meta: "A2 \u00b7 \u4e2d\u6587\u9605\u8bfb", points: 2 },
+  { title: "\u9009\u51fa\u6b63\u786e\u7684\u8868\u8fbe\u65b9\u5f0f", type: "\u5355\u9009\u9898", meta: "B1 \u00b7 \u8bed\u6cd5", points: 3 },
+  { title: "Python \u6761\u4ef6\u5224\u65ad\u7ec3\u4e60", type: "\u4ee3\u7801\u7f16\u5199\u9898", meta: "\u5165\u95e8 \u00b7 IT", points: 5 },
+  { title: "\u9605\u8bfb\u6750\u6599\u4fe1\u606f\u63d0\u53d6", type: "\u591a\u9009\u9898", meta: "B2 \u00b7 \u9605\u8bfb", points: 4 }
+];
+
+function getQuestionDisplayTitle(question: Question) {
+  const title = question.content?.title;
+  if (typeof title === "string" && title.trim()) {
+    return title.trim();
+  }
+  return question.prompt || `\u9898\u76ee ${question.id}`;
+}
 
 function LeaderboardCard({
   title,
@@ -152,11 +177,13 @@ function InstitutionLogo({ institution }: { institution: Institution }) {
 }
 
 export default async function HomePage() {
-  const [courses, institutions, teachers, leaderboard] = await Promise.all([
+  const [courses, institutions, teachers, leaderboard, posts, publishedQuestions] = await Promise.all([
     getCourses(),
     getInstitutions(),
     getTeachers(),
-    getStudentLeaderboard()
+    getStudentLeaderboard(),
+    getBlogPosts(),
+    getPublishedQuestions()
   ]);
 
   const hotCourses = courses.filter((course) => course.is_hot);
@@ -165,6 +192,22 @@ export default async function HomePage() {
   const visibleTeachers = teachers.slice(0, 8);
   const totalStudents = courses.reduce((total, course) => total + (course.students_count || 0), 0);
   const safeLeaderboard = leaderboard ?? { total_points: [], rising: [] };
+  const popularPosts = [...posts]
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
+    .slice(0, 3);
+  const institutionCategoryFilters = Array.from(
+    new Set(institutions.map((institution) => institution.category?.trim()).filter(Boolean))
+  );
+  const questionCategoryFilters = institutionCategoryFilters.length > 0 ? institutionCategoryFilters : fallbackInstitutionCategories;
+  const hotQuestionItems = publishedQuestions.length > 0
+    ? publishedQuestions.slice(0, 4).map((question) => ({
+        title: getQuestionDisplayTitle(question),
+        type: questionTypeLabels[question.type] ?? question.type,
+        meta: [question.difficulty, question.skill_area].filter(Boolean).join(" \u00b7 ") || "\u7efc\u5408\u7ec3\u4e60",
+        points: question.points
+      }))
+    : fallbackHotQuestions;
+
 
   return (
     <main className="overflow-hidden bg-[#f7fbfb]">
@@ -458,32 +501,100 @@ export default async function HomePage() {
         </div>
       </section>
 
-<section className="bg-[#f6fbff] py-14">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="grid gap-8 rounded-lg border border-slate-200 bg-white p-6 shadow-soft lg:grid-cols-[0.88fr_1.12fr] lg:p-8">
-            <div>
-              <p className="inline-flex items-center gap-2 rounded-full bg-mint/12 px-3 py-1 text-sm font-bold text-mint">
-                <BrainCircuit size={16} /> Question Bank
-              </p>
-              <h2 className="mt-4 text-3xl font-black text-ink">题库训练入口</h2>
-              <p className="mt-3 text-sm leading-7 text-slate-700">
-                题库页面集中展示已发布题目，学生可以按级别、题型和知识点进行针对性练习，也能通过提示继续推进思考。
-              </p>
-              <Link href="/question-bank" className="mt-6 inline-flex items-center gap-2 rounded-lg bg-ink px-5 py-3 text-sm font-bold text-white hover:bg-slate-800">
-                进入题库页面 <ArrowRight size={18} />
+      <section className="relative overflow-hidden bg-[linear-gradient(135deg,#f0fbff_0%,#edf9f3_48%,#fff8e8_100%)] py-14">
+        <div aria-hidden="true" className="absolute inset-x-0 top-0 h-px bg-slate-200/70" />
+        <svg aria-hidden="true" className="absolute -right-24 top-8 hidden h-72 w-72 text-mint/15 lg:block" viewBox="0 0 280 280" fill="none">
+          <path d="M32 150C74 78 142 40 213 72C265 96 266 177 215 220C153 273 55 239 32 150Z" fill="currentColor" />
+          <path d="M78 124H198M78 158H168M78 192H136" stroke="#6fc9ad" strokeWidth="10" strokeLinecap="round" opacity="0.45" />
+        </svg>
+        <div className="relative mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-[0.95fr_1.05fr] lg:px-8">
+          <div>
+            <p className="inline-flex items-center gap-2 rounded-lg bg-white/80 px-3 py-1.5 text-sm font-bold text-mint shadow-sm ring-1 ring-mint/15">
+              <BrainCircuit size={16} /> Question Bank
+            </p>
+            <h2 className="mt-4 text-3xl font-black leading-tight text-ink md:text-4xl">
+              {"\u9898\u5e93\u7ec3\u4e60\u4e2d\u5fc3"}
+              <span className="mt-2 block text-coral">{"\u641c\u9898\u3001\u5206\u7c7b\u7ec3\u3001\u62ff\u79ef\u5206"}</span>
+            </h2>
+            <p className="mt-4 max-w-2xl text-sm leading-7 text-slate-700">
+              {"\u6309\u9898\u76ee\u3001\u77e5\u8bc6\u70b9\u548c\u673a\u6784\u7c7b\u522b\u5feb\u901f\u627e\u5230\u9002\u5408\u7684\u7ec3\u4e60\uff0c\u8ba9\u8bfe\u540e\u5de9\u56fa\u548c\u6d4b\u9a8c\u51b2\u523a\u66f4\u6709\u65b9\u5411\u3002"}
+            </p>
+
+            <form action="/question-bank" className="mt-7 flex max-w-xl items-center gap-2 rounded-lg border border-white/80 bg-white/95 p-2 shadow-soft">
+              <Search size={20} className="ml-3 text-slate-400" />
+              <input
+                name="q"
+                aria-label="\u641c\u7d22\u9898\u76ee"
+                className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
+                placeholder="\u641c\u7d22\u9898\u76ee\u3001\u77e5\u8bc6\u70b9\u3001\u7ea7\u522b"
+              />
+              <button type="submit" className="rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white hover:bg-slate-800">
+                {"\u641c\u7d22"}
+              </button>
+            </form>
+
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <div className="rounded-lg border border-white/80 bg-white/80 p-4 shadow-sm">
+                <p className="flex items-center gap-2 text-sm font-black text-ink">
+                  <Search size={18} className="text-coral" /> {"\u641c\u7d22\u9898\u76ee"}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{"\u8f93\u5165\u9898\u5e72\u3001\u77e5\u8bc6\u70b9\u6216\u7ea7\u522b\uff0c\u5feb\u901f\u5b9a\u4f4d\u7ec3\u4e60\u5185\u5bb9\u3002"}</p>
+              </div>
+              <div className="rounded-lg border border-white/80 bg-white/80 p-4 shadow-sm">
+                <p className="flex items-center gap-2 text-sm font-black text-ink">
+                  <Target size={18} className="text-mint" /> {"\u6309\u7c7b\u522b\u627e\u9898"}
+                </p>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{"\u4f7f\u7528\u673a\u6784\u7c7b\u522b\u505a\u5206\u7c7b\uff0c\u9002\u5408\u6309\u5b66\u4e60\u573a\u666f\u5feb\u901f\u7b5b\u9009\u3002"}</p>
+              </div>
+            </div>
+
+            <div className="mt-6">
+              <p className="text-sm font-black text-ink">{"\u673a\u6784\u7c7b\u522b"}</p>
+              <div className="mt-3 flex flex-wrap gap-2">
+                {questionCategoryFilters.map((category) => (
+                  <Link
+                    key={category}
+                    href={`/question-bank?category=${encodeURIComponent(category)}`}
+                    className="rounded-lg border border-mint/20 bg-white/80 px-3 py-2 text-sm font-bold text-slate-700 shadow-sm hover:border-mint hover:text-mint"
+                  >
+                    {category}
+                  </Link>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-white/80 bg-white/72 p-5 shadow-soft backdrop-blur md:p-6">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <p className="text-sm font-bold text-coral">Today Hot</p>
+                <h3 className="mt-1 text-2xl font-black text-ink">{"\u4eca\u65e5\u70ed\u95e8\u9898\u76ee"}</h3>
+              </div>
+              <Link href="/question-bank" className="inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white hover:bg-[#f25f54]">
+                {"\u8fdb\u5165\u9898\u5e93"} <ArrowRight size={16} />
               </Link>
             </div>
-            <div className="grid gap-3 sm:grid-cols-3">
-              {questionBankFeatures.map((feature) => {
-                const Icon = feature.icon;
-                return (
-                  <div key={feature.title} className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <Icon size={20} className="text-coral" />
-                    <h3 className="mt-3 font-black text-ink">{feature.title}</h3>
-                    <p className="mt-1 text-xs leading-5 text-slate-600">{feature.text}</p>
+            <div className="mt-5 grid gap-3">
+              {hotQuestionItems.map((question, index) => (
+                <Link
+                  key={`${question.title}-${index}`}
+                  href="/question-bank"
+                  className="group flex items-center gap-4 rounded-lg border border-slate-100 bg-white p-4 shadow-sm transition hover:-translate-y-0.5 hover:border-coral"
+                >
+                  <span className="grid h-11 w-11 shrink-0 place-items-center rounded-lg bg-ink text-sm font-black text-white">
+                    {index + 1}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="rounded-lg bg-mint/12 px-2 py-1 text-xs font-bold text-mint">{question.type}</span>
+                      <span className="rounded-lg bg-coral/10 px-2 py-1 text-xs font-bold text-coral">{question.points} {"\u5206"}</span>
+                    </div>
+                    <p className="mt-2 truncate text-base font-black text-ink group-hover:text-coral">{question.title}</p>
+                    <p className="mt-1 text-sm text-slate-500">{question.meta}</p>
                   </div>
-                );
-              })}
+                  <ChevronRight size={18} className="shrink-0 text-slate-300 group-hover:text-coral" />
+                </Link>
+              ))}
             </div>
           </div>
         </div>
@@ -504,6 +615,51 @@ export default async function HomePage() {
               </ScrollRow>
             ) : (
               <div className="rounded-lg border border-dashed border-slate-200 bg-white p-8 text-sm text-slate-500">暂无老师资料。</div>
+            )}
+          </div>
+        </div>
+      </section>
+
+      <section className="bg-white py-14">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="flex flex-wrap items-end justify-between gap-4">
+            <SectionTitle
+              eyebrow="Blog"
+              title={"\u70ed\u95e8 Blog \u6587\u7ae0"}
+              subtitle={"\u9605\u8bfb\u5728\u7ebf\u5b66\u4e60\u3001\u6d77\u5916\u4e2d\u6587\u6559\u80b2\u548c\u8bfe\u7a0b\u9009\u62e9\u7684\u5b9e\u7528\u5185\u5bb9\u3002"}
+            />
+            <Link href="/blog" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-coral hover:text-coral">
+              {"\u524d\u5f80\u535a\u5ba2\u9875\u9762"} <ChevronRight size={17} />
+            </Link>
+          </div>
+          <div className="mt-7 grid gap-5 md:grid-cols-3">
+            {popularPosts.length > 0 ? (
+              popularPosts.map((post) => (
+                <Link key={post.id} href={`/blog/${post.slug}`} className="group overflow-hidden rounded-lg border border-slate-200 bg-[#f8fbfb] shadow-sm transition hover:-translate-y-1 hover:border-coral hover:shadow-soft">
+                  {post.cover_url ? (
+                    <img src={post.cover_url} alt={post.title} className="h-44 w-full object-cover transition duration-300 group-hover:scale-[1.03]" />
+                  ) : (
+                    <div className="grid h-44 w-full place-items-center bg-mint/10 text-sm font-bold text-mint">
+                      Blog
+                    </div>
+                  )}
+                  <div className="p-5">
+                    <div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">
+                      <span className="text-coral">{post.author_name}</span>
+                      <span>{new Date(post.created_at).toLocaleDateString("zh-CN")}</span>
+                    </div>
+                    <h3 className="mt-3 line-clamp-2 text-xl font-black leading-7 text-ink">{post.title}</h3>
+                    <p className="mt-3 line-clamp-3 text-sm leading-6 text-slate-600">{post.excerpt}</p>
+                    <span className="mt-4 inline-flex items-center gap-2 text-sm font-bold text-mint">
+                      {"\u9605\u8bfb\u6587\u7ae0"} <ArrowRight size={16} />
+                    </span>
+                  </div>
+                </Link>
+              ))
+            ) : (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-8 text-sm text-slate-500 md:col-span-3">
+                {"\u6682\u65e0\u535a\u5ba2\u6587\u7ae0\u3002"}
+              </div>
             )}
           </div>
         </div>
