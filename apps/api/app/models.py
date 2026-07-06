@@ -310,6 +310,7 @@ class Question(Base, TimestampMixin):
         Enum(QuestionStatus), default=QuestionStatus.saved, server_default=QuestionStatus.saved.value, index=True
     )
 
+    institution: Mapped[Institution] = relationship()
     course: Mapped[Course | None] = relationship(back_populates="questions")
     creator: Mapped[User | None] = relationship(back_populates="created_questions")
     options: Mapped[list["QuestionOption"]] = relationship(

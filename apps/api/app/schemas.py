@@ -142,6 +142,36 @@ class StudentLeaderboardOut(BaseModel):
     rising: list[StudentLeaderboardEntry]
 
 
+class StudentPointEvent(BaseModel):
+    label: str
+    source: str
+    points: int
+    occurred_at: datetime | None = None
+    course_title: str | None = None
+    detail: str | None = None
+
+
+class StudentCoursePointBreakdown(BaseModel):
+    course_id: int
+    course_slug: str
+    course_title: str
+    status: str
+    progress_percent: float
+    progress_points: int
+    activity_points: int
+    assessment_points: int
+    completion_bonus: int
+    total_points: int
+
+
+class StudentLeaderboardDetailOut(BaseModel):
+    student: StudentLeaderboardEntry
+    total_rank: int | None = None
+    rising_rank: int | None = None
+    course_breakdown: list[StudentCoursePointBreakdown]
+    recent_events: list[StudentPointEvent]
+
+
 class UserCreate(BaseModel):
     email: EmailStr
     full_name: str = Field(min_length=2, max_length=120)
@@ -376,6 +406,7 @@ class StudentQuestionOptionOut(OrmModel):
 
 class StudentQuestionOut(OrmModel):
     id: int
+    institution_id: int
     type: QuestionType
     prompt: str
     hint: str | None = None
@@ -384,6 +415,7 @@ class StudentQuestionOut(OrmModel):
     difficulty: str
     points: int
     requires_manual_grading: bool
+    institution: InstitutionOut | None = None
     options: list[StudentQuestionOptionOut] = []
     media_assets: list[QuestionMediaOut] = []
 

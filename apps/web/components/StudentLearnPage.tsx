@@ -1,11 +1,12 @@
 "use client";
 
-import { ArrowRight, CalendarCheck, Clock3, Loader2, Trophy } from "lucide-react";
+import { ArrowRight, BookOpenCheck, CalendarCheck, Clock3, Database, Loader2, Trophy } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore } from "react";
 
 import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
+import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
 import {
   getStudentRequestHeaders,
   getStudentSessionServerSnapshot,
@@ -16,12 +17,15 @@ import type { Enrollment } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
+type ClassroomTab = "courses" | "questions";
+
 export function StudentLearnPage() {
   const studentSession = useSyncExternalStore(
     subscribeToStudentSession,
     getStudentSessionUser,
     getStudentSessionServerSnapshot
   );
+  const [activeTab, setActiveTab] = useState<ClassroomTab>("courses");
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
   const [status, setStatus] = useState("登录或订阅课程后，这里会显示你的个人课程。");
   const [isLoading, setIsLoading] = useState(false);
@@ -55,8 +59,14 @@ export function StudentLearnPage() {
     void loadEnrollments();
   }, [studentSession]);
 
-  const active = enrollments.filter((item) => item.status === "active");
-  const completed = enrollments.filter((item) => item.status === "completed");
+  const visibleEnrollments = studentSession ? enrollments : [];
+  const courseStatus = studentSession ? status : "登录或订阅课程后，这里会显示你的个人课程。";
+  const active = visibleEnrollments.filter((item) => item.status === "active");
+  const completed = visibleEnrollments.filter((item) => item.status === "completed");
+  const tabs: Array<{ id: ClassroomTab; label: string; icon: typeof BookOpenCheck }> = [
+    { id: "courses", label: "我的课程", icon: BookOpenCheck },
+    { id: "questions", label: "我的题库", icon: Database }
+  ];
 
   return (
     <>
@@ -78,87 +88,43 @@ export function StudentLearnPage() {
           </section>
 
           <section className="panel mb-6 rounded-lg p-5">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-start justify-between gap-4">
               <div>
-                <p className="text-sm font-bold text-coral">我的课程</p>
-                <h1 className="mt-1 text-2xl font-black text-ink">个人课程页</h1>
-                <p className="mt-1 text-sm text-slate-500">{status}</p>
+                <p className="text-sm font-bold text-coral">我的课堂</p>
+                <h1 className="mt-1 text-2xl font-black text-ink">个人学习中心</h1>
+                <p className="mt-1 text-sm text-slate-500">
+                  {activeTab === "courses" ? courseStatus : "保存到我的题库的题目，可以在这里集中练习。"}
+                </p>
               </div>
-            </div>
-
-            {isLoading ? (
-              <div className="mt-5 flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500">
-                <Loader2 size={16} className="animate-spin" />
-                正在加载课程
-              </div>
-            ) : !studentSession ? (
-              <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                <p className="font-bold text-ink">请先登录学生账号</p>
-                <p className="mt-2 text-sm text-slate-500">登录后可以查看已订阅课程、学习进度和课堂内容。</p>
-                <div className="mt-4 flex justify-center gap-3">
-                  <Link className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white" href="/login">
-                    登录
-                  </Link>
-                  <Link className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700" href="/register">
-                    注册
-                  </Link>
-                </div>
-              </div>
-            ) : enrollments.length === 0 ? (
-              <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
-                <p className="font-bold text-ink">还没有订阅课程</p>
-                <p className="mt-2 text-sm text-slate-500">订阅后的课程会自动显示在这里。</p>
-              </div>
-            ) : (
-              <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                {enrollments.map((enrollment) => {
-                  const imageUrl = enrollment.course.hero_image_url?.trim();
+              <div className="inline-flex rounded-lg bg-slate-100 p-1">
+                {tabs.map((tab) => {
+                  const Icon = tab.icon;
+                  const isActive = activeTab === tab.id;
                   return (
-                    <article key={enrollment.id} className="rounded-lg border border-slate-200 bg-white p-3">
-                      {imageUrl ? (
-                        <img
-                          src={imageUrl}
-                          alt={enrollment.course.title}
-                          className="h-36 w-full rounded-lg object-cover"
-                        />
-                      ) : (
-                        <div className="grid h-36 w-full place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">
-                          尚未上传图片
-                        </div>
-                      )}
-                      <div className="p-2">
-                        <div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">
-                          <span className="rounded-full bg-mint/12 px-2.5 py-1 text-mint">
-                            {enrollment.course.level}
-                          </span>
-                          <span>{enrollment.progress_percent}%</span>
-                        </div>
-                        <h2 className="mt-3 line-clamp-2 text-lg font-black text-ink">
-                          {enrollment.course.title}
-                        </h2>
-                        <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">
-                          {enrollment.course.subtitle}
-                        </p>
-                        <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-                          <div
-                            className="h-full rounded-full bg-mint"
-                            style={{ width: `${Math.min(enrollment.progress_percent, 100)}%` }}
-                          />
-                        </div>
-                        <div className="mt-4 flex justify-end">
-                          <Link
-                            href={`/learn/${enrollment.course.slug}`}
-                            className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white transition hover:bg-ink/90"
-                          >
-                            进入课程
-                            <ArrowRight size={16} />
-                          </Link>
-                        </div>
-                      </div>
-                    </article>
+                    <button
+                      key={tab.id}
+                      type="button"
+                      onClick={() => setActiveTab(tab.id)}
+                      className={`focus-ring inline-flex items-center gap-2 rounded-md px-4 py-2 text-sm font-bold transition ${
+                        isActive ? "bg-white text-ink shadow-sm" : "text-slate-500 hover:text-ink"
+                      }`}
+                    >
+                      <Icon size={16} />
+                      {tab.label}
+                    </button>
                   );
                 })}
               </div>
+            </div>
+
+            {activeTab === "courses" ? (
+              <CourseListPanel
+                enrollments={visibleEnrollments}
+                isLoading={isLoading}
+                studentSession={Boolean(studentSession)}
+              />
+            ) : (
+              <SavedQuestionBankPanel studentSession={studentSession} />
             )}
           </section>
         </div>
@@ -167,3 +133,91 @@ export function StudentLearnPage() {
     </>
   );
 }
+
+function CourseListPanel({
+  enrollments,
+  isLoading,
+  studentSession
+}: {
+  enrollments: Enrollment[];
+  isLoading: boolean;
+  studentSession: boolean;
+}) {
+  if (isLoading) {
+    return (
+      <div className="mt-5 flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+        <Loader2 size={16} className="animate-spin" />
+        正在加载课程
+      </div>
+    );
+  }
+
+  if (!studentSession) {
+    return (
+      <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+        <p className="font-bold text-ink">请先登录学生账号</p>
+        <p className="mt-2 text-sm text-slate-500">登录后可以查看已订阅课程、学习进度和课堂内容。</p>
+        <div className="mt-4 flex justify-center gap-3">
+          <Link className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white" href="/login">
+            登录
+          </Link>
+          <Link className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700" href="/register">
+            注册
+          </Link>
+        </div>
+      </div>
+    );
+  }
+
+  if (enrollments.length === 0) {
+    return (
+      <div className="mt-5 rounded-lg border border-dashed border-slate-300 bg-slate-50 p-6 text-center">
+        <p className="font-bold text-ink">还没有订阅课程</p>
+        <p className="mt-2 text-sm text-slate-500">订阅后的课程会自动显示在这里。</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+      {enrollments.map((enrollment) => {
+        const imageUrl = enrollment.course.hero_image_url?.trim();
+        return (
+          <article key={enrollment.id} className="rounded-lg border border-slate-200 bg-white p-3">
+            {imageUrl ? (
+              <img src={imageUrl} alt={enrollment.course.title} className="h-36 w-full rounded-lg object-cover" />
+            ) : (
+              <div className="grid h-36 w-full place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">
+                尚未上传图片
+              </div>
+            )}
+            <div className="p-2">
+              <div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500">
+                <span className="rounded-full bg-mint/12 px-2.5 py-1 text-mint">{enrollment.course.level}</span>
+                <span>{enrollment.progress_percent}%</span>
+              </div>
+              <h2 className="mt-3 line-clamp-2 text-lg font-black text-ink">{enrollment.course.title}</h2>
+              <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{enrollment.course.subtitle}</p>
+              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
+                <div
+                  className="h-full rounded-full bg-mint"
+                  style={{ width: `${Math.min(enrollment.progress_percent, 100)}%` }}
+                />
+              </div>
+              <div className="mt-4 flex justify-end">
+                <Link
+                  href={`/learn/${enrollment.course.slug}`}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white transition hover:bg-ink/90"
+                >
+                  进入课程
+                  <ArrowRight size={16} />
+                </Link>
+              </div>
+            </div>
+          </article>
+        );
+      })}
+    </div>
+  );
+}
+

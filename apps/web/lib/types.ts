@@ -109,6 +109,36 @@ export type StudentLeaderboard = {
   rising: StudentLeaderboardEntry[];
 };
 
+export type StudentPointEvent = {
+  label: string;
+  source: string;
+  points: number;
+  occurred_at?: string | null;
+  course_title?: string | null;
+  detail?: string | null;
+};
+
+export type StudentCoursePointBreakdown = {
+  course_id: number;
+  course_slug: string;
+  course_title: string;
+  status: string;
+  progress_percent: number;
+  progress_points: number;
+  activity_points: number;
+  assessment_points: number;
+  completion_bonus: number;
+  total_points: number;
+};
+
+export type StudentLeaderboardDetail = {
+  student: StudentLeaderboardEntry;
+  total_rank?: number | null;
+  rising_rank?: number | null;
+  course_breakdown: StudentCoursePointBreakdown[];
+  recent_events: StudentPointEvent[];
+};
+
 export type QuestionType =
   | "single_choice"
   | "multiple_choice"
@@ -141,6 +171,8 @@ export type QuestionMedia = {
 
 export type Question = {
   id: number;
+  institution_id?: number;
+  institution?: Institution | null;
   type: QuestionType;
   prompt: string;
   hint?: string | null;

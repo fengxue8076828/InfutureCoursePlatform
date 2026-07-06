@@ -15,10 +15,12 @@ import {
 } from "@/lib/student-session";
 
 const navItems = [
-  { href: "/", label: "首页" },
-  { href: "/courses", label: "课程分类" },
-  { href: "/blog", label: "博客" },
-  { href: "/learn", label: "我的课堂" }
+  { href: "/", label: "\u9996\u9875" },
+  { href: "/courses", label: "\u8bfe\u7a0b\u5206\u7c7b" },
+  { href: "/leaderboard", label: "\u79ef\u5206\u699c" },
+  { href: "/question-bank", label: "\u9898\u5e93" },
+  { href: "/blog", label: "\u535a\u5ba2" },
+  { href: "/learn", label: "\u6211\u7684\u8bfe\u5802" }
 ];
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
@@ -86,14 +88,15 @@ export function Header({
             <Link
               key={item.href}
               href={item.href}
-              className="rounded-lg px-3 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-ink"
+              prefetch={false}
+              className="rounded-lg px-2.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-ink"
             >
               {item.label}
             </Link>
           ))}
         </nav>
 
-        <div className="hidden min-w-64 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 lg:flex">
+        <div className="hidden min-w-56 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 xl:flex">
           <Search size={16} className="text-slate-400" />
           <input
             aria-label="搜索课程"
@@ -103,15 +106,6 @@ export function Header({
         </div>
 
         <div className="ml-auto flex items-center gap-2">
-          {showInstitutionLogin ? (
-            <Link
-              href="/admin/login"
-              className="focus-ring hidden items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-mint hover:text-mint sm:flex"
-            >
-              <ShieldCheck size={16} />
-              机构登录
-            </Link>
-          ) : null}
           {student ? (
             <>
               <Link
@@ -174,6 +168,15 @@ export function Header({
               </Link>
             </>
           )}
+          {showInstitutionLogin ? (
+            <Link
+              href="/admin/login"
+              className="focus-ring hidden items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-mint hover:text-mint sm:flex"
+            >
+              <ShieldCheck size={16} />
+              {"\u673a\u6784\u767b\u5f55"}
+            </Link>
+          ) : null}
         </div>
       </div>
     </header>

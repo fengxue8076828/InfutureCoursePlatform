@@ -515,7 +515,7 @@ def list_questions(
     stmt = (
         select(Question)
         .where(Question.status == QuestionStatus.published)
-        .options(selectinload(Question.options), selectinload(Question.media_assets))
+        .options(joinedload(Question.institution), selectinload(Question.options), selectinload(Question.media_assets))
         .order_by(Question.created_at.desc())
     )
     if course_id:

@@ -26,8 +26,11 @@ from app.schemas import (
     CourseCategoryOut,
     CourseDetailOut,
     InstitutionOut,
+    StudentCoursePointBreakdown,
+    StudentLeaderboardDetailOut,
     StudentLeaderboardEntry,
     StudentLeaderboardOut,
+    StudentPointEvent,
     TeacherOut,
 )
 
@@ -175,10 +178,8 @@ def get_teacher(slug: str, db: Session = Depends(get_db)) -> Teacher:
 
 
 
-@router.get("/leaderboard", response_model=StudentLeaderboardOut)
-def get_student_leaderboard(db: Session = Depends(get_db)) -> StudentLeaderboardOut:
-    week_start = _aware_now() - timedelta(days=7)
-    students = list(
+def _load_students_with_point_data(db: Session) -> list[User]:
+    return list(
         db.scalars(
             select(User)
             .where(User.role == UserRole.student, User.is_active.is_(True))
@@ -195,46 +196,231 @@ def get_student_leaderboard(db: Session = Depends(get_db)) -> StudentLeaderboard
             .order_by(User.full_name)
         )
     )
-    entries: list[StudentLeaderboardEntry] = []
-    for student in students:
-        total_points = 0
-        weekly_points = 0
-        for enrollment in student.enrollments:
-            total_points += round((enrollment.progress_percent or 0) * 0.8)
-            if enrollment.status == "completed":
-                total_points += 160
-            for record in enrollment.progress_records:
-                if not record.completed_at:
-                    continue
-                points = _progress_points(record)
-                total_points += points
-                if record.completed_at >= week_start:
-                    weekly_points += points
-        for submission in student.submissions:
-            if submission.score is None:
-                continue
-            points = round(max(submission.score, 0) * 2)
-            total_points += points
-            if submission.created_at and submission.created_at >= week_start:
-                weekly_points += points
-        if total_points > 0 or student.enrollments:
-            entries.append(
-                _build_leaderboard_entry(
-                    rank=0,
-                    user=student,
-                    total_points=total_points,
-                    weekly_points=weekly_points,
-                    enrollments=student.enrollments,
+
+
+def _submission_points(submission: Submission) -> int:
+    if submission.score is None:
+        return 0
+    return round(max(submission.score, 0) * 2)
+
+
+def _build_point_event(
+    *,
+    label: str,
+    source: str,
+    points: int,
+    occurred_at: datetime | None = None,
+    course_title: str | None = None,
+    detail: str | None = None,
+) -> StudentPointEvent:
+    return StudentPointEvent(
+        label=label,
+        source=source,
+        points=points,
+        occurred_at=occurred_at,
+        course_title=course_title,
+        detail=detail,
+    )
+
+
+def _calculate_student_point_detail(student: User, week_start: datetime) -> dict:
+    total_points = 0
+    weekly_points = 0
+    course_breakdown: list[StudentCoursePointBreakdown] = []
+    recent_events: list[StudentPointEvent] = []
+    submissions_by_enrollment: dict[int | None, list[Submission]] = {}
+    for submission in student.submissions:
+        submissions_by_enrollment.setdefault(submission.enrollment_id, []).append(submission)
+
+    handled_submission_ids: set[int] = set()
+    for enrollment in student.enrollments:
+        course = enrollment.course
+        progress_points = round((enrollment.progress_percent or 0) * 0.8)
+        activity_points = 0
+        assessment_points = 0
+        completion_bonus = 160 if enrollment.status == "completed" else 0
+
+        if progress_points:
+            recent_events.append(
+                _build_point_event(
+                    label="??????",
+                    source="progress",
+                    points=progress_points,
+                    occurred_at=enrollment.updated_at,
+                    course_title=course.title if course else None,
+                    detail=f"???? {round(enrollment.progress_percent or 0, 1)}%",
                 )
             )
 
-    total_points = sorted(entries, key=lambda entry: (-entry.total_points, entry.student_name))[:8]
-    rising = sorted(entries, key=lambda entry: (-entry.weekly_points, -entry.total_points, entry.student_name))[:8]
+        if completion_bonus:
+            recent_events.append(
+                _build_point_event(
+                    label="??????",
+                    source="completion",
+                    points=completion_bonus,
+                    occurred_at=enrollment.updated_at,
+                    course_title=course.title if course else None,
+                    detail="???????",
+                )
+            )
+
+        for record in enrollment.progress_records:
+            if not record.completed_at:
+                continue
+            points = _progress_points(record)
+            activity_points += points
+            if record.completed_at >= week_start:
+                weekly_points += points
+            item = record.lesson_item
+            item_title = item.title if item else "????"
+            recent_events.append(
+                _build_point_event(
+                    label=f"??{item_title}",
+                    source=item.item_type.value if item else "lesson",
+                    points=points,
+                    occurred_at=record.completed_at,
+                    course_title=course.title if course else None,
+                    detail=f"?????? {round(record.score or 0, 1)}" if record.score is not None else None,
+                )
+            )
+
+        for submission in submissions_by_enrollment.get(enrollment.id, []):
+            handled_submission_ids.add(submission.id)
+            points = _submission_points(submission)
+            if not points:
+                continue
+            assessment_points += points
+            if submission.created_at and submission.created_at >= week_start:
+                weekly_points += points
+            question_title = submission.question.prompt if submission.question else "????"
+            recent_events.append(
+                _build_point_event(
+                    label="??????",
+                    source="assessment",
+                    points=points,
+                    occurred_at=submission.created_at,
+                    course_title=course.title if course else None,
+                    detail=question_title[:80],
+                )
+            )
+
+        course_total = progress_points + activity_points + assessment_points + completion_bonus
+        total_points += course_total
+        if course:
+            course_breakdown.append(
+                StudentCoursePointBreakdown(
+                    course_id=course.id,
+                    course_slug=course.slug,
+                    course_title=course.title,
+                    status=enrollment.status,
+                    progress_percent=round(enrollment.progress_percent or 0, 1),
+                    progress_points=progress_points,
+                    activity_points=activity_points,
+                    assessment_points=assessment_points,
+                    completion_bonus=completion_bonus,
+                    total_points=course_total,
+                )
+            )
+
+    for submission in student.submissions:
+        if submission.id in handled_submission_ids:
+            continue
+        points = _submission_points(submission)
+        if not points:
+            continue
+        total_points += points
+        if submission.created_at and submission.created_at >= week_start:
+            weekly_points += points
+        question_title = submission.question.prompt if submission.question else "????"
+        recent_events.append(
+            _build_point_event(
+                label="??????",
+                source="assessment",
+                points=points,
+                occurred_at=submission.created_at,
+                detail=question_title[:80],
+            )
+        )
+
+    recent_events.sort(key=lambda event: event.occurred_at.timestamp() if event.occurred_at else 0, reverse=True)
+    course_breakdown.sort(key=lambda item: item.total_points, reverse=True)
+    return {
+        "total_points": total_points,
+        "weekly_points": weekly_points,
+        "course_breakdown": course_breakdown,
+        "recent_events": recent_events[:16],
+    }
+
+
+def _leaderboard_rows(db: Session) -> list[tuple[User, dict, StudentLeaderboardEntry]]:
+    week_start = _aware_now() - timedelta(days=7)
+    rows: list[tuple[User, dict, StudentLeaderboardEntry]] = []
+    for student in _load_students_with_point_data(db):
+        detail = _calculate_student_point_detail(student, week_start)
+        if detail["total_points"] > 0 or student.enrollments:
+            rows.append(
+                (
+                    student,
+                    detail,
+                    _build_leaderboard_entry(
+                        rank=0,
+                        user=student,
+                        total_points=detail["total_points"],
+                        weekly_points=detail["weekly_points"],
+                        enrollments=list(student.enrollments),
+                    ),
+                )
+            )
+    return rows
+
+
+@router.get("/leaderboard", response_model=StudentLeaderboardOut)
+def get_student_leaderboard(db: Session = Depends(get_db)) -> StudentLeaderboardOut:
+    rows = _leaderboard_rows(db)
+    total_points = sorted((entry for _, _, entry in rows), key=lambda entry: (-entry.total_points, entry.student_name))[:8]
+    rising = sorted(
+        (entry for _, _, entry in rows),
+        key=lambda entry: (-entry.weekly_points, -entry.total_points, entry.student_name),
+    )[:8]
     return StudentLeaderboardOut(
-        total_points=[
-            entry.model_copy(update={"rank": index + 1}) for index, entry in enumerate(total_points)
-        ],
+        total_points=[entry.model_copy(update={"rank": index + 1}) for index, entry in enumerate(total_points)],
         rising=[entry.model_copy(update={"rank": index + 1}) for index, entry in enumerate(rising)],
+    )
+
+
+@router.get("/leaderboard/{student_id}", response_model=StudentLeaderboardDetailOut)
+def get_student_leaderboard_detail(student_id: int, db: Session = Depends(get_db)) -> StudentLeaderboardDetailOut:
+    rows = _leaderboard_rows(db)
+    total_sorted = sorted(rows, key=lambda row: (-row[2].total_points, row[2].student_name))
+    rising_sorted = sorted(rows, key=lambda row: (-row[2].weekly_points, -row[2].total_points, row[2].student_name))
+    total_rank_by_id = {entry.student_id: index + 1 for index, (_, _, entry) in enumerate(total_sorted)}
+    rising_rank_by_id = {entry.student_id: index + 1 for index, (_, _, entry) in enumerate(rising_sorted)}
+
+    target = next((row for row in rows if row[0].id == student_id), None)
+    if target is None:
+        student = db.scalar(select(User).where(User.id == student_id, User.role == UserRole.student, User.is_active.is_(True)))
+        if not student:
+            raise HTTPException(status_code=404, detail="Student not found")
+        week_start = _aware_now() - timedelta(days=7)
+        detail = _calculate_student_point_detail(student, week_start)
+        entry = _build_leaderboard_entry(
+            rank=0,
+            user=student,
+            total_points=detail["total_points"],
+            weekly_points=detail["weekly_points"],
+            enrollments=list(student.enrollments),
+        )
+    else:
+        student, detail, entry = target
+
+    total_rank = total_rank_by_id.get(student_id)
+    rising_rank = rising_rank_by_id.get(student_id)
+    return StudentLeaderboardDetailOut(
+        student=entry.model_copy(update={"rank": total_rank or 0}),
+        total_rank=total_rank,
+        rising_rank=rising_rank,
+        course_breakdown=detail["course_breakdown"],
+        recent_events=detail["recent_events"],
     )
 
 @router.get("/blog", response_model=list[BlogPostOut])
