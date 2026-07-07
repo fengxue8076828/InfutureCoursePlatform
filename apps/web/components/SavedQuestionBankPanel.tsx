@@ -14,6 +14,7 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
+import { CommunityQuestionBox } from "@/components/CommunityQuestionBox";
 import { getStudentRequestHeaders, type StudentSessionUser } from "@/lib/student-session";
 import type { Question, QuestionMedia, QuestionOption, QuestionType } from "@/lib/types";
 
@@ -188,7 +189,7 @@ function getBlankLabels(question: Question) {
   if (optionLabels.length) {
     return optionLabels;
   }
-  const blankCount = Math.max(question.prompt.match(/_{2,}|閿涘溄s*閿涘\(\s*\)/g)?.length ?? 1, 1);
+  const blankCount = Math.max(question.prompt.match(/_{2,}|\(\s*\)/g)?.length ?? 1, 1);
   return Array.from({ length: blankCount }, (_, index) => `\u7a7a${index + 1}`);
 }
 
@@ -511,7 +512,7 @@ export function SavedQuestionBankPanel({ studentSession }: { studentSession: Stu
         ) : (
           <div className="mt-4 grid gap-2">
             {activeQuestions.map((question, index) => (
-              <QuestionPracticeCard key={question.id} index={index} question={question} answer={answers[question.id]} status={submissionStatus[question.id]} isSubmitting={submittingIds.has(question.id)} onChange={(answer) => updateAnswer(question.id, answer)} onRemove={() => removeQuestion(question.id)} onSubmit={() => void submitQuestion(question)} />
+              <QuestionPracticeCard key={question.id} index={index} question={question} answer={answers[question.id]} status={submissionStatus[question.id]} isSubmitting={submittingIds.has(question.id)} studentSession={studentSession} onChange={(answer) => updateAnswer(question.id, answer)} onRemove={() => removeQuestion(question.id)} onSubmit={() => void submitQuestion(question)} />
             ))}
           </div>
         )
@@ -598,7 +599,7 @@ function CompletedQuestionCard({ index, record, question, onRemove }: { index: n
   );
 }
 
-function QuestionPracticeCard({ index, question, answer, status, isSubmitting, onChange, onRemove, onSubmit }: { index: number; question: Question; answer: QuestionAnswer | undefined; status?: string; isSubmitting: boolean; onChange: (answer: QuestionAnswer) => void; onRemove: () => void; onSubmit: () => void }) {
+function QuestionPracticeCard({ index, question, answer, status, isSubmitting, studentSession, onChange, onRemove, onSubmit }: { index: number; question: Question; answer: QuestionAnswer | undefined; status?: string; isSubmitting: boolean; studentSession: StudentSessionUser | null; onChange: (answer: QuestionAnswer) => void; onRemove: () => void; onSubmit: () => void }) {
   const [isHintVisible, setIsHintVisible] = useState(false);
   const hint = question.hint?.trim() ?? "";
   return (
@@ -632,6 +633,18 @@ function QuestionPracticeCard({ index, question, answer, status, isSubmitting, o
           </div>
         </div>
         {hint && isHintVisible ? <div className="mt-3 whitespace-pre-wrap rounded-lg border border-mint/30 bg-mint/10 p-4 text-sm leading-7 text-slate-700">{hint}</div> : null}
+        {studentSession ? (
+          <div className="mt-4">
+            <CommunityQuestionBox
+              compact
+              title={"\u9488\u5bf9\u8fd9\u9053\u9898\u63d0\u95ee"}
+              description={"\u95ee\u9898\u4f1a\u81ea\u52a8\u5173\u8054\u5230\u5f53\u524d\u9898\u76ee\u3002"}
+              initialTitle={`${getQuestionTitle(question)} \u7684\u95ee\u9898`}
+              linkedQuestionId={question.id}
+              tags={[questionTypeLabel(question), question.difficulty, question.skill_area].filter(Boolean)}
+            />
+          </div>
+        ) : null}
       </div>
     </details>
   );
@@ -772,3 +785,4 @@ function QuestionAnswerInput({ question, answer, onChange, disabled = false }: {
 
   return <textarea value={typeof answer === "string" ? answer : ""} onChange={(event) => onChange(event.target.value)} disabled={disabled} className="focus-ring mt-4 h-44 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 disabled:cursor-not-allowed disabled:bg-slate-100" placeholder={ui.inputAnswer} />;
 }
+

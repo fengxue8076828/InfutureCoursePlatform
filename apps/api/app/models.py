@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import enum
 from datetime import datetime
@@ -178,7 +178,7 @@ class Course(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(80), index=True)
     level: Mapped[str] = mapped_column(String(40), index=True)
-    language: Mapped[str] = mapped_column(String(40), default="中文")
+    language: Mapped[str] = mapped_column(String(40), default="涓枃")
     price_eur_monthly: Mapped[float] = mapped_column(Numeric(8, 2), default=39.00)
     hero_image_url: Mapped[str] = mapped_column(String(500))
     intro_video_url: Mapped[str] = mapped_column(String(500))
@@ -396,6 +396,110 @@ class Subscription(Base, TimestampMixin):
     course: Mapped[Course] = relationship(back_populates="subscriptions")
 
 
+class StudentPost(Base, TimestampMixin):
+    __tablename__ = "student_posts"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    visibility: Mapped[str] = mapped_column(String(40), default="public", index=True)
+
+    user: Mapped[User] = relationship()
+    course: Mapped[Course | None] = relationship()
+
+
+class StudentFollow(Base, TimestampMixin):
+    __tablename__ = "student_follows"
+    __table_args__ = (UniqueConstraint("follower_id", "followee_id", name="uq_student_follow_pair"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    follower_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    followee_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+
+    follower: Mapped[User] = relationship(foreign_keys=[follower_id])
+    followee: Mapped[User] = relationship(foreign_keys=[followee_id])
+
+
+class CommunityQuestion(Base, TimestampMixin):
+    __tablename__ = "community_questions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(220), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), index=True)
+    chapter_id: Mapped[int | None] = mapped_column(ForeignKey("course_chapters.id", ondelete="SET NULL"), index=True)
+    linked_question_id: Mapped[int | None] = mapped_column(ForeignKey("questions.id", ondelete="SET NULL"), index=True)
+    tags: Mapped[dict] = mapped_column(JSONB, default=dict)
+    is_resolved: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+
+    user: Mapped[User] = relationship()
+    course: Mapped[Course | None] = relationship()
+    chapter: Mapped[CourseChapter | None] = relationship()
+    linked_question: Mapped[Question | None] = relationship()
+    answers: Mapped[list["CommunityAnswer"]] = relationship(
+        back_populates="community_question", cascade="all, delete-orphan", order_by="CommunityAnswer.created_at"
+    )
+
+
+class CommunityAnswer(Base, TimestampMixin):
+    __tablename__ = "community_answers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    community_question_id: Mapped[int] = mapped_column(
+        ForeignKey("community_questions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+    is_best: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    community_question: Mapped[CommunityQuestion] = relationship(back_populates="answers")
+    user: Mapped[User] = relationship()
+
+
+class CommunityNoteShare(Base, TimestampMixin):
+    __tablename__ = "community_note_shares"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    chapter_note_id: Mapped[int | None] = mapped_column(ForeignKey("chapter_notes.id", ondelete="SET NULL"), index=True)
+    course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), index=True)
+    title: Mapped[str] = mapped_column(String(220), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0)
+    visibility: Mapped[str] = mapped_column(String(40), default="public", index=True)
+
+    user: Mapped[User] = relationship()
+    chapter_note: Mapped[ChapterNote | None] = relationship()
+    course: Mapped[Course | None] = relationship()
+
+
+class CommunityReaction(Base, TimestampMixin):
+    __tablename__ = "community_reactions"
+    __table_args__ = (UniqueConstraint("user_id", "target_type", "target_id", name="uq_community_reaction_target"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    target_type: Mapped[str] = mapped_column(String(40), index=True)
+    target_id: Mapped[int] = mapped_column(Integer, index=True)
+
+    user: Mapped[User] = relationship()
+
+
+class CommunityMessage(Base, TimestampMixin):
+    __tablename__ = "community_messages"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    receiver_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    content: Mapped[str] = mapped_column(Text)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    sender: Mapped[User] = relationship(foreign_keys=[sender_id])
+    receiver: Mapped[User] = relationship(foreign_keys=[receiver_id])
+
 class BlogPost(Base, TimestampMixin):
     __tablename__ = "blog_posts"
 
@@ -407,3 +511,4 @@ class BlogPost(Base, TimestampMixin):
     content: Mapped[str] = mapped_column(Text)
     author_name: Mapped[str] = mapped_column(String(120))
     is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+

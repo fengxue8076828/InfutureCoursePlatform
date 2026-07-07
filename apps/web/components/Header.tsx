@@ -19,8 +19,9 @@ const navItems = [
   { href: "/courses", label: "\u8bfe\u7a0b\u5206\u7c7b" },
   { href: "/leaderboard", label: "\u79ef\u5206\u699c" },
   { href: "/question-bank", label: "\u9898\u5e93" },
+  { href: "/community", label: "\u5b66\u4e60\u793e\u533a" },
   { href: "/blog", label: "\u535a\u5ba2" },
-  { href: "/learn", label: "\u6211\u7684\u8bfe\u5802" }
+  { href: "/learn", label: "\u6211\u7684\u5b66\u4e60" }
 ];
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
@@ -47,7 +48,7 @@ export function Header({
     };
   }, []);
 
-  const initials = student?.full_name?.trim()?.slice(0, 1).toUpperCase() || "学";
+  const initials = student?.full_name?.trim()?.slice(0, 1).toUpperCase() || "\u5b66";
 
   async function continueWithSocial(provider: "google" | "facebook") {
     setSocialProvider(provider);
@@ -78,7 +79,7 @@ export function Header({
         <Link href="/" className="flex shrink-0 items-center">
           <img
             src="/logos/logo.png"
-            alt="英启教育 Logo"
+            alt="InFuture Logo"
             className="h-9 w-auto max-w-[9.5rem] object-contain"
           />
         </Link>
@@ -99,8 +100,8 @@ export function Header({
         <div className="hidden min-w-56 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 xl:flex">
           <Search size={16} className="text-slate-400" />
           <input
-            aria-label="搜索课程"
-            placeholder="搜索课程、老师或机构"
+            aria-label="\u641c\u7d22\u8bfe\u7a0b"
+            placeholder={"\u641c\u7d22\u8bfe\u7a0b\u3001\u8001\u5e08\u6216\u673a\u6784"}
             className="w-full bg-transparent text-sm outline-none placeholder:text-slate-400"
           />
         </div>
@@ -130,7 +131,7 @@ export function Header({
                 onClick={clearStudentSession}
                 className="focus-ring hidden rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-600 hover:border-coral hover:text-coral sm:block"
               >
-                退出
+                {"\u9000\u51fa"}
               </button>
             </>
           ) : (
@@ -140,7 +141,7 @@ export function Header({
                 onClick={() => continueWithSocial("google")}
                 disabled={socialProvider !== null}
                 className="focus-ring hidden h-10 w-10 place-items-center rounded-lg border border-slate-200 text-sm font-semibold text-slate-600 hover:border-mint hover:text-mint sm:grid"
-                title="Google 登录"
+                title={"Google \u767b\u5f55"}
               >
                 {socialProvider === "google" ? "..." : "G"}
               </button>
@@ -149,7 +150,7 @@ export function Header({
                 onClick={() => continueWithSocial("facebook")}
                 disabled={socialProvider !== null}
                 className="focus-ring hidden h-10 w-10 place-items-center rounded-lg border border-slate-200 text-slate-600 hover:border-sky-300 hover:text-blue-600 sm:grid"
-                title="Facebook 登录"
+                title={"Facebook \u767b\u5f55"}
               >
                 {socialProvider === "facebook" ? "..." : <Facebook size={16} />}
               </button>
@@ -158,13 +159,13 @@ export function Header({
                 className="focus-ring hidden items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-semibold text-slate-700 hover:border-coral hover:text-coral sm:flex"
               >
                 <LogIn size={16} />
-                登录
+                {"\u767b\u5f55"}
               </Link>
               <Link
                 href="/register"
                 className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white shadow-sm hover:bg-[#f25f54]"
               >
-                注册
+                {"\u6ce8\u518c"}
               </Link>
             </>
           )}

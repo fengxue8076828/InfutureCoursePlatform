@@ -529,7 +529,7 @@ export default async function HomePage() {
                 name="q"
                 aria-label="\u641c\u7d22\u9898\u76ee"
                 className="min-w-0 flex-1 bg-transparent text-sm outline-none placeholder:text-slate-400"
-                placeholder="\u641c\u7d22\u9898\u76ee\u3001\u77e5\u8bc6\u70b9\u3001\u7ea7\u522b"
+                placeholder={"\u641c\u7d22\u9898\u76ee\u3001\u77e5\u8bc6\u70b9\u3001\u7ea7\u522b"}
               />
               <button type="submit" className="rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white hover:bg-slate-800">
                 {"\u641c\u7d22"}

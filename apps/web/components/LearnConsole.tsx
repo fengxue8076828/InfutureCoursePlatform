@@ -21,6 +21,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 
+import { CommunityQuestionBox } from "@/components/CommunityQuestionBox";
 import { getStudentRequestHeaders } from "@/lib/student-session";
 import type { Chapter, Enrollment, LessonItem, Question, QuestionMedia, QuestionOption } from "@/lib/types";
 
@@ -526,6 +527,19 @@ export function LearnConsole({
               >
                 {"\u4fdd\u5b58\u672c\u7ae0\u7b14\u8bb0"}
               </button>
+              {activeChapter ? (
+                <div className="mt-4">
+                  <CommunityQuestionBox
+                    compact
+                    title={"\u672c\u7ae0\u63d0\u95ee"}
+                    description={"\u95ee\u9898\u4f1a\u81ea\u52a8\u5173\u8054\u5230\u5f53\u524d\u8bfe\u7a0b\u548c\u7ae0\u8282\u3002"}
+                    initialTitle={`${activeChapter.title} \u7684\u95ee\u9898`}
+                    courseId={course.id}
+                    chapterId={activeChapter.id}
+                    tags={[course.title, activeChapter.title]}
+                  />
+                </div>
+              ) : null}
             </>
           ) : null}
         </aside>

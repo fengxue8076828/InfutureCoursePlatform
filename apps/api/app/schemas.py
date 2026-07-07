@@ -1,4 +1,4 @@
-﻿from datetime import datetime
+from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -313,7 +313,182 @@ class DashboardOut(BaseModel):
     weekly_minutes: int
     next_lesson_title: str
 
+class StudentProfileSummaryOut(BaseModel):
+    id: int
+    email: EmailStr | None = None
+    full_name: str
+    avatar_url: str | None = None
+    bio: str | None = None
+    region: str | None = None
+    community_points: int = 0
 
+
+class StudentLearningNoteOut(BaseModel):
+    id: int
+    enrollment_id: int
+    course_id: int
+    course_slug: str
+    course_title: str
+    course_image_url: str | None = None
+    chapter_id: int
+    chapter_title: str
+    chapter_position: int
+    content: str
+    updated_at: datetime | None = None
+
+
+class StudentPostCreate(BaseModel):
+    content: str = Field(min_length=1, max_length=1200)
+    course_id: int | None = None
+
+
+class StudentPostOut(BaseModel):
+    id: int
+    user_id: int
+    student_name: str
+    avatar_url: str | None = None
+    content: str
+    course_id: int | None = None
+    course_title: str | None = None
+    created_at: datetime
+
+
+class StudentSocialHomeOut(BaseModel):
+    profile: StudentProfileSummaryOut
+    active_courses: list[EnrollmentOut]
+    completed_courses: list[EnrollmentOut]
+    recommended_courses: list[CourseCardOut]
+    total_points: int
+    weekly_points: int
+    achievements: list[str]
+    posts: list[StudentPostOut]
+    suggested_students: list[StudentProfileSummaryOut]
+    following_ids: list[int]
+
+
+class StudentPublicProfileOut(BaseModel):
+    profile: StudentProfileSummaryOut
+    active_courses: list[EnrollmentOut]
+    completed_courses: list[EnrollmentOut]
+    posts: list[StudentPostOut]
+    is_following: bool
+
+
+class CommunityReferenceChapterOut(BaseModel):
+    id: int
+    title: str
+    position: int
+
+
+class CommunityReferenceCourseOut(BaseModel):
+    id: int
+    title: str
+    slug: str
+    chapters: list[CommunityReferenceChapterOut] = []
+
+
+class CommunityReferenceQuestionOut(BaseModel):
+    id: int
+    prompt: str
+    type: QuestionType
+    difficulty: str
+    skill_area: str
+
+
+class CommunityQuestionCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=220)
+    body: str = Field(min_length=2, max_length=3000)
+    course_id: int | None = None
+    chapter_id: int | None = None
+    linked_question_id: int | None = None
+    tags: list[str] = []
+
+
+class CommunityAnswerCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=3000)
+
+
+class CommunityNoteShareCreate(BaseModel):
+    title: str = Field(min_length=2, max_length=220)
+    content: str = Field(min_length=2, max_length=6000)
+    course_id: int | None = None
+    chapter_note_id: int | None = None
+
+
+class CommunityMessageCreate(BaseModel):
+    receiver_id: int
+    content: str = Field(min_length=1, max_length=1000)
+
+
+class CommunityAnswerOut(BaseModel):
+    id: int
+    question_id: int
+    user_id: int
+    student_name: str
+    avatar_url: str | None = None
+    body: str
+    likes_count: int
+    liked_by_me: bool = False
+    is_best: bool = False
+    created_at: datetime
+
+
+class CommunityQuestionOut(BaseModel):
+    id: int
+    user_id: int
+    student_name: str
+    avatar_url: str | None = None
+    title: str
+    body: str
+    course_id: int | None = None
+    course_title: str | None = None
+    chapter_id: int | None = None
+    chapter_title: str | None = None
+    linked_question_id: int | None = None
+    linked_question_title: str | None = None
+    tags: list[str] = []
+    is_resolved: bool
+    answers_count: int
+    answers: list[CommunityAnswerOut] = []
+    created_at: datetime
+
+
+class CommunityNoteShareOut(BaseModel):
+    id: int
+    user_id: int
+    student_name: str
+    avatar_url: str | None = None
+    title: str
+    content: str
+    course_id: int | None = None
+    course_title: str | None = None
+    likes_count: int
+    liked_by_me: bool = False
+    created_at: datetime
+    updated_at: datetime | None = None
+
+
+class CommunityMessageOut(BaseModel):
+    id: int
+    sender_id: int
+    sender_name: str
+    receiver_id: int
+    receiver_name: str
+    content: str
+    created_at: datetime
+
+
+class CommunityHomeOut(BaseModel):
+    questions: list[CommunityQuestionOut]
+    recommended_questions: list[CommunityQuestionOut] = []
+    notes: list[CommunityNoteShareOut]
+    students: list[StudentProfileSummaryOut]
+    hot_students: list[StudentProfileSummaryOut] = []
+    following_ids: list[int]
+    my_courses: list[CommunityReferenceCourseOut]
+    reference_questions: list[CommunityReferenceQuestionOut]
+    recent_messages: list[CommunityMessageOut]
+    community_points: int
 class CompleteItemIn(BaseModel):
     notes: str | None = None
     score: float | None = None
@@ -567,4 +742,5 @@ class AdminOverviewOut(BaseModel):
     monthly_recurring_revenue_eur: float
     pending_manual_grading: int
     subscription_growth: list[dict[str, Any]]
+
 
