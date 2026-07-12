@@ -1,257 +1,329 @@
-import { ArrowLeft, Award, BookOpenCheck, CalendarClock, CheckCircle2, Sparkles, TrendingUp, Trophy } from "lucide-react";
+﻿import { ArrowLeft, ArrowRight, Award, BookOpenCheck, CalendarClock, CheckCircle2, Heart, MessageCircle, Sparkles, Star, TrendingUp, Trophy } from "lucide-react";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-
-import { getStudentLeaderboardDetail } from "@/lib/api";
-import type { StudentCoursePointBreakdown, StudentPointEvent } from "@/lib/types";
-
-const copy = {
-  fallbackInitial: "\u5b66",
-  noTime: "\u6682\u65e0\u65f6\u95f4",
-  progressPoints: "\u8fdb\u5ea6\u79ef\u5206",
-  completionBonus: "\u5b8c\u8bfe\u5956\u52b1",
-  videoLearning: "\u89c6\u9891\u5b66\u4e60",
-  handoutReading: "\u8bb2\u4e49\u9605\u8bfb",
-  exercisePractice: "\u7ec3\u4e60\u63d0\u4ea4",
-  quizScore: "\u6d4b\u9a8c\u6210\u7ee9",
-  assessment: "\u6d4b\u8bc4\u79ef\u5206",
-  learningPoints: "\u5b66\u4e60\u79ef\u5206",
-  completed: "\u5df2\u5b8c\u6210",
-  studying: "\u5b66\u4e60\u4e2d",
-  points: "\u79ef\u5206",
-  courseProgress: "\u8bfe\u7a0b\u8fdb\u5ea6",
-  progress: "\u8fdb\u5ea6",
-  activity: "\u5b66\u4e60",
-  quizPractice: "\u7ec3\u4e60/\u6d4b\u9a8c",
-  returnLeaderboard: "\u8fd4\u56de\u79ef\u5206\u699c",
-  profile: "\u5b66\u751f\u79ef\u5206\u6863\u6848",
-  completedCourses: "\u5df2\u5b8c\u6210",
-  activeCourses: "\u5728\u5b66",
-  averageProgress: "\u5e73\u5747\u8fdb\u5ea6",
-  totalPoints: "\u603b\u79ef\u5206",
-  weeklyGrowth: "\u672c\u5468\u589e\u957f",
-  totalRank: "\u603b\u699c\u6392\u540d",
-  completionInsightTitle: "\u5b66\u4e60\u5b8c\u6210\u5ea6",
-  completionInsightText: "\u8bfe\u7a0b\u5b8c\u6210\u3001\u7ae0\u8282\u8fdb\u5ea6\u548c\u6d4b\u9a8c\u8868\u73b0\u4f1a\u5171\u540c\u5f71\u54cd\u79ef\u5206\u3002",
-  recentGrowthTitle: "\u8fd1\u671f\u6210\u957f",
-  recentGrowthText: "\u8fd1 7 \u5929\u79ef\u5206\u8d8a\u9ad8\uff0c\u4e0a\u5347\u901f\u5ea6\u6392\u540d\u8d8a\u9760\u524d\u3002",
-  learningTrackTitle: "\u5b66\u4e60\u8f68\u8ff9",
-  learningTrackText: "\u8bfe\u7a0b\u3001\u7ec3\u4e60\u3001\u6d4b\u9a8c\u548c\u5956\u52b1\u8bb0\u5f55\u4f1a\u6c89\u6dc0\u4e3a\u53ef\u8ffd\u8e2a\u7684\u6210\u957f\u8f68\u8ff9\u3002",
-  courseBreakdownTitle: "\u8bfe\u7a0b\u79ef\u5206\u660e\u7ec6",
-  noCourseBreakdown: "\u6682\u65e0\u8bfe\u7a0b\u79ef\u5206\u8bb0\u5f55\u3002",
-  recentPointsTitle: "\u6700\u8fd1\u79ef\u5206\u8bb0\u5f55",
-  noRecentPoints: "\u6682\u65e0\u79ef\u5206\u8bb0\u5f55\u3002",
-  courseSeparator: " \u00b7 "
-};
+import { getStudentLeaderboardDetail, getStudentPublicProfile } from "@/lib/api";
+import type { Enrollment, StudentCoursePointBreakdown, StudentPointEvent, StudentPointLevel, StudentPost } from "@/lib/types";
 
 function initials(name: string) {
-  return name.trim().slice(0, 1).toUpperCase() || copy.fallbackInitial;
+  return name
+    .trim()
+    .split(/\s+/)
+    .slice(0, 2)
+    .map((part) => part[0])
+    .join("")
+    .toUpperCase() || "S";
 }
 
-function formatPoints(points: number) {
-  return points.toLocaleString("zh-CN");
+function formatPoints(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(value);
 }
 
 function formatDate(value?: string | null) {
-  if (!value) {
-    return copy.noTime;
-  }
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit"
-  }).format(new Date(value));
+  if (!value) return "刚刚";
+  return new Intl.DateTimeFormat("zh-CN", { month: "short", day: "numeric" }).format(new Date(value));
 }
 
 function sourceLabel(source: string) {
   const labels: Record<string, string> = {
-    progress: copy.progressPoints,
-    completion: copy.completionBonus,
-    video: copy.videoLearning,
-    handout: copy.handoutReading,
-    exercise: copy.exercisePractice,
-    quiz: copy.quizScore,
-    assessment: copy.assessment
+    course_progress: "课程进度",
+    exercise_accuracy: "练习正确率",
+    quiz_score: "测验成绩",
+    speed_bonus: "学习速度",
+    note_like: "笔记点赞",
+    question_like: "问题点赞",
+    answer_count: "回答问题",
+    answer_like: "回答获赞",
+    community: "社区互动"
   };
-  return labels[source] ?? copy.learningPoints;
+  return labels[source] ?? source;
 }
 
-function CourseBreakdownCard({ course }: { course: StudentCoursePointBreakdown }) {
+function Avatar({ name, url, large = false }: { name: string; url?: string | null; large?: boolean }) {
+  const size = large ? "h-28 w-28 text-4xl" : "h-11 w-11 text-base";
+  return url ? (
+    <img src={url} alt={name} className={`${size} rounded-lg object-cover ring-4 ring-white`} />
+  ) : (
+    <div className={`${size} grid place-items-center rounded-lg bg-slate-100 font-black text-slate-500 ring-4 ring-white`}>
+      {initials(name)}
+    </div>
+  );
+}
+
+function LevelPointsBadge({ level, totalPoints }: { level?: StudentPointLevel | null; totalPoints: number }) {
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex flex-wrap items-start justify-between gap-3">
+    <div className="flex overflow-hidden rounded-lg bg-white text-left shadow-sm ring-1 ring-mint/25">
+      <div className="flex items-center gap-2 bg-mint/10 px-3 py-2">
+        <span className="grid h-9 w-9 place-items-center rounded-lg bg-white text-xl shadow-sm">{level?.icon ?? "✦"}</span>
         <div>
-          <p className="text-sm font-bold text-coral">{course.status === "completed" ? copy.completed : copy.studying}</p>
-          <h3 className="mt-1 text-xl font-black text-ink">{course.course_title}</h3>
-        </div>
-        <div className="rounded-lg bg-mint/10 px-4 py-2 text-right text-mint">
-          <p className="text-xl font-black">{formatPoints(course.total_points)}</p>
-          <p className="text-xs font-bold">{copy.points}</p>
+          <p className="text-[11px] font-black text-slate-400">学习等级</p>
+          <p className="text-sm font-black text-ink">{level?.name ?? "启航学徒"}</p>
         </div>
       </div>
+      <div className="border-l border-slate-100 px-4 py-2">
+        <p className="text-[11px] font-black text-slate-400">总积分</p>
+        <p className="text-lg font-black text-ink">{formatPoints(totalPoints)}</p>
+      </div>
+    </div>
+  );
+}
 
-      <div className="mt-5">
-        <div className="flex items-center justify-between text-sm font-bold text-slate-600">
-          <span>{copy.courseProgress}</span>
-          <span>{course.progress_percent}%</span>
+function ProfileMetric({ icon: Icon, label, value }: { icon: typeof BookOpenCheck; label: string; value: string | number }) {
+  return (
+    <div className="rounded-lg border border-slate-100 bg-white p-4 shadow-sm">
+      <Icon size={19} className="text-coral" />
+      <p className="mt-3 text-2xl font-black text-ink">{value}</p>
+      <p className="mt-1 text-sm font-bold text-slate-500">{label}</p>
+    </div>
+  );
+}
+
+function CourseStrip({ title, enrollments, emptyText }: { title: string; enrollments: Enrollment[]; emptyText: string }) {
+  return (
+    <section className="panel rounded-lg p-5">
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-lg font-black text-ink">{title}</h2>
+        <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-500">{enrollments.length} 门</span>
+      </div>
+      {enrollments.length === 0 ? (
+        <p className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">{emptyText}</p>
+      ) : (
+        <div className="mt-4 grid gap-3 sm:grid-cols-2">
+          {enrollments.slice(0, 4).map((enrollment) => (
+            <Link key={enrollment.id} href={`/courses/${enrollment.course.slug}`} className="group flex gap-3 rounded-lg border border-slate-100 bg-white p-3 transition hover:border-mint/60 hover:shadow-sm">
+              {enrollment.course.hero_image_url ? (
+                <img src={enrollment.course.hero_image_url} alt={enrollment.course.title} className="h-16 w-24 rounded-lg object-cover" />
+              ) : (
+                <div className="grid h-16 w-24 place-items-center rounded-lg bg-slate-100 text-xs font-bold text-slate-400">无封面</div>
+              )}
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-black text-ink group-hover:text-mint">{enrollment.course.title}</p>
+                <p className="mt-1 truncate text-sm text-slate-500">{enrollment.course.category} · {enrollment.course.level}</p>
+                {enrollment.status === "completed" ? (
+                  <p className="mt-2 text-xs font-black text-mint">已完成</p>
+                ) : (
+                  <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(enrollment.progress_percent, 100)}%` }} /></div>
+                )}
+              </div>
+            </Link>
+          ))}
         </div>
-        <div className="mt-2 h-2 overflow-hidden rounded-full bg-slate-100">
-          <div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(course.progress_percent, 100)}%` }} />
+      )}
+    </section>
+  );
+}
+
+function PostImageGrid({ images }: { images: string[] }) {
+  if (images.length === 0) return null;
+  if (images.length === 1) {
+    return <img src={images[0]} alt="学习动态图片" className="mt-3 max-h-[28rem] w-full rounded-lg object-cover" />;
+  }
+  return (
+    <div className="mt-3 grid grid-cols-3 gap-1.5">
+      {images.slice(0, 9).map((url, index) => (
+        <div key={`${url}-${index}`} className="aspect-square overflow-hidden rounded-lg bg-slate-50">
+          <img src={url} alt={`学习动态图片 ${index + 1}`} className="h-full w-full object-cover" />
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function PostCard({ post }: { post: StudentPost }) {
+  return (
+    <article className="rounded-lg border border-slate-100 bg-white p-4 shadow-sm">
+      <div className="flex items-center gap-3">
+        <Avatar name={post.student_name} url={post.avatar_url} />
+        <div>
+          <p className="font-black text-ink">{post.student_name}</p>
+          <p className="text-xs font-semibold text-slate-500">{formatDate(post.created_at)}{post.course_title ? ` · ${post.course_title}` : ""}</p>
         </div>
       </div>
-
-      <div className="mt-5 grid gap-3 sm:grid-cols-4">
-        {[
-          [copy.progress, course.progress_points],
-          [copy.activity, course.activity_points],
-          [copy.quizPractice, course.assessment_points],
-          [copy.completionBonus, course.completion_bonus]
-        ].map(([label, value]) => (
-          <div key={label} className="rounded-lg bg-slate-50 p-3">
-            <p className="text-xs font-bold text-slate-500">{label}</p>
-            <p className="mt-1 text-lg font-black text-ink">{formatPoints(Number(value))}</p>
-          </div>
-        ))}
+      <p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{post.content}</p>
+      <PostImageGrid images={post.image_urls ?? []} />
+      <div className="mt-3 flex gap-3 text-xs font-bold text-slate-500">
+        <span className="inline-flex items-center gap-1"><Heart size={14} />点赞</span>
+        <span className="inline-flex items-center gap-1"><MessageCircle size={14} />评论</span>
       </div>
     </article>
   );
 }
 
+function PostFeed({ posts }: { posts: StudentPost[] }) {
+  return (
+    <section className="panel rounded-lg p-5">
+      <div className="mb-4 flex items-center gap-2">
+        <MessageCircle size={18} className="text-coral" />
+        <h2 className="text-lg font-black text-ink">学习心得</h2>
+      </div>
+      {posts.length === 0 ? (
+        <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">这个同学暂时还没有公开学习心得。</p>
+      ) : (
+        <div className="grid gap-3">{posts.map((post) => <PostCard key={post.id} post={post} />)}</div>
+      )}
+    </section>
+  );
+}
+
 function EventRow({ event }: { event: StudentPointEvent }) {
   return (
-    <article className="flex gap-3 rounded-lg border border-slate-100 bg-white p-4 shadow-sm">
-      <span className="grid h-10 w-10 shrink-0 place-items-center rounded-lg bg-coral/10 text-coral">
-        <Sparkles size={18} />
-      </span>
-      <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div>
-            <p className="font-black text-ink">{event.label}</p>
-            <p className="mt-1 text-xs font-bold text-slate-500">
-              {sourceLabel(event.source)}{event.course_title ? `${copy.courseSeparator}${event.course_title}` : ""}
-            </p>
-          </div>
-          <div className="text-right">
-            <p className="font-black text-mint">+{formatPoints(event.points)}</p>
-            <p className="text-xs text-slate-500">{formatDate(event.occurred_at)}</p>
-          </div>
-        </div>
-        {event.detail ? <p className="mt-3 line-clamp-2 text-sm leading-6 text-slate-600">{event.detail}</p> : null}
+    <li className="flex items-start justify-between gap-3 rounded-lg border border-slate-100 bg-white p-3">
+      <div className="min-w-0">
+        <p className="font-bold text-ink">{event.label}</p>
+        <p className="mt-1 text-xs font-semibold text-slate-500">{sourceLabel(event.source)}{event.course_title ? ` · ${event.course_title}` : ""}</p>
       </div>
-    </article>
+      <span className="shrink-0 rounded-full bg-coral/10 px-2.5 py-1 text-xs font-black text-coral">+{formatPoints(event.points)}</span>
+    </li>
+  );
+}
+
+function CourseBreakdownCard({ item }: { item: StudentCoursePointBreakdown }) {
+  return (
+    <Link href={`/courses/${item.course_slug}`} className="block rounded-lg border border-slate-100 bg-white p-3 transition hover:border-mint/60 hover:shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <p className="truncate font-black text-ink">{item.course_title}</p>
+        <span className="text-sm font-black text-mint">+{formatPoints(item.total_points)}</span>
+      </div>
+      <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(item.progress_percent, 100)}%` }} /></div>
+      <p className="mt-2 text-xs font-semibold text-slate-500">课程进度 {item.progress_percent}%</p>
+    </Link>
   );
 }
 
 export default async function StudentLeaderboardDetailPage({ params }: { params: Promise<{ studentId: string }> }) {
   const { studentId } = await params;
   const id = Number(studentId);
-  if (!Number.isFinite(id)) {
-    notFound();
-  }
+  if (!Number.isFinite(id)) notFound();
 
-  const detail = await getStudentLeaderboardDetail(id);
-  if (!detail) {
-    notFound();
-  }
+  const [detail, publicProfile] = await Promise.all([
+    getStudentLeaderboardDetail(id),
+    getStudentPublicProfile(id)
+  ]);
 
-  const { student } = detail;
+  if (!detail) notFound();
+
+  const profile = publicProfile?.profile;
+  const student = detail.student;
+  const displayName = profile?.full_name || student.student_name;
+  const avatarUrl = profile?.avatar_url || student.avatar_url;
+  const region = profile?.region || "地区未填写";
+  const bio = profile?.bio || "这个同学还没有填写个人简介。";
+  const activeCourses = publicProfile?.active_courses ?? [];
+  const completedCourses = publicProfile?.completed_courses ?? [];
+  const posts = publicProfile?.posts ?? [];
+
   return (
-    <main className="bg-[#f7fbfb]">
-      <section className="bg-[linear-gradient(135deg,#eef8f4_0%,#fff7e9_55%,#f7fbfb_100%)] py-10">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <Link href="/leaderboard" className="inline-flex items-center gap-2 text-sm font-bold text-slate-600 hover:text-coral">
-            <ArrowLeft size={16} /> {copy.returnLeaderboard}
+    <main className="min-h-screen bg-[#f6fbf9] py-8">
+      <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+        <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
+          <Link href="/community" className="focus-ring inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-black text-ink shadow-sm ring-1 ring-slate-100">
+            <ArrowLeft size={16} /> 返回学习社区
           </Link>
-          <div className="mt-6 grid gap-6 lg:grid-cols-[0.95fr_1.05fr] lg:items-stretch">
-            <div className="rounded-lg border border-white/80 bg-white/90 p-6 shadow-soft">
-              <div className="flex items-center gap-4">
-                {student.avatar_url ? (
-                  <img src={student.avatar_url} alt={student.student_name} className="h-20 w-20 rounded-lg object-cover" />
-                ) : (
-                  <span className="grid h-20 w-20 place-items-center rounded-lg bg-mint/15 text-2xl font-black text-mint">
-                    {initials(student.student_name)}
-                  </span>
-                )}
+          <Link href="/leaderboard" className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-black text-white">
+            查看积分榜 <ArrowRight size={16} />
+          </Link>
+        </div>
+
+        <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+          <div className="grid gap-6">
+            <section className="panel overflow-hidden rounded-lg">
+              <div className="h-36 bg-[radial-gradient(circle_at_15%_20%,rgba(113,197,170,0.35),transparent_28%),radial-gradient(circle_at_82%_10%,rgba(237,116,98,0.2),transparent_24%),linear-gradient(120deg,#effaf5,#fff8ee)]" />
+              <div className="px-6 pb-6">
+                <div className="-mt-12 flex flex-wrap items-end justify-between gap-4">
+                  <div className="flex flex-wrap items-end gap-4">
+                    <div className="-translate-y-9 md:-translate-y-10">
+                      <Avatar name={displayName} url={avatarUrl} large />
+                    </div>
+                    <div className="-translate-y-9 md:-translate-y-10">
+                      <h1 className="text-3xl font-black leading-tight text-ink md:text-4xl">{displayName}</h1>
+                      <p className="mt-2 text-sm font-bold text-slate-500">{region}</p>
+                    </div>
+                  </div>
+                  <div className="-translate-y-9 md:-translate-y-10">
+                    <LevelPointsBadge level={student.level} totalPoints={student.total_points} />
+                  </div>
+                </div>
+
+                <div className="mt-6 grid gap-3 sm:grid-cols-3">
+                  <ProfileMetric icon={BookOpenCheck} label="在学课程" value={student.active_courses} />
+                  <ProfileMetric icon={Trophy} label="已完成课程" value={student.completed_courses} />
+                  <ProfileMetric icon={TrendingUp} label="本周积分" value={`+${formatPoints(student.weekly_points)}`} />
+                </div>
+
+                <div className="mt-5 rounded-lg border border-slate-100 bg-slate-50 p-5">
+                  <p className="text-xs font-black uppercase tracking-[0.2em] text-coral">About</p>
+                  <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{bio}</p>
+                </div>
+              </div>
+            </section>
+
+            <PostFeed posts={posts} />
+            <CourseStrip title="正在学习" enrollments={activeCourses} emptyText="暂时没有公开的在学课程。" />
+            <CourseStrip title="已完成课程" enrollments={completedCourses} emptyText="暂时没有公开的已完成课程。" />
+          </div>
+
+          <aside className="grid content-start gap-6">
+            <section className="panel rounded-lg p-5">
+              <div className="flex items-center gap-3">
+                <span className="grid h-12 w-12 place-items-center rounded-lg bg-coral/10 text-coral"><Award size={22} /></span>
                 <div>
-                  <p className="text-sm font-bold text-coral">{copy.profile}</p>
-                  <h1 className="mt-1 text-3xl font-black text-ink sm:text-4xl">{student.student_name}</h1>
-                  <p className="mt-2 text-sm text-slate-500">
-                    {copy.completedCourses} {student.completed_courses} {copy.courseSeparator}{copy.activeCourses} {student.active_courses} {copy.courseSeparator}{copy.averageProgress} {student.average_progress}%
-                  </p>
+                  <p className="text-sm font-black text-coral">学习成就</p>
+                  <h2 className="text-xl font-black text-ink">{student.level.name}</h2>
                 </div>
               </div>
-              <div className="mt-6 grid gap-3 sm:grid-cols-3">
-                <div className="rounded-lg bg-ink p-4 text-white">
-                  <Trophy size={20} className="text-sunshine" />
-                  <p className="mt-3 text-2xl font-black">{formatPoints(student.total_points)}</p>
-                  <p className="text-xs text-slate-300">{copy.totalPoints}</p>
+              <div className="mt-5 grid gap-3">
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold text-slate-500">总积分排名</p>
+                  <p className="mt-1 text-2xl font-black text-ink">#{detail.total_rank ?? "-"}</p>
                 </div>
-                <div className="rounded-lg bg-mint/10 p-4 text-mint">
-                  <TrendingUp size={20} />
-                  <p className="mt-3 text-2xl font-black">+{formatPoints(student.weekly_points)}</p>
-                  <p className="text-xs font-bold">{copy.weeklyGrowth}</p>
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold text-slate-500">上升速度排名</p>
+                  <p className="mt-1 text-2xl font-black text-ink">#{detail.rising_rank ?? "-"}</p>
                 </div>
-                <div className="rounded-lg bg-coral/10 p-4 text-coral">
-                  <Award size={20} />
-                  <p className="mt-3 text-2xl font-black">#{detail.total_rank ?? "-"}</p>
-                  <p className="text-xs font-bold">{copy.totalRank}</p>
+                <div className="rounded-lg bg-mint/10 p-4">
+                  <div className="flex items-center justify-between text-xs font-black text-mint"><span>下一等级进度</span><span>{student.level.progress_percent}%</span></div>
+                  <div className="mt-2 h-2 overflow-hidden rounded-full bg-white"><div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(student.level.progress_percent, 100)}%` }} /></div>
                 </div>
               </div>
-            </div>
+            </section>
 
-            <div className="grid gap-4 sm:grid-cols-2">
-              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <CheckCircle2 size={24} className="text-mint" />
-                <h2 className="mt-4 text-xl font-black text-ink">{copy.completionInsightTitle}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{copy.completionInsightText}</p>
+            <section className="panel rounded-lg p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <CalendarClock size={18} className="text-coral" />
+                <h2 className="text-lg font-black text-ink">最近积分动态</h2>
               </div>
-              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <CalendarClock size={24} className="text-coral" />
-                <h2 className="mt-4 text-xl font-black text-ink">{copy.recentGrowthTitle}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{copy.recentGrowthText}</p>
-              </div>
-              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm sm:col-span-2">
-                <BookOpenCheck size={24} className="text-sky-600" />
-                <h2 className="mt-4 text-xl font-black text-ink">{copy.learningTrackTitle}</h2>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{copy.learningTrackText}</p>
-              </div>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <section className="py-12">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 sm:px-6 lg:grid-cols-[1.05fr_0.95fr] lg:px-8">
-          <div>
-            <div className="flex items-end justify-between gap-4">
-              <div>
-                <p className="font-bold text-coral">Course Breakdown</p>
-                <h2 className="mt-2 text-3xl font-black text-ink">{copy.courseBreakdownTitle}</h2>
-              </div>
-            </div>
-            <div className="mt-5 grid gap-4">
-              {detail.course_breakdown.length ? (
-                detail.course_breakdown.map((course) => <CourseBreakdownCard key={course.course_id} course={course} />)
+              {detail.recent_events.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">暂无公开积分动态。</p>
               ) : (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-white p-8 text-sm text-slate-500">{copy.noCourseBreakdown}</div>
+                <ul className="grid gap-2">
+                  {detail.recent_events.slice(0, 6).map((event, index) => (
+                    <EventRow
+                      key={`${event.label}-${event.source}-${event.occurred_at ?? "time"}-${event.course_title ?? "course"}-${event.points}-${index}`}
+                      event={event}
+                    />
+                  ))}
+                </ul>
               )}
-            </div>
-          </div>
+            </section>
 
-          <div>
-            <p className="font-bold text-coral">Recent Points</p>
-            <h2 className="mt-2 text-3xl font-black text-ink">{copy.recentPointsTitle}</h2>
-            <div className="mt-5 grid gap-3">
-              {detail.recent_events.length ? (
-                detail.recent_events.map((event, index) => <EventRow key={`${event.source}-${event.occurred_at}-${index}`} event={event} />)
+            <section className="panel rounded-lg p-5">
+              <div className="mb-4 flex items-center gap-2">
+                <Sparkles size={18} className="text-coral" />
+                <h2 className="text-lg font-black text-ink">课程积分</h2>
+              </div>
+              {detail.course_breakdown.length === 0 ? (
+                <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm text-slate-500">暂无课程积分记录。</p>
               ) : (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-white p-8 text-sm text-slate-500">{copy.noRecentPoints}</div>
+                <div className="grid gap-2">{detail.course_breakdown.slice(0, 5).map((item) => <CourseBreakdownCard key={item.course_id} item={item} />)}</div>
               )}
-            </div>
-          </div>
+            </section>
+
+            <section className="rounded-lg border border-dashed border-coral/30 bg-coral/5 p-5">
+              <div className="flex items-center gap-2 text-coral"><Star size={18} /><p className="font-black">公开主页</p></div>
+              <p className="mt-2 text-sm leading-7 text-slate-600">这里展示的是该同学公开的课程、学习心得和积分成长记录。</p>
+            </section>
+          </aside>
         </div>
-      </section>
+      </div>
     </main>
   );
 }

@@ -99,6 +99,77 @@ def ensure_schema_extensions(db: Session) -> None:
     if "teachers" in inspector.get_table_names():
         db.execute(text("ALTER TABLE teachers ALTER COLUMN avatar_url TYPE TEXT"))
 
+    if "student_posts" in inspector.get_table_names():
+        student_post_columns = {column["name"] for column in inspector.get_columns("student_posts")}
+        if "image_urls" not in student_post_columns:
+            db.execute(text("ALTER TABLE student_posts ADD COLUMN image_urls JSONB NOT NULL DEFAULT '[]'::jsonb"))
+
+    if "course_categories" in inspector.get_table_names():
+        course_category_columns = {column["name"] for column in inspector.get_columns("course_categories")}
+        if "institution_id" not in course_category_columns:
+            db.execute(text("ALTER TABLE course_categories ADD COLUMN institution_id INTEGER"))
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_course_categories_institution_id "
+                    "ON course_categories(institution_id)"
+                )
+            )
+        db.execute(
+            text(
+                """
+                UPDATE course_categories
+                SET institution_id = matched.institution_id
+                FROM (
+                    SELECT cc.id, MIN(c.institution_id) AS institution_id
+                    FROM course_categories cc
+                    JOIN courses c
+                      ON c.category = cc.name
+                      OR c.category LIKE cc.name || ' / %'
+                      OR c.category LIKE '% / ' || cc.name
+                    WHERE c.institution_id IS NOT NULL
+                    GROUP BY cc.id
+                ) matched
+                WHERE course_categories.id = matched.id
+                  AND course_categories.institution_id IS DISTINCT FROM matched.institution_id
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                UPDATE course_categories child
+                SET institution_id = parent.institution_id
+                FROM course_categories parent
+                WHERE child.parent_id = parent.id
+                  AND child.institution_id IS NULL
+                  AND parent.institution_id IS NOT NULL
+                """
+            )
+        )
+        db.execute(
+            text(
+                """
+                UPDATE course_categories parent
+                SET institution_id = child.institution_id
+                FROM course_categories child
+                WHERE child.parent_id = parent.id
+                  AND parent.institution_id IS NULL
+                  AND child.institution_id IS NOT NULL
+                """
+            )
+        )
+
+    if "submissions" in inspector.get_table_names():
+        submission_columns = {column["name"] for column in inspector.get_columns("submissions")}
+        if "lesson_item_id" not in submission_columns:
+            db.execute(text("ALTER TABLE submissions ADD COLUMN lesson_item_id INTEGER REFERENCES lesson_items(id)"))
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_submissions_lesson_item_id "
+                    "ON submissions(lesson_item_id)"
+                )
+            )
+
     if "users" in inspector.get_table_names():
         user_columns = {column["name"] for column in inspector.get_columns("users")}
         user_column_sql = {

@@ -11,6 +11,21 @@ function initials(name: string) {
 function formatPoints(points: number) {
   return points.toLocaleString("zh-CN");
 }
+const levelRows = [
+  ["\uD83C\uDF31", "\u65b0\u82bd\u5b66\u5458", "0"],
+  ["\uD83E\uDDED", "\u63a2\u7d22\u8005", "300"],
+  ["\uD83D\uDD25", "\u8fdb\u9636\u8005", "800"],
+  ["\uD83D\uDEE1\uFE0F", "\u77e5\u8bc6\u9a91\u58eb", "1500"],
+  ["\u2728", "\u5b66\u4e60\u5bfc\u5e08", "2600"],
+  ["\uD83D\uDC51", "\u667a\u6167\u5927\u5e08", "4200"],
+  ["\uD83C\uDF1F", "\u661f\u8fb0\u5b66\u8005", "6500"]
+];
+
+const ruleRows = [
+  ["\u4e0a\u8bfe\u901f\u5ea6", "\u89c6\u9891 +20\u3001\u8bb2\u4e49 +14\u3001\u7ec3\u4e60\u9879\u76ee +10\u3001\u6d4b\u9a8c\u9879\u76ee +12\uff0c\u8d8a\u65e9\u5b8c\u6210\u53ef\u83b7\u5f97\u901f\u5ea6\u5956\u52b1\uff1b\u6574\u95e8\u8bfe\u5b8c\u6210\u989d\u5916 +180\u3002"],
+  ["\u7ec3\u4e60\u4e0e\u6d4b\u9a8c", "\u6bcf\u9898\u63d0\u4ea4\u57fa\u7840 +2\uff0c\u5f97\u5206 \u00d73\uff1b\u6b63\u786e\u7387\u8fbe\u5230 80% \u989d\u5916 +8\uff0c\u6ee1\u5206\u518d +5\u3002"],
+  ["\u793e\u533a\u8d21\u732e", "\u63d0\u95ee +5\uff0c\u56de\u7b54 +10\uff1b\u56de\u7b54\u6bcf\u83b7 1 \u4e2a\u8d5e +4\uff0c\u88ab\u91c7\u7eb3\u4e3a\u6700\u4f73\u7b54\u6848 +20\uff1b\u5206\u4eab\u7b14\u8bb0 +8\uff0c\u7b14\u8bb0\u6bcf\u83b7 1 \u4e2a\u8d5e +4\u3002"]
+];
 
 function RankingList({
   title,
@@ -62,6 +77,7 @@ function RankingList({
                 )}
                 <div className="min-w-0 flex-1">
                   <p className="truncate font-bold text-ink">{entry.student_name}</p>
+                  <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-black text-mint">{entry.level.icon} {entry.level.name}</p>
                   <p className="mt-1 text-xs text-slate-500">
                     {"\u5df2\u5b8c\u6210 "}
                     {entry.completed_courses}
@@ -131,6 +147,7 @@ export default async function LeaderboardPage() {
                   )}
                   <div>
                     <p className="text-2xl font-black">{topStudent.student_name}</p>
+                    <p className="mt-1 text-sm font-bold text-mint">{topStudent.level.icon} {topStudent.level.name}</p>
                     <p className="mt-1 text-sm text-slate-300">
                       {"\u603b\u79ef\u5206 "}
                       {formatPoints(topStudent.total_points)}
@@ -176,6 +193,34 @@ export default async function LeaderboardPage() {
         </div>
       </section>
 
+      <section className="pb-12">
+        <div className="mx-auto grid max-w-7xl gap-6 px-4 sm:px-6 lg:grid-cols-[1.15fr_0.85fr] lg:px-8">
+          <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-soft md:p-8">
+            <p className="text-sm font-black text-coral">积分规则</p>
+            <h2 className="mt-2 text-3xl font-black text-ink">学习、答题和互助都会变成可见成长</h2>
+            <div className="mt-6 grid gap-3">
+              {ruleRows.map(([title, text]) => (
+                <div key={title} className="rounded-lg bg-slate-50 p-4">
+                  <p className="font-black text-ink">{title}</p>
+                  <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-soft md:p-8">
+            <p className="text-sm font-black text-coral">等级体系</p>
+            <h2 className="mt-2 text-3xl font-black text-ink">像游戏一样升级</h2>
+            <div className="mt-6 grid gap-2">
+              {levelRows.map(([icon, name, points]) => (
+                <div key={name} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
+                  <span className="flex items-center gap-3 font-black text-ink"><span className="text-xl">{icon}</span>{name}</span>
+                  <span className="text-sm font-bold text-slate-500">{Number(points).toLocaleString("zh-CN")}+</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      </section>
       <section className="pb-16">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="grid gap-4 rounded-lg border border-slate-200 bg-white p-6 shadow-soft md:grid-cols-3 md:p-8">

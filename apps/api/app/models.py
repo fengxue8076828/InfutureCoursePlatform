@@ -92,6 +92,7 @@ class Institution(Base, TimestampMixin):
     description: Mapped[str] = mapped_column(Text)
 
     courses: Mapped[list["Course"]] = relationship(back_populates="institution")
+    course_categories: Mapped[list["CourseCategory"]] = relationship(back_populates="institution")
     teachers: Mapped[list["Teacher"]] = relationship(back_populates="institution")
     admins: Mapped[list["User"]] = relationship(back_populates="institution")
 
@@ -152,6 +153,7 @@ class CourseCategory(Base, TimestampMixin):
     __tablename__ = "course_categories"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
     parent_id: Mapped[int | None] = mapped_column(
         ForeignKey("course_categories.id", ondelete="CASCADE"), index=True
     )
@@ -166,6 +168,7 @@ class CourseCategory(Base, TimestampMixin):
     children: Mapped[list["CourseCategory"]] = relationship(
         back_populates="parent", cascade="all, delete-orphan", order_by="CourseCategory.position"
     )
+    institution: Mapped[Institution] = relationship(back_populates="course_categories")
 
 
 class Course(Base, TimestampMixin):
@@ -366,6 +369,7 @@ class Submission(Base, TimestampMixin):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     question_id: Mapped[int] = mapped_column(ForeignKey("questions.id"), index=True)
     enrollment_id: Mapped[int | None] = mapped_column(ForeignKey("enrollments.id"))
+    lesson_item_id: Mapped[int | None] = mapped_column(ForeignKey("lesson_items.id"), index=True)
     answer: Mapped[dict] = mapped_column(JSONB, default=dict)
     score: Mapped[float | None] = mapped_column(Float)
     status: Mapped[SubmissionStatus] = mapped_column(
@@ -376,6 +380,8 @@ class Submission(Base, TimestampMixin):
 
     user: Mapped[User] = relationship(back_populates="submissions", foreign_keys=[user_id])
     question: Mapped[Question] = relationship(back_populates="submissions")
+    enrollment: Mapped[Enrollment | None] = relationship()
+    lesson_item: Mapped[LessonItem | None] = relationship()
     grader: Mapped[User | None] = relationship(foreign_keys=[grader_id])
 
 
@@ -403,6 +409,7 @@ class StudentPost(Base, TimestampMixin):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), index=True)
     content: Mapped[str] = mapped_column(Text)
+    image_urls: Mapped[list[str]] = mapped_column(JSONB, default=list)
     visibility: Mapped[str] = mapped_column(String(40), default="public", index=True)
 
     user: Mapped[User] = relationship()

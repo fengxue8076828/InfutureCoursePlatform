@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_user, get_optional_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
@@ -40,6 +40,8 @@ from app.schemas import (
     AuthOut,
     ChapterNoteIn,
     ChapterNoteOut,
+    CodeRunIn,
+    CodeRunOut,
     CommunityAnswerCreate,
     CommunityAnswerOut,
     CommunityHomeOut,
@@ -72,6 +74,8 @@ from app.schemas import (
     StudentQuestionOut,
     StudentSocialHomeOut,
 )
+from app.services.code_runner import code_tests_for_question, run_python_code
+from app.services.points import calculate_student_point_detail, load_student_with_point_data
 
 router = APIRouter()
 
@@ -253,7 +257,7 @@ def dashboard(
 def my_courses(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[Enrollment]:
-    return list(
+    enrollments = list(
         db.scalars(
             select(Enrollment)
             .where(Enrollment.user_id == current_user.id)
@@ -266,6 +270,10 @@ def my_courses(
             .order_by(Enrollment.updated_at.desc())
         )
     )
+    for enrollment in enrollments:
+        update_enrollment_progress(db, enrollment)
+    db.commit()
+    return enrollments
 
 
 def enrollment_options():
@@ -300,6 +308,7 @@ def post_out(post: StudentPost) -> StudentPostOut:
         student_name=post.user.full_name if post.user else "Student",
         avatar_url=post.user.avatar_url if post.user else None,
         content=post.content,
+        image_urls=list(post.image_urls or []),
         course_id=post.course_id,
         course_title=post.course.title if post.course else None,
         created_at=post.created_at,
@@ -317,27 +326,11 @@ def load_enrollments_for_user(db: Session, user_id: int) -> list[Enrollment]:
     )
 
 
-def student_points_summary(user: User, enrollments: list[Enrollment], db: Session) -> tuple[int, int, list[str]]:
+def student_points_summary(user: User, enrollments: list[Enrollment], db: Session) -> tuple[int, int, object, list[str]]:
     week_start = datetime.utcnow() - timedelta(days=7)
-    submissions = list(db.scalars(select(Submission).where(Submission.user_id == user.id)))
-    assessment_points = sum(int(submission.score or 0) for submission in submissions)
-    weekly_points = sum(int(submission.score or 0) for submission in submissions if submission.created_at and submission.created_at >= week_start)
-    progress_points = sum(round(float(enrollment.progress_percent or 0) * 0.8) for enrollment in enrollments)
-    completion_bonus = sum(80 for enrollment in enrollments if enrollment.status == "completed")
-    total_points = assessment_points + progress_points + completion_bonus
-    achievements: list[str] = []
-    if enrollments:
-        achievements.append("\u5df2\u5f00\u542f\u4e2a\u4eba\u5b66\u4e60\u65c5\u7a0b")
-    if any(float(enrollment.progress_percent or 0) >= 50 for enrollment in enrollments):
-        achievements.append("\u8bfe\u7a0b\u8fdb\u5ea6\u7a81\u7834 50%")
-    if any(enrollment.status == "completed" for enrollment in enrollments):
-        achievements.append("\u5b8c\u6210\u4e00\u95e8\u8bfe\u7a0b")
-    if assessment_points > 0:
-        achievements.append("\u5b8c\u6210\u9898\u5e93\u7ec3\u4e60")
-    if not achievements:
-        achievements.append("\u51c6\u5907\u5f00\u59cb\u5b66\u4e60")
-    return total_points, weekly_points, achievements
-
+    point_student = load_student_with_point_data(db, user.id) or user
+    detail = calculate_student_point_detail(db, point_student, week_start)
+    return int(detail["total_points"]), int(detail["weekly_points"]), detail["level"], list(detail["achievements"])
 
 def active_and_completed(enrollments: list[Enrollment]) -> tuple[list[EnrollmentOut], list[EnrollmentOut]]:
     active = [EnrollmentOut.model_validate(enrollment) for enrollment in enrollments if enrollment.status == "active"]
@@ -412,7 +405,7 @@ def my_social_home(
     following_ids = list(
         db.scalars(select(StudentFollow.followee_id).where(StudentFollow.follower_id == current_user.id))
     )
-    total_points, weekly_points, achievements = student_points_summary(current_user, enrollments, db)
+    total_points, weekly_points, level, achievements = student_points_summary(current_user, enrollments, db)
     return StudentSocialHomeOut(
         profile=user_profile_summary(current_user, include_email=True),
         active_courses=active_courses,
@@ -420,6 +413,7 @@ def my_social_home(
         recommended_courses=recommended_courses,
         total_points=total_points,
         weekly_points=weekly_points,
+        level=level,
         achievements=achievements,
         posts=[post_out(post) for post in posts],
         suggested_students=[user_profile_summary(student) for student in suggested_students],
@@ -439,7 +433,13 @@ def create_learning_post(
         )
         if not enrollment:
             raise HTTPException(status_code=403, detail="You can only post about enrolled courses")
-    post = StudentPost(user_id=current_user.id, course_id=payload.course_id, content=payload.content.strip())
+    image_urls = [url.strip() for url in payload.image_urls if url.strip()][:9]
+    post = StudentPost(
+        user_id=current_user.id,
+        course_id=payload.course_id,
+        content=payload.content.strip(),
+        image_urls=image_urls,
+    )
     db.add(post)
     db.commit()
     post = db.scalar(
@@ -455,7 +455,7 @@ def create_learning_post(
 @router.get("/students/{student_id}/profile", response_model=StudentPublicProfileOut)
 def student_public_profile(
     student_id: int,
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ) -> StudentPublicProfileOut:
     student = db.scalar(select(User).where(User.id == student_id, User.role == UserRole.student, User.is_active.is_(True)))
@@ -472,9 +472,14 @@ def student_public_profile(
             .limit(12)
         )
     )
-    is_following = db.scalar(
-        select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == student.id)
-    ) is not None
+    is_following = (
+        db.scalar(
+            select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == student.id)
+        )
+        is not None
+        if current_user and current_user.role == UserRole.student
+        else False
+    )
     return StudentPublicProfileOut(
         profile=user_profile_summary(student),
         active_courses=active_courses,
@@ -641,7 +646,7 @@ def community_points_for_user(db: Session, user_id: int) -> int:
 
 
 
-def ensure_community_demo_data(db: Session, current_user: User) -> None:
+def ensure_community_demo_data(db: Session, current_user: User | None) -> None:
     question_count = db.scalar(select(func.count()).select_from(CommunityQuestion)) or 0
     note_count = db.scalar(select(func.count()).select_from(CommunityNoteShare)) or 0
     if question_count and note_count:
@@ -670,9 +675,10 @@ def ensure_community_demo_data(db: Session, current_user: User) -> None:
             db.flush()
         demo_users.append(user)
 
-    enrollments = load_enrollments_for_user(db, current_user.id)
+    enrollments = load_enrollments_for_user(db, current_user.id) if current_user else []
     first_course = enrollments[0].course if enrollments else None
     first_chapter = (first_course.chapters or [None])[0] if first_course and first_course.chapters else None
+    demo_question_owner_id = current_user.id if current_user and current_user.role == UserRole.student else demo_users[2].id
 
     if not question_count:
         questions = [
@@ -689,7 +695,7 @@ def ensure_community_demo_data(db: Session, current_user: User) -> None:
                 tags={"items": ["\u7b54\u9898\u6280\u5de7", "\u591a\u9009\u9898"]},
             ),
             CommunityQuestion(
-                user_id=current_user.id,
+                user_id=demo_question_owner_id,
                 title="\u8fd9\u4e00\u7ae0\u7684\u91cd\u70b9\u5e94\u8be5\u600e\u4e48\u590d\u4e60\uff1f",
                 body="\u6211\u60f3\u628a\u7ae0\u8282\u7b14\u8bb0\u6574\u7406\u6210\u590d\u4e60\u6e05\u5355\uff0c\u4f46\u4e0d\u77e5\u9053\u5148\u6293\u54ea\u4e9b\u70b9\u3002",
                 course_id=first_course.id if first_course else None,
@@ -712,7 +718,7 @@ def ensure_community_demo_data(db: Session, current_user: User) -> None:
             CommunityNoteShare(user_id=demo_users[2].id, title="\u542c\u8bfe\u7b14\u8bb0\u600e\u4e48\u8bb0", content="\u7528\u95ee\u9898\u5f0f\u7b14\u8bb0\uff1a\u8fd9\u8282\u8bfe\u89e3\u51b3\u4ec0\u4e48\uff1f\u6211\u8fd8\u5361\u5728\u54ea\u91cc\uff1f", likes_count=5),
         ])
 
-    if demo_users and not db.scalar(select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == demo_users[0].id)):
+    if current_user and demo_users and not db.scalar(select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == demo_users[0].id)):
         db.add(StudentFollow(follower_id=current_user.id, followee_id=demo_users[0].id))
     db.commit()
 
@@ -740,11 +746,13 @@ def validate_community_course_reference(
 @router.get("/community", response_model=CommunityHomeOut)
 def community_home(
     q: str | None = None,
-    current_user: User = Depends(get_current_user),
+    current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ) -> CommunityHomeOut:
-    ensure_student_user(current_user)
+    if current_user:
+        ensure_student_user(current_user)
     ensure_community_demo_data(db, current_user)
+    current_user_id = current_user.id if current_user else 0
     search = (q or "").strip()
     pattern = f"%{search}%"
 
@@ -769,12 +777,14 @@ def community_home(
         reverse=True,
     )
 
-    enrollments = load_enrollments_for_user(db, current_user.id)
+    enrollments = load_enrollments_for_user(db, current_user.id) if current_user else []
     enrolled_course_ids = [enrollment.course_id for enrollment in enrollments]
-    recommended_stmt = select(CommunityQuestion).where(CommunityQuestion.user_id != current_user.id).options(*question_options())
+    recommended_stmt = select(CommunityQuestion).options(*question_options())
+    if current_user:
+        recommended_stmt = recommended_stmt.where(CommunityQuestion.user_id != current_user.id)
     if search:
         recommended_stmt = recommended_stmt.where(or_(CommunityQuestion.title.ilike(pattern), CommunityQuestion.body.ilike(pattern)))
-    elif enrolled_course_ids:
+    elif current_user and enrolled_course_ids:
         recommended_stmt = recommended_stmt.where(
             or_(
                 CommunityQuestion.course_id.in_(enrolled_course_ids),
@@ -782,6 +792,8 @@ def community_home(
                 CommunityQuestion.linked_question_id.is_not(None),
             )
         )
+    elif not current_user:
+        recommended_stmt = recommended_stmt.where(CommunityQuestion.answers.any())
     recommended_questions = list(
         db.scalars(
             recommended_stmt.order_by(CommunityQuestion.updated_at.desc(), CommunityQuestion.created_at.desc()).limit(12)
@@ -799,35 +811,45 @@ def community_home(
         note_stmt = note_stmt.where(or_(CommunityNoteShare.title.ilike(pattern), CommunityNoteShare.content.ilike(pattern)))
     notes = list(db.scalars(note_stmt))
 
-    student_stmt = select(User).where(User.role == UserRole.student, User.is_active.is_(True), User.id != current_user.id).limit(40)
+    student_stmt = select(User).where(User.role == UserRole.student, User.is_active.is_(True))
+    if current_user:
+        student_stmt = student_stmt.where(User.id != current_user.id)
+    student_stmt = student_stmt.limit(40)
     if search:
         student_stmt = student_stmt.where(or_(User.full_name.ilike(pattern), User.bio.ilike(pattern), User.region.ilike(pattern)))
     students = list(db.scalars(student_stmt))
     hot_students = sorted(students, key=lambda student: community_points_for_user(db, student.id), reverse=True)[:8]
 
-    following_ids = list(db.scalars(select(StudentFollow.followee_id).where(StudentFollow.follower_id == current_user.id)))
+    following_ids = list(db.scalars(select(StudentFollow.followee_id).where(StudentFollow.follower_id == current_user.id))) if current_user else []
     reference_questions = list(
         db.scalars(
             select(Question)
-            .where(Question.status == QuestionStatus.published)
+            .where(
+                Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
+            )
             .order_by(Question.updated_at.desc())
             .limit(80)
         )
     )
-    recent_messages = list(
-        db.scalars(
-            select(CommunityMessage)
-            .where(or_(CommunityMessage.sender_id == current_user.id, CommunityMessage.receiver_id == current_user.id))
-            .options(joinedload(CommunityMessage.sender), joinedload(CommunityMessage.receiver))
-            .order_by(CommunityMessage.created_at.desc())
-            .limit(10)
+    recent_messages = (
+        list(
+            db.scalars(
+                select(CommunityMessage)
+                .where(or_(CommunityMessage.sender_id == current_user.id, CommunityMessage.receiver_id == current_user.id))
+                .options(joinedload(CommunityMessage.sender), joinedload(CommunityMessage.receiver))
+                .order_by(CommunityMessage.created_at.desc())
+                .limit(10)
+            )
         )
+        if current_user
+        else []
     )
 
     return CommunityHomeOut(
-        questions=[community_question_out(question, current_user.id, db) for question in questions],
-        recommended_questions=[community_question_out(question, current_user.id, db) for question in recommended_questions],
-        notes=[community_note_out(note, current_user.id, db) for note in notes],
+        questions=[community_question_out(question, current_user_id, db) for question in questions],
+        recommended_questions=[community_question_out(question, current_user_id, db) for question in recommended_questions],
+        notes=[community_note_out(note, current_user_id, db) for note in notes],
         students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in students],
         hot_students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in hot_students],
         following_ids=following_ids,
@@ -843,7 +865,7 @@ def community_home(
             for question in reference_questions
         ],
         recent_messages=[community_message_out(message) for message in recent_messages],
-        community_points=community_points_for_user(db, current_user.id),
+        community_points=community_points_for_user(db, current_user.id) if current_user else 0,
     )
 
 @router.post("/community/questions", response_model=CommunityQuestionOut, status_code=201)
@@ -856,7 +878,11 @@ def create_community_question(
     validate_community_course_reference(db, current_user, payload.course_id, payload.chapter_id)
     if payload.linked_question_id is not None:
         linked_question = db.scalar(
-            select(Question).where(Question.id == payload.linked_question_id, Question.status == QuestionStatus.published)
+            select(Question).where(
+                Question.id == payload.linked_question_id,
+                Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
+            )
         )
         if not linked_question:
             raise HTTPException(status_code=404, detail="Linked question not found")
@@ -1255,6 +1281,8 @@ def complete_item(
     )
     if not enrollment:
         raise HTTPException(status_code=403, detail="No enrollment for this lesson")
+    if enrollment.status == "completed":
+        return {"status": "completed", "progress_percent": 100.0}
 
     progress = db.scalar(
         select(ProgressRecord).where(
@@ -1269,21 +1297,7 @@ def complete_item(
     progress.notes = payload.notes
     progress.score = payload.score
 
-    total_items = db.scalar(
-        select(func.count(LessonItem.id))
-        .join(LessonItem.chapter)
-        .where(LessonItem.chapter.has(course_id=enrollment.course_id))
-    )
-    completed_items = db.scalar(
-        select(func.count(ProgressRecord.id)).where(
-            ProgressRecord.enrollment_id == enrollment.id,
-            ProgressRecord.completed_at.is_not(None),
-        )
-    )
-    enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
-    if enrollment.progress_percent >= 100:
-        enrollment.status = "completed"
-
+    update_enrollment_progress(db, enrollment)
     db.commit()
     return {"status": "completed", "progress_percent": enrollment.progress_percent}
 
@@ -1297,7 +1311,10 @@ def list_questions(
 ) -> list[Question]:
     stmt = (
         select(Question)
-        .where(Question.status == QuestionStatus.published)
+        .where(
+            Question.status == QuestionStatus.published,
+            Question.type != QuestionType.code_review,
+        )
         .options(joinedload(Question.institution), selectinload(Question.options), selectinload(Question.media_assets))
         .order_by(Question.created_at.desc())
     )
@@ -1315,6 +1332,31 @@ def list_questions(
     if type:
         stmt = stmt.where(Question.type == type)
     return list(db.scalars(stmt))
+
+
+@router.post("/questions/{question_id}/run-code", response_model=CodeRunOut)
+def run_question_code(
+    question_id: int,
+    payload: CodeRunIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    if payload.language.lower() not in {"python", "py"}:
+        raise HTTPException(status_code=422, detail="Only Python code execution is supported")
+
+    question = db.get(Question, question_id)
+    if not question or question.status != QuestionStatus.published or question.type != QuestionType.coding:
+        raise HTTPException(status_code=404, detail="Coding question not found")
+
+    if payload.lesson_item_id is not None:
+        item, _enrollment = get_student_lesson_item(payload.lesson_item_id, current_user, db, payload.enrollment_id)
+        if item.item_type not in {LessonItemType.exercise, LessonItemType.quiz}:
+            raise HTTPException(status_code=400, detail="Lesson item has no question submissions")
+        if question.id not in item_question_ids(item):
+            raise HTTPException(status_code=400, detail="Question does not belong to this lesson item")
+
+    tests = code_tests_for_question(question.content, question.answer_key)
+    return run_python_code(payload.code, tests)
 
 
 def normalize_answer_value(value: object) -> object:
@@ -1345,6 +1387,19 @@ def expected_answer_values(answer_key: dict) -> list[object]:
 
 def auto_grade_score(question: Question, answer_payload: dict) -> int:
     answer_key = question.answer_key or {}
+
+    if question.type == QuestionType.coding:
+        submitted_code = answer_payload.get("answer")
+        if not isinstance(submitted_code, str) or not submitted_code.strip():
+            return 0
+        tests = code_tests_for_question(question.content, answer_key)
+        result = run_python_code(submitted_code, tests)
+        if tests:
+            return question.points if result.get("ok") and result.get("passed") else 0
+        expected_output = answer_key.get("expected_output")
+        if isinstance(expected_output, str) and expected_output.strip():
+            return question.points if result.get("stdout", "").strip() == expected_output.strip() else 0
+        return 0
 
     if question.type == QuestionType.fill_blank:
         expected = expected_answer_values(answer_key)
@@ -1411,10 +1466,97 @@ def update_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
     enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
 
 
+def latest_submission_by_question_id(
+    db: Session,
+    user_id: int,
+    enrollment_id: int,
+    lesson_item_id: int,
+) -> dict[int, Submission]:
+    submissions = list(
+        db.scalars(
+            select(Submission)
+            .where(
+                Submission.user_id == user_id,
+                Submission.enrollment_id == enrollment_id,
+                Submission.lesson_item_id == lesson_item_id,
+            )
+            .order_by(Submission.question_id, Submission.created_at.desc(), Submission.id.desc())
+        )
+    )
+    latest_by_question_id: dict[int, Submission] = {}
+    for submission in submissions:
+        if submission.question_id not in latest_by_question_id:
+            latest_by_question_id[submission.question_id] = submission
+    return latest_by_question_id
+
+
+def update_quiz_progress_from_submissions(db: Session, item: LessonItem, enrollment: Enrollment) -> dict[str, float | int | bool | None | str]:
+    configured_question_ids = item_question_ids(item)
+    if not configured_question_ids:
+        return {"status": "empty", "score": 0.0, "total_score": 0.0, "passed": None, "pending_manual_count": 0}
+
+    questions = list(
+        db.scalars(
+            select(Question).where(
+                Question.id.in_(configured_question_ids),
+                Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
+            )
+        )
+    )
+    question_by_id = {question.id: question for question in questions}
+    latest_submissions = latest_submission_by_question_id(db, enrollment.user_id, enrollment.id, item.id)
+    relevant_submissions = [
+        latest_submissions[question_id]
+        for question_id in configured_question_ids
+        if question_id in question_by_id and question_id in latest_submissions
+    ]
+    pending_manual_count = sum(
+        1 for submission in relevant_submissions if submission.status == SubmissionStatus.pending_manual
+    )
+    score_total = sum(float(submission.score or 0) for submission in relevant_submissions)
+    total_score = sum(float(question.points or 0) for question in questions)
+
+    progress = db.scalar(
+        select(ProgressRecord).where(
+            ProgressRecord.enrollment_id == enrollment.id,
+            ProgressRecord.lesson_item_id == item.id,
+        )
+    )
+    passed: bool | None
+    status: str
+    if pending_manual_count:
+        passed = None
+        status = "pending_manual"
+        if progress:
+            db.delete(progress)
+    else:
+        passed = total_score > 0 and score_total / total_score >= 0.8
+        status = "passed" if passed else "failed"
+        if passed:
+            if not progress:
+                progress = ProgressRecord(enrollment_id=enrollment.id, lesson_item_id=item.id)
+                db.add(progress)
+            progress.completed_at = datetime.utcnow()
+            progress.notes = None
+            progress.score = score_total
+        elif progress:
+            db.delete(progress)
+    update_enrollment_progress(db, enrollment)
+    return {
+        "status": status,
+        "score": score_total,
+        "total_score": total_score,
+        "passed": passed,
+        "pending_manual_count": pending_manual_count,
+    }
+
+
 def latest_submissions_for_item(
     db: Session,
     user_id: int,
     enrollment_id: int,
+    lesson_item_id: int,
     question_ids: list[int],
 ) -> list[Submission]:
     if not question_ids:
@@ -1426,6 +1568,7 @@ def latest_submissions_for_item(
             .where(
                 Submission.user_id == user_id,
                 Submission.enrollment_id == enrollment_id,
+                Submission.lesson_item_id == lesson_item_id,
                 Submission.question_id.in_(question_ids),
             )
             .order_by(Submission.question_id, Submission.created_at.desc(), Submission.id.desc())
@@ -1455,14 +1598,18 @@ def item_submission_state(
             select(Question).where(
                 Question.id.in_(configured_question_ids),
                 Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
             )
         )
     )
     question_by_id = {question.id: question for question in questions}
     published_question_ids = [question_id for question_id in configured_question_ids if question_id in question_by_id]
-    submissions = latest_submissions_for_item(db, current_user.id, enrollment.id, published_question_ids)
+    submissions = latest_submissions_for_item(db, current_user.id, enrollment.id, item.id, published_question_ids)
     score = sum(float(submission.score or 0) for submission in submissions)
     total_score = sum(float(question_by_id[question_id].points or 0) for question_id in published_question_ids)
+    pending_manual_count = sum(
+        1 for submission in submissions if submission.status == SubmissionStatus.pending_manual
+    )
     progress = db.scalar(
         select(ProgressRecord).where(
             ProgressRecord.enrollment_id == enrollment.id,
@@ -1471,7 +1618,7 @@ def item_submission_state(
     )
     passed = None
     if item.item_type == LessonItemType.quiz and submissions:
-        passed = total_score > 0 and score / total_score >= 0.8
+        passed = None if pending_manual_count else total_score > 0 and score / total_score >= 0.8
 
     return LessonItemSubmissionStateOut(
         item_id=item.id,
@@ -1479,6 +1626,7 @@ def item_submission_state(
         score=score,
         total_score=total_score,
         passed=passed,
+        pending_manual_count=pending_manual_count,
         completed_at=progress.completed_at if progress else None,
         submissions=[SubmissionOut.model_validate(submission) for submission in submissions],
     )
@@ -1494,6 +1642,8 @@ def reset_item_submissions(
     item, enrollment = get_student_lesson_item(item_id, current_user, db, enrollment_id)
     if item.item_type not in {LessonItemType.exercise, LessonItemType.quiz}:
         raise HTTPException(status_code=400, detail="Lesson item has no question submissions")
+    if enrollment.status == "completed":
+        raise HTTPException(status_code=409, detail="Course is completed; submissions are read-only")
 
     configured_question_ids = item_question_ids(item)
     if configured_question_ids:
@@ -1501,6 +1651,7 @@ def reset_item_submissions(
             delete(Submission).where(
                 Submission.user_id == current_user.id,
                 Submission.enrollment_id == enrollment.id,
+                Submission.lesson_item_id == item.id,
                 Submission.question_id.in_(configured_question_ids),
             )
         )
@@ -1530,6 +1681,18 @@ def submit_answer(
     if question.status != QuestionStatus.published:
         raise HTTPException(status_code=404, detail="Question not found")
 
+    enrollment_id = payload.enrollment_id
+    lesson_item_id = payload.lesson_item_id
+    if lesson_item_id is not None:
+        item, enrollment = get_student_lesson_item(lesson_item_id, current_user, db, enrollment_id)
+        if item.item_type not in {LessonItemType.exercise, LessonItemType.quiz}:
+            raise HTTPException(status_code=400, detail="Lesson item has no question submissions")
+        if question.id not in item_question_ids(item):
+            raise HTTPException(status_code=400, detail="Question does not belong to this lesson item")
+        if enrollment.status == "completed":
+            raise HTTPException(status_code=409, detail="Course is completed; submissions are read-only")
+        enrollment_id = enrollment.id
+
     score = None
     status = SubmissionStatus.pending_manual
     feedback = None
@@ -1541,7 +1704,8 @@ def submit_answer(
     submission = Submission(
         user_id=current_user.id,
         question_id=question.id,
-        enrollment_id=payload.enrollment_id,
+        enrollment_id=enrollment_id,
+        lesson_item_id=lesson_item_id,
         answer=payload.answer,
         score=score,
         status=status,
@@ -1579,6 +1743,8 @@ def submit_quiz_paper(
     enrollment = db.scalar(enrollment_stmt)
     if not enrollment:
         raise HTTPException(status_code=403, detail="No enrollment for this lesson")
+    if enrollment.status == "completed":
+        raise HTTPException(status_code=409, detail="Course is completed; submissions are read-only")
 
     configured_question_ids = [
         int(question_id)
@@ -1595,6 +1761,7 @@ def submit_quiz_paper(
             .where(
                 Question.id.in_(configured_question_ids),
                 Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
             )
         )
     )
@@ -1615,7 +1782,6 @@ def submit_quiz_paper(
     if unexpected_question_ids:
         raise HTTPException(status_code=400, detail="Quiz answer contains invalid question")
 
-    score_total = 0.0
     submissions: list[Submission] = []
     for question_id in configured_question_ids:
         question = question_by_id.get(question_id)
@@ -1627,7 +1793,6 @@ def submit_quiz_paper(
         feedback = None
         if not question.requires_manual_grading:
             score = auto_grade_score(question, answers_by_question_id[question.id])
-            score_total += float(score)
             status = SubmissionStatus.auto_graded
             feedback = "鑷姩鍒ゅ嵎瀹屾垚"
 
@@ -1635,6 +1800,7 @@ def submit_quiz_paper(
             user_id=current_user.id,
             question_id=question.id,
             enrollment_id=enrollment.id,
+            lesson_item_id=item.id,
             answer=answers_by_question_id[question.id],
             score=score,
             status=status,
@@ -1643,46 +1809,19 @@ def submit_quiz_paper(
         db.add(submission)
         submissions.append(submission)
 
-    total_score = sum(float(question.points or 0) for question in questions)
-    passed = total_score > 0 and score_total / total_score >= 0.8
-    if passed:
-        progress = db.scalar(
-            select(ProgressRecord).where(
-                ProgressRecord.enrollment_id == enrollment.id,
-                ProgressRecord.lesson_item_id == item.id,
-            )
-        )
-        if not progress:
-            progress = ProgressRecord(enrollment_id=enrollment.id, lesson_item_id=item.id)
-            db.add(progress)
-        progress.completed_at = datetime.utcnow()
-        progress.notes = None
-        progress.score = score_total
-
-        total_items = db.scalar(
-            select(func.count(LessonItem.id))
-            .join(LessonItem.chapter)
-            .where(LessonItem.chapter.has(course_id=enrollment.course_id))
-        )
-        completed_items = db.scalar(
-            select(func.count(ProgressRecord.id)).where(
-                ProgressRecord.enrollment_id == enrollment.id,
-                ProgressRecord.completed_at.is_not(None),
-            )
-        )
-        enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
-        if enrollment.progress_percent >= 100:
-            enrollment.status = "completed"
+    db.flush()
+    quiz_state = update_quiz_progress_from_submissions(db, item, enrollment)
 
     db.commit()
     for submission in submissions:
         db.refresh(submission)
 
     return QuizSubmissionOut(
-        status="passed" if passed else "failed",
-        score=score_total,
-        total_score=total_score,
-        passed=passed,
+        status=str(quiz_state["status"]),
+        score=float(quiz_state["score"]),
+        total_score=float(quiz_state["total_score"]),
+        passed=quiz_state["passed"] if isinstance(quiz_state["passed"], bool) else None,
+        pending_manual_count=int(quiz_state["pending_manual_count"]),
         submissions=[SubmissionOut.model_validate(submission) for submission in submissions],
     )
 

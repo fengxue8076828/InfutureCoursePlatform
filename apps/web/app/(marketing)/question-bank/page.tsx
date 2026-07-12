@@ -17,6 +17,7 @@ import {
 import Link from "next/link";
 
 import { AddToQuestionBankButton } from "@/components/AddToQuestionBankButton";
+import { MathText } from "@/components/MathText";
 import { getInstitutions, getPublishedQuestions } from "@/lib/api";
 import type { Question, QuestionType } from "@/lib/types";
 
@@ -25,7 +26,6 @@ const questionTypeLabels: Record<QuestionType, string> = {
   multiple_choice: "\u591a\u9009\u9898",
   fill_blank: "\u586b\u7a7a\u9898",
   coding: "\u4ee3\u7801\u7f16\u5199\u9898",
-  code_review: "\u4ee3\u7801\u4fee\u6539\u9898",
   true_false: "\u5224\u65ad\u9898",
   reading: "\u9605\u8bfb\u7406\u89e3\u9898",
   listening: "\u542c\u529b\u9898",
@@ -94,7 +94,7 @@ const categoryHints: Record<string, string[]> = {
 
 function inferCategoryFromQuestion(question: Question) {
   const haystack = `${question.prompt} ${question.skill_area} ${question.difficulty} ${question.type}`.toLowerCase();
-  if (question.type === "coding" || question.type === "code_review") {
+  if (question.type === "coding") {
     return "it";
   }
   return Object.entries(categoryHints).find(([, hints]) =>
@@ -180,7 +180,7 @@ function QuestionRow({
           <div>
             <p className="text-sm font-bold text-slate-500">{"\u9898\u76ee\u8be6\u60c5"}</p>
             <div className="mt-2 rounded-lg border border-slate-100 bg-slate-50 p-4 text-sm leading-7 text-slate-700">
-              {title}
+              <MathText className="block whitespace-pre-wrap">{question.prompt || title}</MathText>
             </div>
 
             {question.options?.length ? (
@@ -188,7 +188,7 @@ function QuestionRow({
                 {question.options.map((option) => (
                   <div key={option.id} className="rounded-lg border border-slate-100 bg-white px-3 py-2 text-sm text-slate-700">
                     <span className="font-black text-ink">{option.label}. </span>
-                    {option.text}
+                    <MathText>{option.text}</MathText>
                   </div>
                 ))}
               </div>
@@ -199,7 +199,7 @@ function QuestionRow({
                 <div className="mb-1 flex items-center gap-2 font-black">
                   <Lightbulb size={16} /> {"\u9898\u76ee\u63d0\u793a"}
                 </div>
-                {question.hint}
+                <MathText>{question.hint}</MathText>
               </div>
             ) : null}
           </div>

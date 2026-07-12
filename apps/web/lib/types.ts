@@ -92,6 +92,15 @@ export type Enrollment = {
   course: Course;
 };
 
+export type StudentPointLevel = {
+  index: number;
+  name: string;
+  icon: string;
+  min_points: number;
+  next_level_points?: number | null;
+  progress_percent: number;
+};
+
 export type StudentLeaderboardEntry = {
   rank: number;
   student_id: number;
@@ -102,6 +111,7 @@ export type StudentLeaderboardEntry = {
   completed_courses: number;
   active_courses: number;
   average_progress: number;
+  level: StudentPointLevel;
 };
 
 export type StudentLeaderboard = {
@@ -168,6 +178,7 @@ export type StudentPost = {
   student_name: string;
   avatar_url?: string | null;
   content: string;
+  image_urls?: string[];
   course_id?: number | null;
   course_title?: string | null;
   created_at: string;
@@ -180,6 +191,7 @@ export type StudentSocialHome = {
   recommended_courses: Course[];
   total_points: number;
   weekly_points: number;
+  level: StudentPointLevel;
   achievements: string[];
   posts: StudentPost[];
   suggested_students: StudentProfileSummary[];
@@ -290,7 +302,6 @@ export type QuestionType =
   | "multiple_choice"
   | "fill_blank"
   | "coding"
-  | "code_review"
   | "true_false"
   | "reading"
   | "listening"

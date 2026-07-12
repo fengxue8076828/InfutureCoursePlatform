@@ -23,6 +23,7 @@ import {
   Menu,
   Newspaper,
   Plus,
+  RefreshCw,
   Save,
   Search,
   Settings,
@@ -37,6 +38,7 @@ import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
 
+import { MathText } from "@/components/MathText";
 import {
   adminAccount,
   adminBlogPosts,
@@ -44,12 +46,16 @@ import {
   courseRankings,
   dashboardRanges,
   fallbackAdminQuestions,
-  gradingQueue,
   institutionCategoryOptions,
   teacherUsers,
   usefulMetrics
 } from "@/lib/admin-data";
-import { clearAdminSession, getAdminRequestHeaders, getAdminSessionUser } from "@/lib/admin-session";
+import {
+  clearAdminSession,
+  getAdminRequestHeaders,
+  getAdminSessionUser,
+  getAdminSessionUserId
+} from "@/lib/admin-session";
 
 import { QuestionBankManager } from "./QuestionBankManager";
 
@@ -87,6 +93,10 @@ const ADMIN_LOGO_STORAGE_KEY = "infuture-admin-logo-url";
 const ADMIN_INSTITUTION_NAME_STORAGE_KEY = "infuture-admin-institution-name";
 const ADMIN_PROFILE_STORAGE_KEY = "infuture-admin-profile";
 const COURSE_CATEGORY_CHANGE_EVENT = "infuture-course-categories-change";
+const QUESTION_BANK_CHANGE_EVENT = "infuture-question-bank-change";
+const COURSE_CONTENT_REFRESH_EVENT = "infuture-course-content-change";
+const COURSE_CONTENT_REFRESH_STORAGE_KEY = "infuture-course-content-version";
+const COURSE_CONTENT_BROADCAST_CHANNEL = "infuture-course-content";
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const DEFAULT_TEACHER_AVATAR_URL = "/avatars/default-teacher.svg";
 const DEFAULT_ADMIN_AVATAR =
@@ -187,6 +197,7 @@ type CourseQuestion = {
   difficulty: string;
   skillArea: string;
   points: number;
+  requiresManualGrading: boolean;
   status: CourseQuestionStatus;
   createdByUserId: number | null;
 };
@@ -195,6 +206,57 @@ type CourseQuestionOwnerOption = {
   id: number;
   name: string;
   role: ManagedUserRole;
+};
+
+type ManualGradingSubmission = {
+  id: number;
+  userId: number;
+  questionId: number;
+  lessonItemId: number | null;
+  answer: Record<string, unknown>;
+  score: number | null;
+  feedback: string | null;
+  createdAt: string;
+  student: {
+    id: number;
+    name: string;
+    email: string;
+  };
+  course: {
+    id: number | null;
+    title: string;
+    category: string;
+    level: string;
+  };
+  lessonItem: {
+    id: number | null;
+    title: string;
+    itemType: string;
+  };
+  question: {
+    id: number;
+    title: string;
+    prompt: string;
+    type: string;
+    difficulty: string;
+    points: number;
+  };
+};
+
+type ManualGradingDraft = {
+  score: string;
+  feedback: string;
+  saving: boolean;
+  message: string;
+};
+
+type ManualGradingGroup = {
+  key: string;
+  student: ManualGradingSubmission["student"];
+  course: ManualGradingSubmission["course"];
+  lessonItem: ManualGradingSubmission["lessonItem"];
+  submittedAt: string;
+  submissions: ManualGradingSubmission[];
 };
 
 type AdminUploadKind =
@@ -981,7 +1043,6 @@ const courseQuestionTypeLabels: Record<string, string> = {
   multiple_choice: "多选题",
   writing: "开放式答案题",
   coding: "代码编写题",
-  code_review: "代码修改题",
   true_false: "判断题",
   reading: "阅读理解题",
   listening: "听力题",
@@ -1275,6 +1336,29 @@ function uploadFailureMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
 
+function notifyCourseContentChanged(course: { id?: number; slug?: string; status?: unknown }) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  const payload = {
+    courseId: course.id ?? null,
+    slug: course.slug ?? "",
+    status: typeof course.status === "string" ? course.status : "",
+    updatedAt: Date.now()
+  };
+  try {
+    window.localStorage.setItem(COURSE_CONTENT_REFRESH_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Cross-tab refresh is optional; polling still keeps student pages current.
+  }
+  window.dispatchEvent(new CustomEvent(COURSE_CONTENT_REFRESH_EVENT, { detail: payload }));
+  if (typeof BroadcastChannel !== "undefined") {
+    const channel = new BroadcastChannel(COURSE_CONTENT_BROADCAST_CHANNEL);
+    channel.postMessage(payload);
+    channel.close();
+  }
+}
+
 function normalizeQuestionForCoursePicker(rawQuestion: unknown): CourseQuestion | null {
   if (!rawQuestion || typeof rawQuestion !== "object") {
     return null;
@@ -1286,6 +1370,7 @@ function normalizeQuestionForCoursePicker(rawQuestion: unknown): CourseQuestion 
     difficulty?: unknown;
     skill_area?: unknown;
     points?: unknown;
+    requires_manual_grading?: unknown;
     status?: unknown;
     created_by_user_id?: unknown;
     content?: { title?: unknown };
@@ -1307,10 +1392,129 @@ function normalizeQuestionForCoursePicker(rawQuestion: unknown): CourseQuestion 
     difficulty: typeof question.difficulty === "string" ? question.difficulty : "",
     skillArea: typeof question.skill_area === "string" ? question.skill_area : "",
     points: typeof question.points === "number" ? question.points : 0,
+    requiresManualGrading: question.requires_manual_grading === true,
     status,
     createdByUserId:
       typeof question.created_by_user_id === "number" ? question.created_by_user_id : null
   };
+}
+
+function normalizeManualGradingSubmission(rawSubmission: unknown): ManualGradingSubmission | null {
+  if (!rawSubmission || typeof rawSubmission !== "object") {
+    return null;
+  }
+  const submission = rawSubmission as {
+    id?: unknown;
+    user_id?: unknown;
+    question_id?: unknown;
+    lesson_item_id?: unknown;
+    answer?: unknown;
+    score?: unknown;
+    feedback?: unknown;
+    created_at?: unknown;
+    user?: { id?: unknown; full_name?: unknown; email?: unknown };
+    enrollment?: {
+      id?: unknown;
+      course?: { id?: unknown; title?: unknown; category?: unknown; level?: unknown };
+    };
+    lesson_item?: { id?: unknown; title?: unknown; item_type?: unknown };
+    question?: {
+      id?: unknown;
+      prompt?: unknown;
+      type?: unknown;
+      difficulty?: unknown;
+      points?: unknown;
+      content?: { title?: unknown };
+    };
+  };
+  if (typeof submission.id !== "number" || typeof submission.question_id !== "number") {
+    return null;
+  }
+  const answer =
+    submission.answer && typeof submission.answer === "object" && !Array.isArray(submission.answer)
+      ? (submission.answer as Record<string, unknown>)
+      : {};
+  const questionId = typeof submission.question?.id === "number" ? submission.question.id : submission.question_id;
+  const questionTitle =
+    typeof submission.question?.content?.title === "string" && submission.question.content.title.trim()
+      ? submission.question.content.title
+      : `题目 ${questionId}`;
+  return {
+    id: submission.id,
+    userId: typeof submission.user_id === "number" ? submission.user_id : 0,
+    questionId: submission.question_id,
+    lessonItemId: typeof submission.lesson_item_id === "number" ? submission.lesson_item_id : null,
+    answer,
+    score: typeof submission.score === "number" ? submission.score : null,
+    feedback: typeof submission.feedback === "string" ? submission.feedback : null,
+    createdAt: typeof submission.created_at === "string" ? submission.created_at : "",
+    student: {
+      id: typeof submission.user?.id === "number" ? submission.user.id : 0,
+      name:
+        typeof submission.user?.full_name === "string" && submission.user.full_name.trim()
+          ? submission.user.full_name
+          : "学生",
+      email: typeof submission.user?.email === "string" ? submission.user.email : ""
+    },
+    course: {
+      id: typeof submission.enrollment?.course?.id === "number" ? submission.enrollment.course.id : null,
+      title:
+        typeof submission.enrollment?.course?.title === "string" && submission.enrollment.course.title.trim()
+          ? submission.enrollment.course.title
+          : "未关联课程",
+      category: typeof submission.enrollment?.course?.category === "string" ? submission.enrollment.course.category : "",
+      level: typeof submission.enrollment?.course?.level === "string" ? submission.enrollment.course.level : ""
+    },
+    lessonItem: {
+      id: typeof submission.lesson_item?.id === "number" ? submission.lesson_item.id : null,
+      title:
+        typeof submission.lesson_item?.title === "string" && submission.lesson_item.title.trim()
+          ? submission.lesson_item.title
+          : "未关联测验",
+      itemType: typeof submission.lesson_item?.item_type === "string" ? submission.lesson_item.item_type : ""
+    },
+    question: {
+      id: questionId,
+      title: questionTitle,
+      prompt: typeof submission.question?.prompt === "string" ? submission.question.prompt : "",
+      type: typeof submission.question?.type === "string" ? submission.question.type : "",
+      difficulty: typeof submission.question?.difficulty === "string" ? submission.question.difficulty : "",
+      points: typeof submission.question?.points === "number" ? submission.question.points : 0
+    }
+  };
+}
+
+function formatManualGradingAnswer(answer: Record<string, unknown>) {
+  const primaryAnswer = answer.answer;
+  const answers = answer.answers;
+  if (Array.isArray(answers)) {
+    return answers.map((item, index) => `${index + 1}. ${String(item ?? "")}`).join("\n");
+  }
+  if (Array.isArray(primaryAnswer)) {
+    return primaryAnswer.map((item, index) => `${index + 1}. ${String(item ?? "")}`).join("\n");
+  }
+  if (typeof primaryAnswer === "boolean") {
+    return primaryAnswer ? "正确" : "错误";
+  }
+  if (typeof primaryAnswer === "string") {
+    return primaryAnswer || "学生未填写答案";
+  }
+  if (answer.file && typeof answer.file === "object") {
+    const file = answer.file as { fileName?: unknown; fileType?: unknown };
+    return [file.fileName, file.fileType].filter((item) => typeof item === "string" && item).join(" · ");
+  }
+  return JSON.stringify(answer, null, 2);
+}
+
+function formatManualGradingTime(value: string) {
+  if (!value) {
+    return "提交时间未知";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  return date.toLocaleString("zh-CN", { hour12: false });
 }
 
 function courseDraftFromApi(
@@ -1831,7 +2035,7 @@ export function AdminPortal() {
             <CourseCategoryManagement />
           </div>
           <div className={effectiveActiveModule === "courses" ? "block" : "hidden"}>
-            <CourseManagement />
+            <CourseManagement isActive={effectiveActiveModule === "courses"} />
           </div>
           <div className={effectiveActiveModule === "questions" ? "block" : "hidden"}>
             <QuestionBankPanel />
@@ -1843,7 +2047,7 @@ export function AdminPortal() {
             <UserPermissionManagement />
           </div>
           <div className={effectiveActiveModule === "grading" ? "block" : "hidden"}>
-            <GradingPanel />
+            <GradingPanel isActive={effectiveActiveModule === "grading"} />
           </div>
           <div className={effectiveActiveModule === "blogs" ? "block" : "hidden"}>
             <BlogManagement />
@@ -2906,7 +3110,7 @@ function CourseCategoryManagement() {
   );
 }
 
-function CourseManagement() {
+function CourseManagement({ isActive }: { isActive: boolean }) {
   const profile = useAdminProfile();
   const [courses, setCourses] = useState<AdminCourseSummary[]>([]);
   const [courseCategories, setCourseCategories] = useState<CourseCategory[]>([]);
@@ -2945,6 +3149,7 @@ function CourseManagement() {
       .filter((question): question is CourseQuestion => Boolean(question))
   );
   const [questionOwnerOptions, setQuestionOwnerOptions] = useState<CourseQuestionOwnerOption[]>([]);
+  const [questionPoolReloadToken, setQuestionPoolReloadToken] = useState(0);
   const [courseMessage, setCourseMessage] = useState("课程编辑内容会保留在本地草稿中。");
   const [savingCourse, setSavingCourse] = useState(false);
   const [publishingCourse, setPublishingCourse] = useState(false);
@@ -2996,8 +3201,9 @@ function CourseManagement() {
 
     async function loadCourseCatalog() {
       const sessionUser = getAdminSessionUser();
+      const sessionUserId = sessionUser?.id ?? getAdminSessionUserId();
       if (!ignore) {
-        setCurrentAdminUserId(sessionUser?.id ?? null);
+        setCurrentAdminUserId(sessionUserId);
       }
       let loadedTeachers: TeacherOption[] = [];
       try {
@@ -3218,8 +3424,9 @@ function CourseManagement() {
     let ignore = false;
     async function loadQuestions() {
       const sessionUser = getAdminSessionUser();
+      const sessionUserId = sessionUser?.id ?? getAdminSessionUserId();
       if (!ignore) {
-        setCurrentAdminUserId(sessionUser?.id ?? null);
+        setCurrentAdminUserId(sessionUserId);
       }
       try {
         const [questionsResponse, creatorsResponse] = await Promise.all([
@@ -3237,7 +3444,7 @@ function CourseManagement() {
         }
         if (creatorsResponse.ok) {
           const owners = ((await creatorsResponse.json()) as ApiManagedUser[]).map(questionOwnerFromApi);
-          setQuestionOwnerOptions(sortQuestionOwners(owners, sessionUser?.id ?? null));
+          setQuestionOwnerOptions(sortQuestionOwners(owners, sessionUserId));
         } else if (sessionUser) {
           setQuestionOwnerOptions(
             sortQuestionOwners(
@@ -3248,7 +3455,7 @@ function CourseManagement() {
                   role: normalizeManagedUserRole(sessionUser.role)
                 }
               ],
-              sessionUser.id
+              sessionUserId
             )
           );
         }
@@ -3261,7 +3468,7 @@ function CourseManagement() {
           setAvailableQuestions((currentQuestions) =>
             currentQuestions.map((question) =>
               question.createdByUserId === null
-                ? { ...question, createdByUserId: sessionUser.id }
+                ? { ...question, createdByUserId: sessionUserId }
                 : question
             )
           );
@@ -3272,7 +3479,7 @@ function CourseManagement() {
           setAvailableQuestions((currentQuestions) =>
             currentQuestions.map((question) =>
               question.createdByUserId === null
-                ? { ...question, createdByUserId: sessionUser.id }
+                ? { ...question, createdByUserId: sessionUserId }
                 : question
             )
           );
@@ -3280,12 +3487,12 @@ function CourseManagement() {
             sortQuestionOwners(
               [
                 {
-                  id: sessionUser.id,
+                  id: sessionUserId,
                   name: sessionUser.full_name,
                   role: normalizeManagedUserRole(sessionUser.role)
                 }
               ],
-              sessionUser.id
+              sessionUserId
             )
           );
         }
@@ -3293,10 +3500,26 @@ function CourseManagement() {
     }
     void loadQuestions();
 
+    const handleQuestionBankChange = () => {
+      setQuestionPoolReloadToken((current) => current + 1);
+    };
+    window.addEventListener(QUESTION_BANK_CHANGE_EVENT, handleQuestionBankChange);
+
     return () => {
       ignore = true;
+      window.removeEventListener(QUESTION_BANK_CHANGE_EVENT, handleQuestionBankChange);
     };
-  }, []);
+  }, [questionPoolReloadToken]);
+
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+    const refreshTimer = window.setTimeout(() => {
+      setQuestionPoolReloadToken((current) => current + 1);
+    }, 0);
+    return () => window.clearTimeout(refreshTimer);
+  }, [isActive]);
 
   function updateCourseDraftWith(updater: (current: CourseDraft) => CourseDraft) {
     if (!canModifyCourseContent) {
@@ -3648,6 +3871,7 @@ function CourseManagement() {
     if (creatingNewCourse && typeof window !== "undefined") {
       window.sessionStorage.removeItem(courseDraftStorageKey(currentDraft.courseId));
     }
+    notifyCourseContentChanged(detail);
     setCourseMessage(isPublishing ? "课程已发布，学生端可以看到。" : "课程已保存为草稿。");
     return detail;
   }
@@ -3720,6 +3944,7 @@ function CourseManagement() {
     persistSelectedCourseId(updatedSummary.id);
     replaceCourseDraft(nextDraft);
     persistCourseDraft(nextDraft);
+    notifyCourseContentChanged(detail);
     setCourseMessage(
       status === "published" ? "课程已发布，学生端可以看到。" : "课程已取消发布，可以继续编辑和保存。"
     );
@@ -4108,13 +4333,6 @@ function CourseManagement() {
               <h3 className="text-lg font-bold text-ink">章节与项目</h3>
               <p className="mt-1 text-sm text-slate-500">每章可添加多个项目，项目可配置为讲课视频、讲义、练习或测验。</p>
             </div>
-            <button
-              onClick={addChapter}
-              disabled={!canModifyCourseContent}
-              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <Plus size={16} /> 添加章节
-            </button>
           </div>
           <div className="mt-4 grid gap-4">
             {courseDraft.chapters.map((chapter, chapterIndex) => (
@@ -4136,7 +4354,14 @@ function CourseManagement() {
               />
             ))}
           </div>
-          <div className="mt-5 flex justify-end">
+          <div className="mt-5 flex flex-wrap justify-end gap-3">
+            <button
+              onClick={addChapter}
+              disabled={!canModifyCourseContent}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 py-2.5 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              <Plus size={16} /> 添加章节
+            </button>
             <button
               onClick={saveCourse}
               disabled={courseActionBusy || !canSaveSelectedCourse}
@@ -4467,6 +4692,7 @@ function CourseLessonItemEditor({
           {item.itemType === "exercise" || item.itemType === "quiz" ? (
             <QuestionPicker
               questions={availableQuestions}
+              lessonItemType={item.itemType}
               ownerOptions={questionOwnerOptions}
               currentUserId={currentUserId}
               readOnly={readOnly}
@@ -4482,6 +4708,7 @@ function CourseLessonItemEditor({
 
 function QuestionPicker({
   questions,
+  lessonItemType,
   ownerOptions,
   currentUserId,
   readOnly,
@@ -4489,6 +4716,7 @@ function QuestionPicker({
   onChange
 }: {
   questions: CourseQuestion[];
+  lessonItemType: Extract<CourseLessonItemType, "exercise" | "quiz">;
   ownerOptions: CourseQuestionOwnerOption[];
   currentUserId: number | null;
   readOnly: boolean;
@@ -4502,7 +4730,11 @@ function QuestionPicker({
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
 
   const normalizedQuery = query.trim().toLowerCase();
-  const typeOptions = Array.from(new Set(questions.map((question) => question.type))).filter(Boolean);
+  const pickableQuestions =
+    lessonItemType === "exercise"
+      ? questions.filter((question) => !question.requiresManualGrading)
+      : questions;
+  const typeOptions = Array.from(new Set(pickableQuestions.map((question) => question.type))).filter(Boolean);
   const currentUserIsQuestionOwner = Boolean(
     currentUserId && ownerOptions.some((owner) => owner.id === currentUserId)
   );
@@ -4516,7 +4748,7 @@ function QuestionPicker({
       : selectedOwnerId === "all" || selectedOwnerExists
         ? selectedOwnerId
         : "all";
-  const filteredQuestions = questions.filter((question) => {
+  const filteredQuestions = pickableQuestions.filter((question) => {
     if (resolvedOwnerId !== "all" && question.createdByUserId !== resolvedOwnerId) {
       return false;
     }
@@ -4633,7 +4865,18 @@ function QuestionPicker({
           <div className="mt-5 grid gap-3 border-t border-slate-100 pt-5 xl:grid-cols-[minmax(9rem,0.8fr)_minmax(11rem,1fr)_minmax(9rem,0.8fr)_minmax(16rem,1.4fr)]">
             <div>
               <p className="font-bold text-ink">题库题目</p>
-              <p className="mt-1 text-sm text-slate-500">只显示已发布题目。</p>
+            <p className="mt-1 text-sm text-slate-500">
+                {lessonItemType === "exercise"
+                  ? `练习只显示无需人工批改的题目，当前筛选 ${filteredQuestions.length} 道。`
+                  : `测验可选择自动批改和人工批改题目，当前筛选 ${filteredQuestions.length} 道。`}
+              </p>
+              <button
+                type="button"
+                onClick={() => window.dispatchEvent(new Event(QUESTION_BANK_CHANGE_EVENT))}
+                className="focus-ring mt-2 inline-flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 hover:border-mint/60 hover:text-mint"
+              >
+                <RefreshCw size={13} /> 刷新题库
+              </button>
             </div>
             <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
               选择老师
@@ -4706,6 +4949,11 @@ function QuestionPicker({
                       {courseQuestionTypeLabels[question.type] ?? question.type} · {question.difficulty || "未分级"} · {question.points} 分
                     </span>
                   </span>
+                  {question.requiresManualGrading ? (
+                    <span className="rounded-full bg-coral/10 px-2.5 py-1 text-xs font-bold text-coral">
+                      人工批改
+                    </span>
+                  ) : null}
                   <span
                     className={`rounded-full px-2.5 py-1 text-xs font-bold ${courseQuestionStatusClasses[question.status]}`}
                   >
@@ -4793,6 +5041,7 @@ function SelectedCourseQuestionCard({
               <span>{courseQuestionTypeLabels[question.type] ?? question.type}</span>
               <span>{question.difficulty || "未分级"}</span>
               <span>{question.points} 分</span>
+              {question.requiresManualGrading ? <span className="text-coral">人工批改</span> : null}
             </span>
           </span>
         </button>
@@ -4811,7 +5060,7 @@ function SelectedCourseQuestionCard({
       {expanded ? (
         <div className="mt-3 rounded-lg bg-white p-3 text-sm text-slate-600">
           <p className="font-semibold text-ink">题干</p>
-          <p className="mt-1 whitespace-pre-wrap">{question.prompt || "暂无题干内容。"}</p>
+          <MathText className="mt-1 block whitespace-pre-wrap">{question.prompt || "暂无题干内容。"}</MathText>
           <div className="mt-3 flex flex-wrap gap-2 text-xs font-semibold">
             <span className="rounded-full bg-skysoft/20 px-2.5 py-1 text-blue-700">
               {question.skillArea || "未设置知识点"}
@@ -5335,44 +5584,314 @@ function TeacherManagement() {
   );
 }
 
-function GradingPanel() {
+function GradingPanel({ isActive }: { isActive: boolean }) {
+  const [submissions, setSubmissions] = useState<ManualGradingSubmission[]>([]);
+  const [drafts, setDrafts] = useState<Record<number, ManualGradingDraft>>({});
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(() => new Set());
+  const [status, setStatus] = useState("正在加载待批改测验...");
+  const [loading, setLoading] = useState(false);
+
+  const groupedSubmissions = useMemo<ManualGradingGroup[]>(() => {
+    const groups = new Map<string, ManualGradingGroup>();
+    submissions.forEach((submission) => {
+      const key = [
+        submission.student.id || submission.userId,
+        submission.course.id ?? "course",
+        submission.lessonItem.id ?? submission.lessonItemId ?? "item"
+      ].join("-");
+      const existing = groups.get(key);
+      if (existing) {
+        existing.submissions.push(submission);
+        if (submission.createdAt > existing.submittedAt) {
+          existing.submittedAt = submission.createdAt;
+        }
+        return;
+      }
+      groups.set(key, {
+        key,
+        student: submission.student,
+        course: submission.course,
+        lessonItem: submission.lessonItem,
+        submittedAt: submission.createdAt,
+        submissions: [submission]
+      });
+    });
+    return Array.from(groups.values()).sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
+  }, [submissions]);
+
+  async function loadManualGradingQueue() {
+    setLoading(true);
+    setStatus("正在加载待批改测验...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/grading`, {
+        headers: getAdminRequestHeaders(),
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error(await readSimpleApiDetail(response, "待批改测验读取失败。"));
+      }
+      const payload = (await response.json()) as unknown[];
+      const nextSubmissions = payload
+        .map((submission) => normalizeManualGradingSubmission(submission))
+        .filter((submission): submission is ManualGradingSubmission => Boolean(submission));
+      setSubmissions(nextSubmissions);
+      setDrafts((currentDrafts) => {
+        const nextDrafts: Record<number, ManualGradingDraft> = {};
+        nextSubmissions.forEach((submission) => {
+          nextDrafts[submission.id] = currentDrafts[submission.id] ?? {
+            score: submission.score === null ? "" : String(submission.score),
+            feedback: submission.feedback ?? "",
+            saving: false,
+            message: ""
+          };
+        });
+        return nextDrafts;
+      });
+      setExpandedGroups((currentGroups) => {
+        const validKeys = new Set(nextSubmissions.map((submission) => [
+          submission.student.id || submission.userId,
+          submission.course.id ?? "course",
+          submission.lessonItem.id ?? submission.lessonItemId ?? "item"
+        ].join("-")));
+        return new Set(Array.from(currentGroups).filter((key) => validKeys.has(key)));
+      });
+      setStatus(nextSubmissions.length ? `当前有 ${nextSubmissions.length} 道题需要人工批改。` : "当前没有需要人工批改的测验。");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : "待批改测验读取失败，请确认 FastAPI 服务正在运行。");
+      setSubmissions([]);
+      setDrafts({});
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (!isActive) {
+      return;
+    }
+    const loadTimer = window.setTimeout(() => {
+      void loadManualGradingQueue();
+    }, 0);
+    return () => window.clearTimeout(loadTimer);
+  }, [isActive]);
+
+  function toggleGroup(groupKey: string) {
+    setExpandedGroups((currentGroups) => {
+      const nextGroups = new Set(currentGroups);
+      if (nextGroups.has(groupKey)) {
+        nextGroups.delete(groupKey);
+      } else {
+        nextGroups.add(groupKey);
+      }
+      return nextGroups;
+    });
+  }
+
+  function updateDraft(submissionId: number, patch: Partial<ManualGradingDraft>) {
+    setDrafts((currentDrafts) => {
+      const existingDraft = currentDrafts[submissionId] ?? {
+        score: "",
+        feedback: "",
+        saving: false,
+        message: ""
+      };
+      return {
+        ...currentDrafts,
+        [submissionId]: {
+          ...existingDraft,
+          ...patch
+        }
+      };
+    });
+  }
+
+  async function gradeSubmission(submission: ManualGradingSubmission) {
+    const draft = drafts[submission.id] ?? { score: "", feedback: "", saving: false, message: "" };
+    const score = Number(draft.score);
+    if (!Number.isFinite(score) || score < 0) {
+      updateDraft(submission.id, { message: "请填写有效分数。" });
+      return;
+    }
+    if (submission.question.points > 0 && score > submission.question.points) {
+      updateDraft(submission.id, { message: `分数不能超过 ${submission.question.points} 分。` });
+      return;
+    }
+    updateDraft(submission.id, { saving: true, message: "正在保存批改..." });
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/submissions/${submission.id}/grade`, {
+        method: "PATCH",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          score,
+          feedback: draft.feedback.trim()
+        })
+      });
+      if (!response.ok) {
+        throw new Error(await readSimpleApiDetail(response, "批改保存失败。"));
+      }
+      setSubmissions((currentSubmissions) =>
+        currentSubmissions.filter((entry) => entry.id !== submission.id)
+      );
+      setDrafts((currentDrafts) => {
+        const nextDrafts = { ...currentDrafts };
+        delete nextDrafts[submission.id];
+        return nextDrafts;
+      });
+      setStatus("批改已保存，待批改列表已更新。");
+    } catch (error) {
+      updateDraft(submission.id, {
+        saving: false,
+        message: error instanceof Error ? error.message : "批改保存失败，请确认 FastAPI 服务正在运行。"
+      });
+    }
+  }
+
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_22rem]">
+    <div className="grid gap-5">
       <section className="panel rounded-lg p-5">
-        <h2 className="text-xl font-bold text-ink">待手动批改</h2>
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">待手动批改</h2>
+            <p className="mt-1 text-sm text-slate-500">
+              按提交学生和对应测验分组，同一次测验中的人工批改题会放在同一个项目卡里。
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadManualGradingQueue()}
+            disabled={loading}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            <RefreshCw size={15} className={loading ? "animate-spin" : ""} /> 刷新
+          </button>
+        </div>
+        <p className="mt-4 rounded-lg bg-slate-50 px-4 py-3 text-sm font-semibold text-slate-600">
+          {status}
+        </p>
+
         <div className="mt-5 grid gap-4">
-          {gradingQueue.map((item) => (
-            <div key={item.id} className="rounded-lg border border-slate-200 bg-white p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <p className="font-bold text-ink">{item.question}</p>
-                  <p className="mt-1 text-sm text-slate-500">{item.student} · {item.course} · {item.submittedAt}</p>
-                </div>
-                <span className="rounded-full bg-coral/10 px-2.5 py-1 text-xs font-bold text-coral">{item.type}</span>
-              </div>
-              <div className="mt-4 grid gap-3 md:grid-cols-[1fr_9rem]">
-                <textarea className="focus-ring min-h-24 rounded-lg border border-slate-200 px-3 py-2 text-sm leading-6" placeholder="填写批改反馈" />
-                <div className="grid gap-2">
-                  <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="分数" />
-                  <button className="focus-ring rounded-lg bg-mint px-3 py-2 text-sm font-bold text-white">提交批改</button>
-                </div>
-              </div>
+          {groupedSubmissions.map((group) => {
+            const expanded = expandedGroups.has(group.key);
+            return (
+              <article key={group.key} className="rounded-lg border border-slate-200 bg-white p-4">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.key)}
+                  className="focus-ring flex w-full items-start gap-3 rounded-lg text-left"
+                  aria-expanded={expanded}
+                >
+                  <ChevronRight
+                    size={18}
+                    className={`mt-1 shrink-0 text-slate-500 transition ${expanded ? "rotate-90" : ""}`}
+                  />
+                  <span className="min-w-0 flex-1">
+                    <span className="flex flex-wrap items-center gap-2">
+                      <span className="font-bold text-ink">{group.student.name}</span>
+                      {group.student.email ? (
+                        <span className="text-sm text-slate-500">{group.student.email}</span>
+                      ) : null}
+                    </span>
+                    <span className="mt-1 block text-sm text-slate-500">
+                      {group.course.title} · {group.lessonItem.title} · {formatManualGradingTime(group.submittedAt)}
+                    </span>
+                  </span>
+                  <span className="rounded-full bg-coral/10 px-3 py-1 text-xs font-bold text-coral">
+                    {group.submissions.length} 道待批改
+                  </span>
+                </button>
+
+                {expanded ? (
+                  <div className="mt-4 grid gap-4 border-t border-slate-100 pt-4">
+                    {group.submissions.map((submission, index) => {
+                      const draft = drafts[submission.id] ?? {
+                        score: "",
+                        feedback: "",
+                        saving: false,
+                        message: ""
+                      };
+                      return (
+                        <div key={submission.id} className="rounded-lg bg-slate-50 p-4">
+                          <div className="flex flex-wrap items-start justify-between gap-3">
+                            <div>
+                              <p className="text-sm font-bold text-coral">
+                                第 {index + 1} 题 · {courseQuestionTypeLabels[submission.question.type] ?? submission.question.type}
+                              </p>
+                              <h3 className="mt-1 font-bold text-ink">{submission.question.title}</h3>
+                              <p className="mt-1 text-xs font-semibold text-slate-500">
+                                {submission.question.difficulty || "未分级"} · {submission.question.points} 分
+                              </p>
+                            </div>
+                            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-bold text-slate-500">
+                              人工批改
+                            </span>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 lg:grid-cols-[1fr_22rem]">
+                            <div className="grid gap-3">
+                              <div className="rounded-lg bg-white p-3">
+                                <p className="text-sm font-bold text-ink">题干</p>
+                                <MathText className="mt-2 block whitespace-pre-wrap text-sm leading-6 text-slate-600">
+                                  {submission.question.prompt || "暂无题干内容。"}
+                                </MathText>
+                              </div>
+                              <div className="rounded-lg bg-white p-3">
+                                <p className="text-sm font-bold text-ink">学生答案</p>
+                                <pre className="mt-2 whitespace-pre-wrap break-words rounded-lg bg-slate-900 p-3 text-sm leading-6 text-white">
+                                  {formatManualGradingAnswer(submission.answer)}
+                                </pre>
+                              </div>
+                            </div>
+
+                            <div className="grid content-start gap-3">
+                              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                                分数
+                                <input
+                                  type="number"
+                                  min={0}
+                                  max={submission.question.points || undefined}
+                                  step={0.5}
+                                  className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                                  value={draft.score}
+                                  onChange={(event) => updateDraft(submission.id, { score: event.target.value, message: "" })}
+                                  placeholder={`满分 ${submission.question.points}`}
+                                />
+                              </label>
+                              <label className="grid gap-1.5 text-sm font-semibold text-slate-700">
+                                批改反馈
+                                <textarea
+                                  className="focus-ring min-h-28 rounded-lg border border-slate-200 bg-white px-3 py-2 leading-6"
+                                  value={draft.feedback}
+                                  onChange={(event) => updateDraft(submission.id, { feedback: event.target.value, message: "" })}
+                                  placeholder="写给学生的反馈"
+                                />
+                              </label>
+                              {draft.message ? <p className="text-sm text-slate-500">{draft.message}</p> : null}
+                              <button
+                                type="button"
+                                onClick={() => void gradeSubmission(submission)}
+                                disabled={draft.saving}
+                                className="focus-ring rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+                              >
+                                {draft.saving ? "保存中..." : "提交批改"}
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ) : null}
+              </article>
+            );
+          })}
+
+          {!loading && groupedSubmissions.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-8 text-center text-sm font-semibold text-slate-500">
+              暂时没有需要人工批改的测验提交。
             </div>
-          ))}
+          ) : null}
         </div>
       </section>
-
-      <aside className="panel h-fit rounded-lg p-5">
-        <h3 className="font-bold text-ink">评分维度</h3>
-        <div className="mt-4 grid gap-3">
-          {gradingQueue[0].rubric.map((item) => (
-            <div key={item} className="rounded-lg bg-slate-50 p-3">
-              <p className="font-semibold text-ink">{item}</p>
-              <p className="mt-1 text-xs text-slate-500">0-10 分，可附文字反馈</p>
-            </div>
-          ))}
-        </div>
-      </aside>
     </div>
   );
 }

@@ -1,4 +1,4 @@
-import { StudentCourseRoomPage } from "@/components/StudentCourseRoomPage";
+import { StudentCourseRoomPage } from "@/components/StudentCourseRoomLivePage";
 
 export default async function StudentCourseRoomRoute({
   params

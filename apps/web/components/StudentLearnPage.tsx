@@ -1,14 +1,14 @@
 "use client";
 
-import { ArrowRight, Award, BookOpenCheck, Clock3, Database, Feather, Heart, HelpCircle, Loader2, MessageCircle, NotebookTabs, PenLine, Sparkles, Star, Trophy, UserPlus, Users } from "lucide-react";
+import { ArrowRight, Award, BookOpenCheck, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
 import { getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
-import type { CommunityHome, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
+import type { CommunityHome, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
@@ -34,6 +34,9 @@ const ui = {
   notes: "\u6211\u7684\u7b14\u8bb0",
   activeCourses: "\u5728\u5b66\u8bfe\u7a0b",
   completedCourses: "\u5df2\u5b8c\u6210",
+  activeCourseSection: "\u6b63\u5728\u5b66\u4e60\u7684\u8bfe\u7a0b",
+  completedCourseSection: "\u5df2\u5b8c\u6210\u7684\u8bfe\u7a0b",
+  completedStatus: "\u5df2\u5b8c\u6210",
   totalPoints: "\u603b\u79ef\u5206",
   weeklyPoints: "\u672c\u5468\u589e\u957f",
   loading: "\u6b63\u5728\u52a0\u8f7d...",
@@ -47,6 +50,7 @@ const ui = {
   login: "\u767b\u5f55",
   register: "\u6ce8\u518c",
   enterCourse: "\u8fdb\u5165\u8bfe\u7a0b",
+  reviewCourse: "\u67e5\u770b\u8bfe\u7a0b",
   browseCourses: "\u53bb\u9009\u8bfe",
   noImage: "\u5c1a\u672a\u4e0a\u4f20\u56fe\u7247",
   emptyCourseTitle: "\u8fd8\u6ca1\u6709\u8ba2\u9605\u8bfe\u7a0b",
@@ -60,6 +64,12 @@ const ui = {
   postPlaceholder: "\u5206\u4eab\u5b66\u4e60\u5fc3\u5f97\u3001\u8bfe\u7a0b\u8bc4\u8bba\u6216\u9898\u76ee\u8bb2\u89e3...",
   publishPost: "\u53d1\u5e03",
   publishing: "\u53d1\u5e03\u4e2d...",
+  addPostImages: "\u6dfb\u52a0\u56fe\u7247",
+  uploadingImages: "\u56fe\u7247\u4e0a\u4f20\u4e2d...",
+  postImageLimit: "\u6700\u591a\u53ef\u4e0a\u4f20 9 \u5f20\u56fe\u7247\u3002",
+  postImageUploadFailed: "\u56fe\u7247\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002",
+  postPublished: "\u5b66\u4e60\u5fc3\u5f97\u5df2\u53d1\u5e03\u5230\u4e2a\u4eba\u4e3b\u9875\u3002",
+  postPublishFailed: "\u5b66\u4e60\u5fc3\u5f97\u53d1\u5e03\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002",
   postEmpty: "\u8fd8\u6ca1\u6709\u5b66\u4e60\u5fc3\u5f97\uff0c\u5199\u4e0b\u7b2c\u4e00\u6761\u5427\u3002",
   noCourseLink: "\u4e0d\u5173\u8054\u8bfe\u7a0b",
   follow: "\u5173\u6ce8",
@@ -130,6 +140,28 @@ function groupNotesByCourse(notes: StudentLearningNote[]) {
     notes: [...group.notes].sort((left, right) => left.chapter_position - right.chapter_position)
   }));
 }
+
+function mergeStudentPosts(first: StudentPost[], second: StudentPost[]) {
+  const seen = new Set<number>();
+  const merged: StudentPost[] = [];
+  for (const post of [...first, ...second]) {
+    if (seen.has(post.id)) continue;
+    seen.add(post.id);
+    merged.push(post);
+  }
+  return merged.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
+async function readErrorMessage(response: Response, fallback: string) {
+  try {
+    const payload = await response.json() as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) return payload.detail;
+  } catch {
+    // Keep the fallback when the API does not return JSON.
+  }
+  return fallback;
+}
+
 export function StudentLearnPage() {
   const studentSession = useSyncExternalStore(subscribeToStudentSession, getStudentSessionUser, getStudentSessionServerSnapshot);
   const [activeTab, setActiveTab] = useState<LearningTab>("home");
@@ -208,7 +240,7 @@ export function StudentLearnPage() {
           }
           const payload = (await homeResponse.json()) as StudentSocialHome;
           if (ignore) return;
-          setSocialHome(payload);
+          setSocialHome((current) => current ? { ...payload, posts: mergeStudentPosts(current.posts, payload.posts) } : payload);
           setHomeStatus("");
         } catch {
           if (!ignore) setHomeStatus(ui.homeLoadFailed);
@@ -216,10 +248,12 @@ export function StudentLearnPage() {
       }
 
       try {
-        await Promise.all([loadCourses(), loadNotes(), loadSocialHome()]);
+        await loadCourses();
       } finally {
         if (!ignore) setIsLoading(false);
       }
+      void loadNotes();
+      void loadSocialHome();
     }
     void loadLearningData();
     return () => { ignore = true; };
@@ -232,7 +266,7 @@ export function StudentLearnPage() {
   const completed = visibleEnrollments.filter((item) => item.status === "completed");
 
   function addPost(post: StudentPost) {
-    setSocialHome((current) => current ? { ...current, posts: [post, ...current.posts] } : current);
+    setSocialHome((current) => current ? { ...current, posts: mergeStudentPosts([post], current.posts) } : current);
   }
 
   function updateFollowing(studentId: number, following: boolean) {
@@ -245,43 +279,48 @@ export function StudentLearnPage() {
     });
   }
 
+  if (!studentSession) {
+    return (
+      <>
+        <Header />
+        <main className="bg-mist py-8">
+          <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+            <LoginRequiredPanel />
+          </div>
+        </main>
+        <Footer />
+      </>
+    );
+  }
+
   return (
     <>
       <Header />
       <main className="bg-mist py-8">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <section className="mb-6 overflow-hidden rounded-[1.35rem] border border-white/80 bg-white shadow-soft">
-            <div className="relative grid gap-6 p-6 md:grid-cols-[1.2fr_0.8fr] md:p-8">
-              <div className="absolute right-8 top-8 h-24 w-24 rounded-full bg-mint/10 blur-2xl" />
-              <div>
-                <p className="text-sm font-black text-coral">{ui.pageEyebrow}</p>
-                <h1 className="mt-2 text-3xl font-black tracking-tight text-ink sm:text-4xl">{ui.pageTitle}</h1>
-                <p className="mt-3 max-w-2xl text-sm leading-7 text-slate-600 sm:text-base">{ui.pageSubtitle}</p>
-              </div>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <MiniStat icon={BookOpenCheck} label={ui.activeCourses} value={active.length} />
-                <MiniStat icon={Trophy} label={ui.completedCourses} value={completed.length} />
-                <MiniStat icon={Award} label={ui.totalPoints} value={socialHome?.total_points ?? 0} />
-                <MiniStat icon={Clock3} label={ui.weeklyPoints} value={`+${socialHome?.weekly_points ?? 0}`} />
-              </div>
-            </div>
-            <div className="flex gap-2 overflow-x-auto border-t border-slate-100 bg-slate-50/70 px-4 py-3 sm:px-6">
-              {tabs.map((tab) => {
-                const Icon = tab.icon;
-                const isActive = activeTab === tab.id;
-                return (
-                  <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`focus-ring inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-black transition ${isActive ? "bg-ink text-white shadow-sm" : "bg-white text-slate-600 hover:text-ink"}`}>
-                    <Icon size={16} />{tab.label}
-                  </button>
-                );
-              })}
-            </div>
-          </section>
+          <div className="mb-6 flex gap-2 overflow-x-auto rounded-lg border border-white/80 bg-white p-3 shadow-soft">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.id;
+              return (
+                <button key={tab.id} type="button" onClick={() => setActiveTab(tab.id)} className={`focus-ring inline-flex shrink-0 items-center gap-2 rounded-lg px-4 py-2 text-sm font-black transition ${isActive ? "bg-ink text-white shadow-sm" : "bg-slate-50 text-slate-600 hover:text-ink"}`}>
+                  <Icon size={16} />{tab.label}
+                </button>
+              );
+            })}
+          </div>
 
-          {!studentSession ? <LoginRequiredPanel /> : activeTab === "home" ? (
+          {activeTab === "home" ? (
             <LearningHomePanel studentSession={studentSession} socialHome={visibleSocialHome} enrollments={visibleEnrollments} status={homeStatus} onPostCreated={addPost} onFollowChange={updateFollowing} />
           ) : activeTab === "classroom" ? (
-            <section className="panel rounded-lg p-5"><SectionHeader eyebrow={ui.classroom} title={ui.classroom} description={status} /><CourseListPanel enrollments={visibleEnrollments} isLoading={isLoading} /></section>
+            <section className="panel rounded-lg p-5">
+              <SectionHeader eyebrow={ui.classroom} title={ui.classroom} description={status} />
+              <LearningStatsGrid
+                activeCount={active.length}
+                completedCount={completed.length}
+              />
+              <CourseListPanel activeEnrollments={active} completedEnrollments={completed} isLoading={isLoading} />
+            </section>
           ) : activeTab === "questions" ? (
             <section className="panel rounded-lg p-5"><SectionHeader eyebrow={ui.questionBank} title={ui.questionBank} description="" /><SavedQuestionBankPanel studentSession={studentSession} /></section>
           ) : (
@@ -291,6 +330,21 @@ export function StudentLearnPage() {
       </main>
       <Footer />
     </>
+  );
+}
+
+function LearningStatsGrid({
+  activeCount,
+  completedCount
+}: {
+  activeCount: number;
+  completedCount: number;
+}) {
+  return (
+    <div className="mb-5 grid gap-3 sm:grid-cols-2">
+      <MiniStat icon={BookOpenCheck} label={ui.activeCourses} value={activeCount} />
+      <MiniStat icon={Trophy} label={ui.completedCourses} value={completedCount} />
+    </div>
   );
 }
 
@@ -305,18 +359,80 @@ function SectionHeader({ eyebrow, title, description }: { eyebrow: string; title
 function LoginRequiredPanel() {
   return <section className="panel rounded-lg p-8 text-center"><div className="mx-auto grid h-14 w-14 place-items-center rounded-full bg-mint/10 text-mint"><Users size={24} /></div><h2 className="mt-4 text-2xl font-black text-ink">{ui.loginRequired}</h2><p className="mx-auto mt-2 max-w-xl text-sm leading-7 text-slate-500">{ui.loginRequiredText}</p><div className="mt-5 flex justify-center gap-3"><Link className="focus-ring rounded-lg bg-ink px-5 py-3 text-sm font-bold text-white" href="/login">{ui.login}</Link><Link className="focus-ring rounded-lg border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-slate-700" href="/register">{ui.register}</Link></div></section>;
 }
-function CourseListPanel({ enrollments, isLoading }: { enrollments: Enrollment[]; isLoading: boolean }) {
-  if (isLoading) return <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500"><Loader2 size={16} className="animate-spin" />{ui.loadingCourses}</div>;
-  if (enrollments.length === 0) return <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><p className="font-black text-ink">{ui.emptyCourseTitle}</p><p className="mt-2 text-sm text-slate-500">{ui.emptyCourseText}</p><Link href="/courses" className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white">{ui.browseCourses}<ArrowRight size={16} /></Link></div>;
-  return <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">{enrollments.map((enrollment) => <CourseProgressCard key={enrollment.id} enrollment={enrollment} />)}</div>;
+
+const levelVisuals: Record<number, { icon: typeof BookOpenCheck; color: string; bg: string; ring: string }> = {
+  1: { icon: BookOpenCheck, color: "text-slate-600", bg: "bg-slate-100", ring: "ring-slate-200" },
+  2: { icon: Compass, color: "text-sky-700", bg: "bg-sky-50", ring: "ring-sky-200" },
+  3: { icon: Target, color: "text-coral", bg: "bg-coral/10", ring: "ring-coral/25" },
+  4: { icon: ShieldCheck, color: "text-emerald-700", bg: "bg-emerald-50", ring: "ring-emerald-200" },
+  5: { icon: Trophy, color: "text-amber-700", bg: "bg-amber-50", ring: "ring-amber-200" },
+  6: { icon: Rocket, color: "text-indigo-700", bg: "bg-indigo-50", ring: "ring-indigo-200" },
+  7: { icon: Crown, color: "text-fuchsia-700", bg: "bg-fuchsia-50", ring: "ring-fuchsia-200" },
+  8: { icon: Sparkles, color: "text-violet-700", bg: "bg-violet-50", ring: "ring-violet-200" }
+};
+
+function LevelPointsBadge({ level, totalPoints }: { level?: StudentPointLevel | null; totalPoints: number }) {
+  const visual = levelVisuals[level?.index ?? 1] ?? levelVisuals[1];
+  const Icon = visual.icon;
+  return (
+    <div className={`flex overflow-hidden rounded-lg bg-white text-left shadow-sm ring-1 ${visual.ring}`}>
+      <div className={`flex items-center gap-2 px-3 py-2 ${visual.bg}`}>
+        <span className={`grid h-9 w-9 place-items-center rounded-lg bg-white ${visual.color}`}>
+          <Icon size={19} />
+        </span>
+        <div>
+          <p className="text-[11px] font-black text-slate-400">{"\u5b66\u4e60\u7b49\u7ea7"}</p>
+          <p className="text-sm font-black text-ink">{level?.name ?? "\u542f\u822a\u5b66\u5f92"}</p>
+        </div>
+      </div>
+      <div className="border-l border-slate-100 px-4 py-2">
+        <p className="text-[11px] font-black text-slate-400">{ui.totalPoints}</p>
+        <p className="text-lg font-black text-ink">{totalPoints}</p>
+      </div>
+    </div>
+  );
 }
 
-function CourseProgressCard({ enrollment }: { enrollment: Enrollment }) {
+function CourseListPanel({
+  activeEnrollments,
+  completedEnrollments,
+  isLoading
+}: {
+  activeEnrollments: Enrollment[];
+  completedEnrollments: Enrollment[];
+  isLoading: boolean;
+}) {
+  const totalCount = activeEnrollments.length + completedEnrollments.length;
+  if (isLoading) return <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500"><Loader2 size={16} className="animate-spin" />{ui.loadingCourses}</div>;
+  if (totalCount === 0) return <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><p className="font-black text-ink">{ui.emptyCourseTitle}</p><p className="mt-2 text-sm text-slate-500">{ui.emptyCourseText}</p><Link href="/courses" className="focus-ring mt-4 inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white">{ui.browseCourses}<ArrowRight size={16} /></Link></div>;
+  return (
+    <div className="grid gap-6">
+      {activeEnrollments.length ? (
+        <section>
+          <h3 className="mb-3 text-lg font-black text-ink">{ui.activeCourseSection}</h3>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {activeEnrollments.map((enrollment) => <CourseProgressCard key={enrollment.id} enrollment={enrollment} />)}
+          </div>
+        </section>
+      ) : null}
+      {completedEnrollments.length ? (
+        <section>
+          <h3 className="mb-3 text-lg font-black text-ink">{ui.completedCourseSection}</h3>
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            {completedEnrollments.map((enrollment) => <CourseProgressCard key={enrollment.id} enrollment={enrollment} completed />)}
+          </div>
+        </section>
+      ) : null}
+    </div>
+  );
+}
+
+function CourseProgressCard({ enrollment, completed = false }: { enrollment: Enrollment; completed?: boolean }) {
   const imageUrl = enrollment.course.hero_image_url?.trim();
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-3 transition hover:-translate-y-0.5 hover:shadow-soft">
+    <article className={`rounded-lg border p-3 transition hover:-translate-y-0.5 hover:shadow-soft ${completed ? "border-mint/40 bg-mint/5" : "border-slate-200 bg-white"}`}>
       {imageUrl ? <img src={imageUrl} alt={enrollment.course.title} className="h-36 w-full rounded-lg object-cover" /> : <div className="grid h-36 w-full place-items-center rounded-lg bg-slate-100 text-sm font-bold text-slate-500">{ui.noImage}</div>}
-      <div className="p-2"><div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500"><span className="rounded-full bg-mint/12 px-2.5 py-1 text-mint">{enrollment.course.level}</span><span>{enrollment.progress_percent}%</span></div><h3 className="mt-3 line-clamp-2 text-lg font-black text-ink">{enrollment.course.title}</h3><p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{enrollment.course.subtitle}</p><div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(enrollment.progress_percent, 100)}%` }} /></div><div className="mt-4 flex justify-end"><Link href={`/learn/${enrollment.course.slug}`} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white transition hover:bg-ink/90">{ui.enterCourse}<ArrowRight size={16} /></Link></div></div>
+      <div className="p-2"><div className="flex items-center justify-between gap-3 text-xs font-bold text-slate-500"><span className="rounded-full bg-mint/12 px-2.5 py-1 text-mint">{enrollment.course.level}</span>{completed ? <span className="rounded-full bg-mint px-2.5 py-1 text-white">{ui.completedStatus}</span> : <span>{enrollment.progress_percent}%</span>}</div><h3 className="mt-3 line-clamp-2 text-lg font-black text-ink">{enrollment.course.title}</h3><p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{enrollment.course.subtitle}</p>{completed ? null : <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100"><div className="h-full rounded-full bg-mint" style={{ width: `${Math.min(enrollment.progress_percent, 100)}%` }} /></div>}<div className="mt-4 flex justify-end"><Link href={`/learn/${enrollment.course.slug}`} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white transition hover:bg-ink/90">{completed ? ui.reviewCourse : ui.enterCourse}<ArrowRight size={16} /></Link></div></div>
     </article>
   );
 }
@@ -324,7 +440,12 @@ function CourseProgressCard({ enrollment }: { enrollment: Enrollment }) {
 function LearningHomePanel({ studentSession, socialHome, enrollments, status, onPostCreated, onFollowChange }: { studentSession: StudentSessionUser; socialHome: StudentSocialHome | null; enrollments: Enrollment[]; status: string; onPostCreated: (post: StudentPost) => void; onFollowChange: (studentId: number, following: boolean) => void }) {
   const [postDraft, setPostDraft] = useState("");
   const [postCourseId, setPostCourseId] = useState("");
+  const [postImages, setPostImages] = useState<string[]>([]);
+  const [postStatus, setPostStatus] = useState("");
+  const [localPosts, setLocalPosts] = useState<StudentPost[]>([]);
   const [isPosting, setIsPosting] = useState(false);
+  const [isUploadingPostImages, setIsUploadingPostImages] = useState(false);
+  const postImageInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedStudent, setSelectedStudent] = useState<StudentPublicProfile | null>(null);
   const [selectedStatus, setSelectedStatus] = useState("");
   const [communityHome, setCommunityHome] = useState<CommunityHome | null>(null);
@@ -336,6 +457,7 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
   const avatarUrl = profile?.avatar_url || studentSession.avatar_url;
   const activeCourses = socialHome?.active_courses ?? enrollments.filter((item) => item.status === "active");
   const completedCourses = socialHome?.completed_courses ?? enrollments.filter((item) => item.status === "completed");
+  const visiblePosts = useMemo(() => mergeStudentPosts(localPosts, socialHome?.posts ?? []), [localPosts, socialHome?.posts]);
   const referenceCourses = communityHome?.my_courses ?? coursesFromEnrollments(enrollments);
   const selectedQuestionCourse = referenceCourses.find((course) => course.id === Number(questionDraft.courseId));
 
@@ -392,10 +514,54 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
   async function createPost() {
     if (!postDraft.trim()) return;
     setIsPosting(true);
+    setPostStatus("");
     try {
-      const response = await fetch(`${API_BASE_URL}/learn/me/posts`, { method: "POST", headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ content: postDraft.trim(), course_id: postCourseId ? Number(postCourseId) : null }), cache: "no-store" });
-      if (response.ok) { onPostCreated((await response.json()) as StudentPost); setPostDraft(""); setPostCourseId(""); }
+      const response = await fetch(`${API_BASE_URL}/learn/me/posts`, { method: "POST", headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ content: postDraft.trim(), course_id: postCourseId ? Number(postCourseId) : null, image_urls: postImages }), cache: "no-store" });
+      if (!response.ok) throw new Error(await readErrorMessage(response, ui.postPublishFailed));
+      const created = (await response.json()) as StudentPost;
+      setLocalPosts((current) => mergeStudentPosts([created], current));
+      onPostCreated(created);
+      setPostDraft("");
+      setPostCourseId("");
+      setPostImages([]);
+      setPostStatus(ui.postPublished);
+    } catch (error) {
+      setPostStatus(error instanceof Error && error.message ? error.message : ui.postPublishFailed);
     } finally { setIsPosting(false); }
+  }
+
+  async function uploadPostImages(files: FileList | null) {
+    if (!files?.length) return;
+    const selectedFiles = Array.from(files).slice(0, Math.max(0, 9 - postImages.length));
+    if (selectedFiles.length === 0) {
+      setPostStatus(ui.postImageLimit);
+      return;
+    }
+    setIsUploadingPostImages(true);
+    setPostStatus("");
+    try {
+      const uploadedUrls: string[] = [];
+      for (const file of selectedFiles) {
+        const formData = new FormData();
+        formData.append("kind", "student_post_image");
+        formData.append("file", file);
+        const response = await fetch(`${API_BASE_URL}/student/uploads`, {
+          method: "POST",
+          headers: getStudentRequestHeaders(),
+          body: formData,
+          cache: "no-store"
+        });
+        if (!response.ok) throw new Error(await readErrorMessage(response, ui.postImageUploadFailed));
+        const payload = await response.json() as { url?: string };
+        if (payload.url) uploadedUrls.push(payload.url);
+      }
+      setPostImages((current) => [...current, ...uploadedUrls].slice(0, 9));
+    } catch (error) {
+      setPostStatus(error instanceof Error && error.message ? error.message : ui.postImageUploadFailed);
+    } finally {
+      setIsUploadingPostImages(false);
+      if (postImageInputRef.current) postImageInputRef.current.value = "";
+    }
   }
 
   async function loadPublicProfile(studentId: number) {
@@ -416,8 +582,84 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
   return (
     <section className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-6">
-        <div className="panel overflow-hidden rounded-lg"><div className="h-32 bg-[radial-gradient(circle_at_20%_20%,rgba(123,201,174,0.45),transparent_28%),linear-gradient(135deg,#fff7ed,#e8f6f1)]" /><div className="px-5 pb-5"><div className="-mt-10 flex flex-wrap items-end justify-between gap-4"><div className="flex items-end gap-4"><Avatar name={displayName} url={avatarUrl} size="large" /><div className="pb-1"><h2 className="text-2xl font-black text-ink">{displayName}</h2><p className="mt-1 text-sm font-semibold text-slate-500">{profile?.region || ui.regionUnknown}</p></div></div><div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4"><ProfileMetric label={ui.activeCourses} value={activeCourses.length} /><ProfileMetric label={ui.completedCourses} value={completedCourses.length} /><ProfileMetric label={ui.totalPoints} value={socialHome?.total_points ?? 0} /><ProfileMetric label={ui.weeklyPoints} value={`+${socialHome?.weekly_points ?? 0}`} /></div></div><p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile?.bio || ui.bioEmpty}</p></div></div>
-        <div className="panel rounded-lg p-5"><div className="mb-4 flex items-center gap-2"><PenLine size={18} className="text-coral" /><h3 className="text-lg font-black text-ink">{ui.shareThought}</h3></div><textarea value={postDraft} onChange={(event) => setPostDraft(event.target.value)} className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 outline-none" placeholder={ui.postPlaceholder} /><div className="mt-3 flex flex-wrap items-center justify-between gap-3"><select value={postCourseId} onChange={(event) => setPostCourseId(event.target.value)} className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600"><option value="">{ui.noCourseLink}</option>{enrollments.map((enrollment) => <option key={enrollment.course.id} value={enrollment.course.id}>{enrollment.course.title}</option>)}</select><button type="button" onClick={() => void createPost()} disabled={isPosting || !postDraft.trim()} className="focus-ring rounded-lg bg-coral px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isPosting ? ui.publishing : ui.publishPost}</button></div></div>
+        <div className="panel overflow-hidden rounded-lg">
+          <div className="h-32 bg-[radial-gradient(circle_at_20%_20%,rgba(123,201,174,0.45),transparent_28%),linear-gradient(135deg,#fff7ed,#e8f6f1)]" />
+          <div className="px-5 pb-5">
+            <div className="-mt-10 flex flex-wrap items-end justify-between gap-4">
+              <div className="flex items-end gap-4">
+                <Avatar name={displayName} url={avatarUrl} size="large" />
+                <div className="pb-1">
+                  <h2 className="text-2xl font-black text-ink">{displayName}</h2>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{profile?.region || ui.regionUnknown}</p>
+                </div>
+              </div>
+              <LevelPointsBadge level={socialHome?.level ?? null} totalPoints={socialHome?.total_points ?? 0} />
+            </div>
+            <div className="mt-5 grid gap-2 text-center sm:grid-cols-3">
+              <ProfileMetric label={ui.activeCourses} value={activeCourses.length} />
+              <ProfileMetric label={ui.completedCourses} value={completedCourses.length} />
+              <ProfileMetric label={ui.weeklyPoints} value={`+${socialHome?.weekly_points ?? 0}`} />
+            </div>
+            <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile?.bio || ui.bioEmpty}</p>
+          </div>
+        </div>
+        <div className="panel rounded-lg p-5">
+          <div className="mb-4 flex items-center gap-2">
+            <PenLine size={18} className="text-coral" />
+            <h3 className="text-lg font-black text-ink">{ui.shareThought}</h3>
+          </div>
+          <textarea
+            value={postDraft}
+            onChange={(event) => { setPostDraft(event.target.value); if (postStatus) setPostStatus(""); }}
+            className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 outline-none"
+            placeholder={ui.postPlaceholder}
+          />
+          {postImages.length > 0 ? (
+            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+              {postImages.map((url, index) => (
+                <div key={`${url}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+                  <img src={url} alt={`post image ${index + 1}`} className="h-full w-full object-cover" />
+                  <button
+                    type="button"
+                    onClick={() => setPostImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}
+                    className="focus-ring absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-white/90 text-slate-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                    aria-label="remove image"
+                  >
+                    <X size={15} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          ) : null}
+          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <select value={postCourseId} onChange={(event) => setPostCourseId(event.target.value)} className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600">
+                <option value="">{ui.noCourseLink}</option>
+                {enrollments.map((enrollment) => <option key={enrollment.course.id} value={enrollment.course.id}>{enrollment.course.title}</option>)}
+              </select>
+              <input
+                ref={postImageInputRef}
+                type="file"
+                accept="image/*"
+                multiple
+                className="hidden"
+                onChange={(event) => void uploadPostImages(event.target.files)}
+              />
+              <button
+                type="button"
+                onClick={() => postImageInputRef.current?.click()}
+                disabled={isUploadingPostImages || postImages.length >= 9}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+              >
+                {isUploadingPostImages ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+                {isUploadingPostImages ? ui.uploadingImages : ui.addPostImages}
+              </button>
+            </div>
+            <button type="button" onClick={() => void createPost()} disabled={isPosting || isUploadingPostImages || !postDraft.trim()} className="focus-ring rounded-lg bg-coral px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isPosting ? ui.publishing : ui.publishPost}</button>
+          </div>
+          {postStatus ? <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm font-bold text-slate-500">{postStatus}</p> : null}
+        </div>
+        <PostFeed posts={visiblePosts} />
         <div className="panel rounded-lg p-5">
           <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2">
@@ -485,7 +727,6 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
             </div>
           </div>
         </div>
-        <PostFeed posts={socialHome?.posts ?? []} />
         <CourseStrip title={ui.nowLearning} courses={activeCourses.map((item) => item.course)} emptyText={ui.noCourses} />
         <CourseStrip title={ui.recommendedCourses} courses={socialHome?.recommended_courses ?? []} emptyText={ui.emptyRecommended} />
         {selectedStudent || selectedStatus ? <PublicProfilePanel profile={selectedStudent} status={selectedStatus} onFollow={(id, following) => void toggleFollow(id, following)} /> : null}
@@ -504,11 +745,33 @@ function ProfileMetric({ label, value }: { label: string; value: string | number
 }
 
 function PostFeed({ posts }: { posts: StudentPost[] }) {
-  return <div className="panel rounded-lg p-5"><div className="mb-4 flex items-center gap-2"><MessageCircle size={18} className="text-coral" /><h3 className="text-lg font-black text-ink">{ui.sharedThoughts}</h3></div>{posts.length === 0 ? <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">{ui.postEmpty}</p> : <div className="grid gap-3">{posts.map((post) => <PostCard key={post.id} post={post} />)}</div>}</div>;
+  return <div className="panel rounded-lg p-5"><div className="mb-4 flex items-center gap-2"><MessageCircle size={18} className="text-coral" /><h3 className="text-lg font-black text-ink">{ui.sharedThoughts}</h3></div>{posts.length === 0 ? <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">{ui.postEmpty}</p> : <div className="grid gap-3">{posts.map((post) => <div key={post.id}><PostCard post={post} /><PostImageGrid images={post.image_urls ?? []} /></div>)}</div>}</div>;
 }
 
 function PostCard({ post }: { post: StudentPost }) {
   return <article className="rounded-lg border border-slate-100 bg-white p-4"><div className="flex items-center gap-3"><Avatar name={post.student_name} url={post.avatar_url} /><div><p className="font-black text-ink">{post.student_name}</p><p className="text-xs font-semibold text-slate-500">{formatDate(post.created_at)}{post.course_title ? ` 路 ${post.course_title}` : ""}</p></div></div><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{post.content}</p><div className="mt-3 flex gap-2 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><Heart size={14} />0</span><span className="inline-flex items-center gap-1"><MessageCircle size={14} />0</span></div></article>;
+}
+
+function PostImageGrid({ images }: { images: string[] }) {
+  if (images.length === 0) return null;
+  if (images.length === 1) {
+    return (
+      <div className="-mt-1 overflow-hidden rounded-b-lg border border-t-0 border-slate-100 bg-white p-4 pt-0">
+        <img src={images[0]} alt="learning post image" className="max-h-[30rem] w-full rounded-lg object-cover" />
+      </div>
+    );
+  }
+  return (
+    <div className="-mt-1 rounded-b-lg border border-t-0 border-slate-100 bg-white p-4 pt-0">
+      <div className="grid grid-cols-3 gap-1.5">
+        {images.slice(0, 9).map((url, index) => (
+          <div key={`${url}-${index}`} className="aspect-square overflow-hidden rounded-lg bg-slate-50">
+            <img src={url} alt={`learning post image ${index + 1}`} className="h-full w-full object-cover" />
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function CourseStrip({ title, courses, emptyText }: { title: string; courses: Course[]; emptyText: string }) {

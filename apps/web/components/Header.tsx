@@ -72,7 +72,7 @@ export function Header({
   return (
     <header className="sticky top-0 z-40 border-b border-slate-200/80 bg-white/90 backdrop-blur-xl">
       <div
-        className={`mx-auto flex items-center gap-4 px-4 py-3 sm:px-6 lg:px-8 ${
+        className={`mx-auto flex items-center gap-3 px-4 py-3 sm:px-6 lg:px-8 ${
           wide ? "w-full 2xl:px-10" : "max-w-7xl"
         }`}
       >
@@ -80,24 +80,24 @@ export function Header({
           <img
             src="/logos/logo.png"
             alt="InFuture Logo"
-            className="h-9 w-auto max-w-[9.5rem] object-contain"
+            className="h-9 w-auto max-w-[8.75rem] object-contain lg:max-w-[9.5rem]"
           />
         </Link>
 
-        <nav className="hidden flex-1 justify-center gap-1 md:flex">
+        <nav className="scrollbar-hide hidden min-w-0 flex-1 items-center justify-center gap-1 overflow-x-auto lg:flex">
           {navItems.map((item) => (
             <Link
               key={item.href}
               href={item.href}
               prefetch={false}
-              className="rounded-lg px-2.5 py-2 text-sm font-semibold text-slate-600 transition hover:bg-slate-100 hover:text-ink"
+              className="shrink-0 whitespace-nowrap rounded-full px-3 py-2 text-sm font-bold text-slate-600 transition hover:bg-slate-100 hover:text-ink"
             >
               {item.label}
             </Link>
           ))}
         </nav>
 
-        <div className="hidden min-w-56 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 xl:flex">
+        <div className="hidden min-w-48 max-w-56 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 2xl:flex">
           <Search size={16} className="text-slate-400" />
           <input
             aria-label="\u641c\u7d22\u8bfe\u7a0b"
@@ -106,7 +106,7 @@ export function Header({
           />
         </div>
 
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {student ? (
             <>
               <Link

@@ -1,8 +1,12 @@
 ﻿"use client";
 
 import {
+  AlertTriangle,
+  Calculator,
+  CheckCircle2,
   Code2,
   Edit3,
+  FlaskConical,
   FileAudio,
   FileImage,
   FileVideo,
@@ -10,9 +14,10 @@ import {
   Save,
   Trash2
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
 
+import { MathText, hasMathText } from "@/components/MathText";
 import {
   adminInstitution,
   fallbackAdminQuestions,
@@ -97,6 +102,20 @@ type QuestionOwnerOption = {
   role: string;
 };
 
+type CodeRunResult = {
+  ok: boolean;
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+  error?: string | null;
+  duration_ms: number;
+  tests: Array<{
+    test: string;
+    passed: boolean;
+    message?: string;
+  }>;
+};
+
 type ApiManagedUser = {
   id: number;
   email: string;
@@ -121,6 +140,41 @@ const questionStatusClasses: Record<QuestionStatusValue, string> = {
   published: "bg-mint/15 text-mint"
 };
 
+const formulaTemplateGroups = [
+  {
+    title: "数学",
+    icon: Calculator,
+    templates: [
+      { label: "分数", value: "$\\frac{a}{b}$" },
+      { label: "根号", value: "$\\sqrt{x}$" },
+      { label: "乘方", value: "$x^2$" },
+      { label: "下标", value: "$x_1$" },
+      { label: "块级公式", value: "$$\\frac{x^2+1}{\\sqrt{x}}$$" }
+    ]
+  },
+  {
+    title: "物理",
+    icon: Calculator,
+    templates: [
+      { label: "牛顿第二定律", value: "$F=ma$" },
+      { label: "速度", value: "$v=\\frac{s}{t}$" },
+      { label: "密度", value: "$\\rho=\\frac{m}{V}$" },
+      { label: "欧姆定律", value: "$U=IR$" },
+      { label: "单位", value: "$\\mathrm{m/s}$" }
+    ]
+  },
+  {
+    title: "化学",
+    icon: FlaskConical,
+    templates: [
+      { label: "水分子", value: "\\ce{H2O}" },
+      { label: "反应式", value: "\\ce{2H2 + O2 -> 2H2O}" },
+      { label: "可逆反应", value: "\\ce{N2 + 3H2 <=> 2NH3}" },
+      { label: "离子", value: "\\ce{SO4^{2-}}" }
+    ]
+  }
+];
+
 const questionTypes: Array<{
   value: QuestionTypeValue;
   label: string;
@@ -131,8 +185,7 @@ const questionTypes: Array<{
   { value: "single_choice", label: "单选题", needsOptions: true, needsCode: false },
   { value: "multiple_choice", label: "多选题", needsOptions: true, needsCode: false },
   { value: "writing", label: "开放式答案题", needsOptions: false, needsCode: false },
-  { value: "coding", label: "代码编写题", needsOptions: false, needsCode: true },
-  { value: "code_review", label: "代码修改题", needsOptions: false, needsCode: true }
+  { value: "coding", label: "代码编写题", needsOptions: false, needsCode: true }
 ];
 
 function questionTypeLabel(type: QuestionTypeValue) {
@@ -140,7 +193,11 @@ function questionTypeLabel(type: QuestionTypeValue) {
 }
 
 function isCodeQuestion(type: QuestionTypeValue) {
-  return type === "coding" || type === "code_review";
+  return type === "coding";
+}
+
+function isRetiredQuestionType(type: QuestionTypeValue) {
+  return type === "code_review";
 }
 
 function notifyQuestionBankChanged() {
@@ -158,6 +215,9 @@ function isPersistedQuestion(question: AdminQuestion) {
 }
 
 function canUseQuestionType(type: QuestionTypeValue, institutionCategory: string) {
+  if (isRetiredQuestionType(type)) {
+    return false;
+  }
   return institutionCategory === "it" || !isCodeQuestion(type);
 }
 
@@ -167,6 +227,18 @@ function defaultQuestionTypeForInstitution(institutionCategory: string): Questio
 
 function usesOptions(type: QuestionTypeValue) {
   return type === "fill_blank" || type === "single_choice" || type === "multiple_choice";
+}
+
+function supportsFormulaTools(institutionCategory: string) {
+  return institutionCategory === "tutoring";
+}
+
+function appendFormulaTemplate(currentValue: string, template: string) {
+  const trimmedValue = currentValue.trimEnd();
+  if (!trimmedValue) {
+    return template;
+  }
+  return `${trimmedValue} ${template}`;
 }
 
 function createDefaultOptions(type: QuestionTypeValue): QuestionOption[] {
@@ -251,6 +323,11 @@ function createBlankQuestion(
   };
 }
 
+function normalizeSkillArea(value: string | null | undefined) {
+  const trimmed = (value ?? "").trim();
+  return trimmed === "缁煎悎鑳藉姏" || trimmed === "ç»¼åˆè½å" ? "" : trimmed;
+}
+
 function normalizeQuestion(raw: AdminQuestion): AdminQuestion {
   return {
     ...raw,
@@ -258,6 +335,7 @@ function normalizeQuestion(raw: AdminQuestion): AdminQuestion {
     course_id: raw.course_id ?? null,
     created_by_user_id: raw.created_by_user_id ?? null,
     hint: raw.hint ?? "",
+    skill_area: normalizeSkillArea(raw.skill_area),
     content: raw.content ?? {},
     answer_key: raw.answer_key ?? {},
     status: raw.status ?? "saved",
@@ -284,8 +362,13 @@ export function QuestionBankManager() {
   );
   const [status, setStatus] = useState("可编辑演示数据；API 启动后会自动同步。");
   const [isSaving, setIsSaving] = useState(false);
+  const [codeRunning, setCodeRunning] = useState(false);
+  const [codeRunResult, setCodeRunResult] = useState<CodeRunResult | null>(null);
+  const [formulaInsertTarget, setFormulaInsertTarget] = useState("prompt");
   const currentUserId = currentUser?.id ?? 0;
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+  const promptInputRef = useRef<HTMLTextAreaElement | null>(null);
+  const hintInputRef = useRef<HTMLTextAreaElement | null>(null);
   const effectiveOwnerId = selectedOwnerId ?? currentUserId;
   const isSuperAdmin = currentUser?.role === "super_admin";
   const canEditQuestions = Boolean(currentUserId && effectiveOwnerId === currentUserId);
@@ -423,7 +506,7 @@ export function QuestionBankManager() {
           return true;
         }
         const title = typeof question.content.title === "string" ? question.content.title : "";
-        return [title, question.prompt, question.hint, question.skill_area, question.difficulty]
+        return [title, question.prompt, question.hint, normalizeSkillArea(question.skill_area), question.difficulty]
           .some((value) => value.toLowerCase().includes(keyword));
       });
     },
@@ -440,6 +523,25 @@ export function QuestionBankManager() {
     : difficultyOptions[0];
   const institutionCategoryLabel =
     institutionCategoryOptions.find((option) => option.value === institutionCategory)?.label ?? "其他类";
+  const showFormulaTools = supportsFormulaTools(institutionCategory);
+  const formulaTargetOptions = useMemo(() => {
+    const targets = [
+      { value: "prompt", label: "题干" },
+      { value: "hint", label: "题目提示" }
+    ];
+    if (selectedQuestion.type === "single_choice" || selectedQuestion.type === "multiple_choice") {
+      selectedQuestion.options.forEach((option, index) => {
+        targets.push({
+          value: `option:${index}`,
+          label: `选项 ${option.label || index + 1}`
+        });
+      });
+    }
+    return targets;
+  }, [selectedQuestion.options, selectedQuestion.type]);
+  const normalizedFormulaInsertTarget = formulaTargetOptions.some((target) => target.value === formulaInsertTarget)
+    ? formulaInsertTarget
+    : "prompt";
 
   function applyQuestionChange(updater: (current: AdminQuestion) => AdminQuestion) {
     if (!canEditQuestions) {
@@ -465,6 +567,40 @@ export function QuestionBankManager() {
     applyQuestionChange((current) => ({ ...current, ...patch }));
   }
 
+  function insertFormulaTemplate(field: "prompt" | "hint", template: string) {
+    const currentValue = selectedQuestion[field] ?? "";
+    const input = field === "prompt" ? promptInputRef.current : hintInputRef.current;
+    const selectionStart = input?.selectionStart ?? currentValue.length;
+    const selectionEnd = input?.selectionEnd ?? currentValue.length;
+    const prefix = currentValue.slice(0, selectionStart);
+    const suffix = currentValue.slice(selectionEnd);
+    const needsLeadingSpace = prefix.length > 0 && !/\s$/.test(prefix);
+    const needsTrailingSpace = suffix.length > 0 && !/^\s/.test(suffix);
+    const insertion = `${needsLeadingSpace ? " " : ""}${template}${needsTrailingSpace ? " " : ""}`;
+    const nextValue = `${prefix}${insertion}${suffix}`;
+    updateSelected({ [field]: nextValue } as Partial<AdminQuestion>);
+    window.requestAnimationFrame(() => {
+      input?.focus();
+      const cursor = prefix.length + insertion.length;
+      input?.setSelectionRange(cursor, cursor);
+    });
+  }
+
+  function insertFormulaTemplateToTarget(template: string) {
+    const target = normalizedFormulaInsertTarget;
+    if (target === "prompt" || target === "hint") {
+      insertFormulaTemplate(target, template);
+      return;
+    }
+    const optionIndex = Number(target.replace("option:", ""));
+    const option = selectedQuestion.options[optionIndex];
+    if (!option) {
+      setFormulaInsertTarget("prompt");
+      return;
+    }
+    updateOption(optionIndex, { text: appendFormulaTemplate(option.text, template) });
+  }
+
   function updateContent(key: string, value: unknown) {
     applyQuestionChange((current) => ({
       ...current,
@@ -477,6 +613,49 @@ export function QuestionBankManager() {
       ...current,
       answer_key: { ...current.answer_key, [key]: value }
     }));
+  }
+
+  async function runSelectedQuestionCode() {
+    if (!isCodeQuestion(selectedQuestion.type)) {
+      return;
+    }
+    const code = selectedQuestion.content.starter_code ?? "";
+    if (!code.trim()) {
+      setStatus("请先填写代码。");
+      setCodeRunResult(null);
+      return;
+    }
+    setCodeRunning(true);
+    setCodeRunResult(null);
+    setStatus("正在运行代码...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/code/run`, {
+        method: "POST",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          code,
+          language: "python",
+          tests: Array.isArray(selectedQuestion.content.tests) ? selectedQuestion.content.tests : []
+        })
+      });
+      if (!response.ok) {
+        setStatus(`代码运行失败：${await readApiErrorMessage(response)}`);
+        return;
+      }
+      const payload = (await response.json()) as CodeRunResult;
+      setCodeRunResult(payload);
+      setStatus(
+        payload.ok
+          ? payload.passed
+            ? "代码运行完成，测试已通过。"
+            : "代码运行完成，还有测试未通过。"
+          : "代码运行失败，请检查代码。"
+      );
+    } catch {
+      setStatus("代码运行失败，请确认 FastAPI 服务正在运行。");
+    } finally {
+      setCodeRunning(false);
+    }
   }
 
   function updateOption(index: number, patch: Partial<QuestionOption>) {
@@ -583,16 +762,22 @@ export function QuestionBankManager() {
     const next = createBlankQuestion(nextType, institutionCategory, currentUserId);
     setSelectedQuestion(next);
     setActiveType(nextType);
+    setCodeRunResult(null);
     setStatus("已创建新题目草稿。");
   }
 
   function selectQuestion(question: AdminQuestion) {
     if (!canUseQuestionType(question.type, institutionCategory)) {
-      setStatus("当前机构不是 IT 教育类，不能编辑代码编写题或代码修改题。");
+      setStatus(
+        isRetiredQuestionType(question.type)
+          ? "代码修改题已停用，不能继续编辑。"
+          : "当前机构不是 IT 教育类，不能编辑代码编写题。"
+      );
       return;
     }
     setSelectedQuestion(normalizeQuestion(question));
     setActiveType(question.type);
+    setCodeRunResult(null);
   }
 
   async function persistQuestion(
@@ -619,7 +804,11 @@ export function QuestionBankManager() {
       status: nextStatus
     };
     if (!canUseQuestionType(questionToSave.type, institutionCategory)) {
-      setStatus("当前机构不是 IT 教育类，不能保存代码编写题或代码修改题。");
+      setStatus(
+        isRetiredQuestionType(questionToSave.type)
+          ? "代码修改题已停用，不能保存。"
+          : "当前机构不是 IT 教育类，不能保存代码编写题。"
+      );
       return null;
     }
     const validationMessage = validateQuestionBeforeSave(questionToSave);
@@ -777,35 +966,49 @@ export function QuestionBankManager() {
   }
 
   return (
-    <div className="grid gap-5 xl:grid-cols-[18rem_1fr]">
+    <div className="grid gap-5 xl:grid-cols-[20rem_1fr]">
       {deleteConfirmDialog}
-      <aside className="panel h-fit rounded-lg p-4">
-        <p className="text-sm font-bold text-ink">题型</p>
-        <div className="mt-3 grid gap-2">
-          {availableQuestionTypes.map((type) => (
-            <button
-              key={type.value}
-              onClick={() => {
-                setActiveType(type.value);
-                if (canEditQuestions) {
-                  newQuestion(type.value);
-                }
-              }}
-              className={`focus-ring rounded-lg px-3 py-2 text-left text-sm font-semibold ${
-                activeType === type.value ? "bg-ink text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"
-              }`}
-            >
-              {type.label}
-            </button>
-          ))}
-        </div>
-        <div className="mt-4 rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-500">
+      <aside className="grid h-fit gap-4">
+        <section className="panel rounded-lg p-4">
+          <p className="text-sm font-bold text-ink">题型</p>
+          <div className="mt-3 grid gap-2">
+            {availableQuestionTypes.map((type) => (
+              <button
+                key={type.value}
+                onClick={() => {
+                  setActiveType(type.value);
+                  if (canEditQuestions) {
+                    newQuestion(type.value);
+                  }
+                }}
+                className={`focus-ring rounded-lg px-3 py-2 text-left text-sm font-semibold ${
+                  activeType === type.value ? "bg-ink text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100"
+                }`}
+              >
+                {type.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        {showFormulaTools ? (
+          <FormulaTemplateBar
+            targetOptions={formulaTargetOptions}
+            targetValue={normalizedFormulaInsertTarget}
+            onTargetChange={setFormulaInsertTarget}
+            onInsert={insertFormulaTemplateToTarget}
+          />
+        ) : null}
+
+        <section className="panel rounded-lg p-4">
+          <div className="rounded-lg bg-slate-50 p-3 text-xs leading-5 text-slate-500">
           <p className="font-bold text-slate-700">当前机构类别：{institutionCategoryLabel}</p>
           <p className="mt-1 font-bold text-slate-700">
             当前查看：{ownerOptions.find((owner) => owner.id === effectiveOwnerId)?.name ?? "当前用户"}
           </p>
           <p className="mt-1">{status}</p>
-        </div>
+          </div>
+        </section>
       </aside>
 
       <section className="grid gap-5">
@@ -875,7 +1078,7 @@ export function QuestionBankManager() {
                   <button className="text-left" onClick={() => selectQuestion(question)}>
                     <p className="font-bold text-ink">{question.content.title || question.prompt || "未命名题目"}</p>
                     <p className="mt-1 text-sm text-slate-500">
-                      {question.skill_area || "综合能力"} · {question.difficulty} · {question.points} 分
+                      {normalizeSkillArea(question.skill_area) || "综合能力"} · {question.difficulty} · {question.points} 分
                     </p>
                   </button>
                   <div className="flex items-center gap-2">
@@ -1035,24 +1238,39 @@ export function QuestionBankManager() {
             </label>
           </div>
 
-          <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
-            题干
+          <div className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <span>题干</span>
+              {showFormulaTools ? (
+                <span className="text-xs font-bold text-slate-400">支持 $...$、$$...$$、\ce{"{...}"} 公式写法</span>
+              ) : null}
+            </div>
             <textarea
+              ref={promptInputRef}
               className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-2 leading-7"
               value={selectedQuestion.prompt}
+              onFocus={() => setFormulaInsertTarget("prompt")}
               onChange={(event) => updateSelected({ prompt: event.target.value })}
             />
-          </label>
+            {showFormulaTools ? (
+              <FormulaPreview title="题干预览" value={selectedQuestion.prompt} />
+            ) : null}
+          </div>
 
-          <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
-            题目提示
+          <div className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
+            <span>题目提示</span>
             <textarea
+              ref={hintInputRef}
               className="focus-ring min-h-24 rounded-lg border border-slate-200 px-3 py-2 leading-7"
               value={selectedQuestion.hint}
+              onFocus={() => setFormulaInsertTarget("hint")}
               onChange={(event) => updateSelected({ hint: event.target.value })}
               placeholder="可为空。学生点击提示按钮后才会看到这里的内容。"
             />
-          </label>
+            {showFormulaTools ? (
+              <FormulaPreview title="提示预览" value={selectedQuestion.hint} />
+            ) : null}
+          </div>
 
           <MediaEditor
             mediaAssets={selectedQuestion.media_assets}
@@ -1068,6 +1286,8 @@ export function QuestionBankManager() {
               removeOption={removeOption}
               updateOption={updateOption}
               markSingleCorrect={markSingleCorrect}
+              showFormulaTools={showFormulaTools}
+              onOptionFocus={(index) => setFormulaInsertTarget(`option:${index}`)}
             />
           ) : null}
 
@@ -1107,8 +1327,13 @@ export function QuestionBankManager() {
                 <span className="inline-flex items-center gap-2 font-bold text-skysoft">
                   <Code2 size={16} /> 代码运行环境
                 </span>
-                <button className="focus-ring rounded-lg bg-mint px-3 py-1.5 text-xs font-bold text-white">
-                  运行代码
+                <button
+                  type="button"
+                  onClick={() => void runSelectedQuestionCode()}
+                  disabled={codeRunning || !canEditQuestions}
+                  className="focus-ring rounded-lg bg-mint px-3 py-1.5 text-xs font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-500"
+                >
+                  {codeRunning ? "运行中..." : "运行代码"}
                 </button>
               </div>
               <textarea
@@ -1144,6 +1369,7 @@ export function QuestionBankManager() {
                   />
                 </label>
               </div>
+              {codeRunResult ? <AdminCodeRunResultPanel result={codeRunResult} /> : null}
             </section>
           ) : null}
           </fieldset>
@@ -1153,18 +1379,134 @@ export function QuestionBankManager() {
   );
 }
 
+function FormulaTemplateBar({
+  targetOptions,
+  targetValue,
+  onTargetChange,
+  onInsert
+}: {
+  targetOptions: Array<{ value: string; label: string }>;
+  targetValue: string;
+  onTargetChange: (target: string) => void;
+  onInsert: (template: string) => void;
+}) {
+  return (
+    <section className="panel rounded-lg p-4">
+      <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h3 className="font-bold text-ink">公式与理化符号</h3>
+          <p className="mt-1 text-sm text-slate-500">选择插入位置后，点击模板即可写入对应编辑区。</p>
+        </div>
+        <label className="grid min-w-52 gap-1.5 text-xs font-black text-slate-500">
+          插入到
+          <select
+            className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700"
+            value={targetValue}
+            onChange={(event) => onTargetChange(event.target.value)}
+          >
+            {targetOptions.map((target) => (
+              <option key={target.value} value={target.value}>
+                {target.label}
+              </option>
+            ))}
+          </select>
+        </label>
+      </div>
+      <div className="grid gap-2">
+        {formulaTemplateGroups.map((group) => (
+          <div key={group.title} className="grid gap-2 sm:grid-cols-[4.5rem_1fr] sm:items-start">
+            <span className="inline-flex items-center gap-1 pt-1.5 text-xs font-black text-slate-500">
+              <group.icon size={14} />
+              {group.title}
+            </span>
+            <div className="flex min-w-0 flex-wrap gap-2">
+              {group.templates.map((template) => (
+                <button
+                  key={`${group.title}-${template.label}`}
+                  type="button"
+                  onClick={() => onInsert(template.value)}
+                  className="focus-ring rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs font-bold text-slate-600 transition hover:border-mint/50 hover:text-mint"
+                >
+                  {template.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AdminCodeRunResultPanel({ result }: { result: CodeRunResult }) {
+  return (
+    <div className="mt-4 rounded-lg border border-slate-700 bg-[#0b1220] p-3 text-xs text-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={`inline-flex items-center gap-1.5 font-bold ${result.passed ? "text-mint" : "text-coral"}`}>
+          {result.passed ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+          {result.passed ? "测试通过" : "测试未通过"}
+        </span>
+        <span className="text-slate-400">{result.duration_ms}ms</span>
+      </div>
+      {result.error ? <pre className="mt-2 whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.error}</pre> : null}
+      {result.stdout ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stdout</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono">{result.stdout}</pre>
+        </div>
+      ) : null}
+      {result.stderr ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stderr</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.stderr}</pre>
+        </div>
+      ) : null}
+      {result.tests.length ? (
+        <div className="mt-2 grid gap-1.5">
+          {result.tests.map((test, index) => (
+            <div key={`${test.test}-${index}`} className="rounded border border-white/10 bg-white/5 p-2">
+              <p className={`font-bold ${test.passed ? "text-mint" : "text-coral"}`}>
+                {test.passed ? "通过" : "未通过"} · {test.test}
+              </p>
+              {test.message ? <p className="mt-1 text-slate-300">{test.message}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function FormulaPreview({ title, value }: { title: string; value: string }) {
+  if (!value.trim()) {
+    return null;
+  }
+  return (
+    <div className="rounded-lg border border-mint/20 bg-mint/5 p-3">
+      <p className="mb-2 text-xs font-black text-mint">{title}</p>
+      <MathText className="block whitespace-pre-wrap text-sm font-semibold leading-7 text-slate-700">
+        {value}
+      </MathText>
+    </div>
+  );
+}
+
 function OptionsEditor({
   question,
   addOption,
   removeOption,
   updateOption,
-  markSingleCorrect
+  markSingleCorrect,
+  showFormulaTools,
+  onOptionFocus
 }: {
   question: AdminQuestion;
   addOption: () => void;
   removeOption: (index: number) => void | Promise<void>;
   updateOption: (index: number, patch: Partial<QuestionOption>) => void;
   markSingleCorrect: (index: number) => void;
+  showFormulaTools: boolean;
+  onOptionFocus: (index: number) => void;
 }) {
   const isFillBlank = question.type === "fill_blank";
   const isSingleChoice = question.type === "single_choice";
@@ -1177,7 +1519,9 @@ function OptionsEditor({
           <p className="mt-1 text-sm text-slate-500">
             {isFillBlank
               ? "可为同一个空添加多个可接受答案。"
-              : "单选题选择一个正确项，多选题可以选择多个正确项。"}
+              : showFormulaTools
+                ? "单选题选择一个正确项，多选题可以选择多个正确项。选项内容同样支持公式和理化符号。"
+                : "单选题选择一个正确项，多选题可以选择多个正确项。"}
           </p>
         </div>
         <button
@@ -1208,12 +1552,24 @@ function OptionsEditor({
                 placeholder="A"
               />
             )}
-            <input
-              className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm"
-              value={option.text}
-              onChange={(event) => updateOption(index, { text: event.target.value })}
-              placeholder={isFillBlank ? "标准答案或可接受答案" : "选项内容"}
-            />
+            <div className="grid gap-2">
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm"
+                value={option.text}
+                onFocus={() => {
+                  if (showFormulaTools && !isFillBlank) {
+                    onOptionFocus(index);
+                  }
+                }}
+                onChange={(event) => updateOption(index, { text: event.target.value })}
+                placeholder={isFillBlank ? "标准答案或可接受答案" : "选项内容"}
+              />
+              {hasMathText(option.text) ? (
+                <div className="rounded-lg border border-mint/20 bg-white px-3 py-2 text-xs font-semibold leading-6 text-slate-700">
+                  <MathText>{option.text}</MathText>
+                </div>
+              ) : null}
+            </div>
             {!isFillBlank ? (
               <label className="flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700">
                 <input
@@ -1491,7 +1847,7 @@ function buildQuestionPayload(question: AdminQuestion) {
     hint: question.hint.trim(),
     content: question.content,
     answer_key,
-    skill_area: question.skill_area || "缁煎悎鑳藉姏",
+    skill_area: normalizeSkillArea(question.skill_area),
     difficulty: question.difficulty || "A2",
     points: Number(question.points) || 10,
     requires_manual_grading: question.requires_manual_grading,

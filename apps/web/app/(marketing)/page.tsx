@@ -69,7 +69,6 @@ const questionTypeLabels: Record<string, string> = {
   multiple_choice: "\u591a\u9009\u9898",
   fill_blank: "\u586b\u7a7a\u9898",
   coding: "\u4ee3\u7801\u7f16\u5199\u9898",
-  code_review: "\u4ee3\u7801\u4fee\u6539\u9898",
   true_false: "\u5224\u65ad\u9898",
   reading: "\u9605\u8bfb\u7406\u89e3",
   listening: "\u542c\u529b\u9898",

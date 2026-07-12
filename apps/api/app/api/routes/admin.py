@@ -22,6 +22,7 @@ from app.models import (
     Enrollment,
     Institution,
     LessonItem,
+    LessonItemType,
     ProgressRecord,
     Question,
     QuestionMedia,
@@ -38,6 +39,7 @@ from app.models import (
 from app.models import SubmissionStatus
 from app.schemas import (
     AdminOverviewOut,
+    AdminGradingSubmissionOut,
     AdminPasswordCodeOut,
     AdminPasswordUpdate,
     AdminProfileOut,
@@ -45,6 +47,8 @@ from app.schemas import (
     AdminUserCreate,
     AdminUserOut,
     AdminUserUpdate,
+    CodeRunIn,
+    CodeRunOut,
     CourseCardOut,
     CourseCategoryCreate,
     CourseCategoryOut,
@@ -62,11 +66,13 @@ from app.schemas import (
     TeacherCreate,
     TeacherOut,
 )
+from app.services.code_runner import run_python_code
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
-CODE_QUESTION_TYPES = {QuestionType.coding.value, QuestionType.code_review.value}
+CODE_QUESTION_TYPES = {QuestionType.coding.value}
+RETIRED_QUESTION_TYPES = {QuestionType.code_review.value}
 MANAGER_ROLES = {UserRole.institution_admin, UserRole.super_admin}
 MANAGED_USER_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
 QUESTION_STAFF_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
@@ -117,6 +123,12 @@ def get_admin_institution(current_user: User, db: Session) -> Institution | None
     if current_user.institution_id:
         return db.get(Institution, current_user.institution_id)
     return db.scalar(select(Institution).order_by(Institution.id))
+
+
+def get_current_institution_id_or_403(current_user: User) -> int:
+    if current_user.institution_id:
+        return current_user.institution_id
+    raise HTTPException(status_code=403, detail="Institution context required")
 
 
 def normalize_email(value: object) -> str:
@@ -272,8 +284,18 @@ def teacher_users_for_admin(current_user: User, db: Session) -> list[User]:
     stmt = select(User).where(User.is_active.is_(True), User.role.in_(teacher_visible_roles)).order_by(User.full_name)
     if current_user.role == UserRole.teacher:
         stmt = stmt.where(User.id == current_user.id)
-    elif current_user.role == UserRole.institution_admin and current_user.institution_id:
-        stmt = stmt.where(User.institution_id == current_user.institution_id)
+    elif current_user.role in {UserRole.institution_admin, UserRole.super_admin}:
+        institution_id = current_user.institution_id
+        if institution_id is None and current_user.role == UserRole.super_admin:
+            institution = get_admin_institution(current_user, db)
+            institution_id = institution.id if institution else None
+            if institution_id:
+                current_user.institution_id = institution_id
+                db.flush()
+        if institution_id:
+            stmt = stmt.where(User.institution_id == institution_id)
+        else:
+            stmt = stmt.where(User.id == current_user.id)
     elif current_user.role != UserRole.super_admin:
         stmt = stmt.where(User.role == UserRole.teacher)
     return list(db.scalars(stmt))
@@ -311,7 +333,7 @@ def sync_teacher_record_for_user(current_user: User, db: Session) -> Teacher:
 def question_creator_users_for_picker(current_user: User, db: Session) -> list[User]:
     creator_roles = [UserRole.teacher, UserRole.super_admin]
     stmt = select(User).where(User.is_active.is_(True), User.role.in_(creator_roles))
-    if current_user.role != UserRole.super_admin and current_user.institution_id:
+    if current_user.institution_id:
         creator_ids_for_institution = (
             select(Question.created_by_user_id)
             .where(
@@ -357,8 +379,13 @@ def unique_course_category_slug(db: Session, name: str, category_id: int | None 
         index += 1
 
 
-def get_course_category_or_404(category_id: int, db: Session) -> CourseCategory:
-    category = db.get(CourseCategory, category_id)
+def get_course_category_or_404(
+    category_id: int, db: Session, institution_id: int | None = None
+) -> CourseCategory:
+    stmt = select(CourseCategory).where(CourseCategory.id == category_id)
+    if institution_id is not None:
+        stmt = stmt.where(CourseCategory.institution_id == institution_id)
+    category = db.scalar(stmt)
     if not category:
         raise HTTPException(status_code=404, detail="Course category not found")
     return category
@@ -367,6 +394,7 @@ def get_course_category_or_404(category_id: int, db: Session) -> CourseCategory:
 def validate_course_category_payload(
     parent_id: int | None,
     name: str,
+    institution_id: int,
     db: Session,
     category_id: int | None = None,
 ) -> None:
@@ -376,7 +404,7 @@ def validate_course_category_payload(
     if parent_id is not None:
         if parent_id == category_id:
             raise HTTPException(status_code=422, detail="A category cannot be its own parent")
-        parent = get_course_category_or_404(parent_id, db)
+        parent = get_course_category_or_404(parent_id, db, institution_id)
         if parent.parent_id is not None:
             raise HTTPException(status_code=422, detail="Only two category levels are supported")
     if category_id is not None and parent_id is not None:
@@ -387,6 +415,7 @@ def validate_course_category_payload(
             raise HTTPException(status_code=422, detail="A parent category with children cannot become a subcategory")
 
     stmt = select(CourseCategory).where(
+        CourseCategory.institution_id == institution_id,
         CourseCategory.name == normalized_name,
         CourseCategory.parent_id.is_(None) if parent_id is None else CourseCategory.parent_id == parent_id,
     )
@@ -420,13 +449,15 @@ def validate_question_type_for_institution(
     if not question_type:
         return
     type_value = question_type.value if isinstance(question_type, QuestionType) else question_type
+    if type_value in RETIRED_QUESTION_TYPES:
+        raise HTTPException(status_code=422, detail="Code review questions are no longer supported")
     if type_value not in CODE_QUESTION_TYPES:
         return
     institution = db.get(Institution, institution_id) if institution_id else None
     if not institution or institution.category != "it":
         raise HTTPException(
             status_code=422,
-            detail="Coding and code review questions are only available for IT education institutions",
+            detail="Coding questions are only available for IT education institutions",
         )
 
 
@@ -508,6 +539,7 @@ def detach_lesson_item_references(item_ids: list[int], db: Session) -> None:
         .values(current_item_id=None)
     )
     db.execute(delete(ProgressRecord).where(ProgressRecord.lesson_item_id.in_(item_ids)))
+    db.execute(delete(Submission).where(Submission.lesson_item_id.in_(item_ids)))
 
 
 def sync_chapter_items(chapter: CourseChapter, items: list, db: Session) -> None:
@@ -834,9 +866,10 @@ def admin_course_categories(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[CourseCategory]:
     ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
     return list(
         db.scalars(
-            select(CourseCategory).order_by(
+            select(CourseCategory).where(CourseCategory.institution_id == institution_id).order_by(
                 CourseCategory.parent_id.nullsfirst(), CourseCategory.position, CourseCategory.name
             )
         )
@@ -850,9 +883,11 @@ def create_course_category(
     db: Session = Depends(get_db),
 ) -> CourseCategory:
     ensure_super_admin(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
     name = payload.name.strip()
-    validate_course_category_payload(payload.parent_id, name, db)
+    validate_course_category_payload(payload.parent_id, name, institution_id, db)
     category = CourseCategory(
+        institution_id=institution_id,
         parent_id=payload.parent_id,
         name=name,
         slug=unique_course_category_slug(db, name),
@@ -873,9 +908,10 @@ def update_course_category(
     db: Session = Depends(get_db),
 ) -> CourseCategory:
     ensure_super_admin(current_user)
-    category = get_course_category_or_404(category_id, db)
+    institution_id = get_current_institution_id_or_403(current_user)
+    category = get_course_category_or_404(category_id, db, institution_id)
     name = payload.name.strip()
-    validate_course_category_payload(payload.parent_id, name, db, category_id)
+    validate_course_category_payload(payload.parent_id, name, institution_id, db, category_id)
     category.parent_id = payload.parent_id
     category.name = name
     category.slug = unique_course_category_slug(db, name, category.id)
@@ -893,7 +929,8 @@ def delete_course_category(
     db: Session = Depends(get_db),
 ) -> dict[str, int | bool]:
     ensure_super_admin(current_user)
-    category = get_course_category_or_404(category_id, db)
+    institution_id = get_current_institution_id_or_403(current_user)
+    category = get_course_category_or_404(category_id, db, institution_id)
     db.delete(category)
     db.commit()
     return {"id": category_id, "deleted": True}
@@ -1051,18 +1088,31 @@ def admin_questions(
     db: Session = Depends(get_db),
 ) -> list[Question]:
     ensure_question_staff(current_user)
-    stmt = question_detail_stmt().order_by(Question.updated_at.desc())
+    stmt = question_detail_stmt().where(Question.type != QuestionType.code_review).order_by(Question.updated_at.desc())
     if current_user.role == UserRole.super_admin:
         stmt = stmt.where(Question.created_by_user_id == (created_by_user_id or current_user.id))
     else:
         stmt = stmt.where(Question.created_by_user_id == current_user.id)
     if current_user.role != UserRole.super_admin and current_user.institution_id:
         stmt = stmt.where(Question.institution_id == current_user.institution_id)
+    elif current_user.role == UserRole.super_admin and current_user.institution_id:
+        stmt = stmt.where(Question.institution_id == current_user.institution_id)
     if type:
         stmt = stmt.where(Question.type == type)
     if course_id:
         stmt = stmt.where(Question.course_id == course_id)
     return list(db.scalars(stmt))
+
+
+@router.post("/code/run", response_model=CodeRunOut)
+def run_admin_code(
+    payload: CodeRunIn,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    ensure_question_staff(current_user)
+    if payload.language.lower() not in {"python", "py"}:
+        raise HTTPException(status_code=422, detail="Only Python code execution is supported")
+    return run_python_code(payload.code, payload.tests)
 
 
 @router.get("/question-creators", response_model=list[AdminUserOut])
@@ -1083,8 +1133,11 @@ def admin_question_pool(
     db: Session = Depends(get_db),
 ) -> list[Question]:
     ensure_question_staff(current_user)
-    stmt = question_detail_stmt().where(Question.status == QuestionStatus.published)
-    if current_user.role != UserRole.super_admin and current_user.institution_id:
+    stmt = question_detail_stmt().where(
+        Question.status == QuestionStatus.published,
+        Question.type != QuestionType.code_review,
+    )
+    if current_user.institution_id:
         stmt = stmt.where(Question.institution_id == current_user.institution_id)
     if created_by_user_id:
         stmt = stmt.where(Question.created_by_user_id == created_by_user_id)
@@ -1216,18 +1269,122 @@ def admin_subscriptions(
     ]
 
 
-@router.get("/grading", response_model=list[SubmissionOut])
+def manual_grading_base_stmt(current_user: User, db: Session):
+    stmt = (
+        select(Submission)
+        .where(Submission.status == SubmissionStatus.pending_manual)
+        .options(
+            joinedload(Submission.user),
+            joinedload(Submission.enrollment).joinedload(Enrollment.course),
+            joinedload(Submission.lesson_item),
+            selectinload(Submission.question).joinedload(Question.institution),
+            selectinload(Submission.question).selectinload(Question.options),
+            selectinload(Submission.question).selectinload(Question.media_assets),
+        )
+    )
+    if current_user.institution_id:
+        stmt = stmt.where(Submission.question.has(Question.institution_id == current_user.institution_id))
+    if current_user.role == UserRole.teacher:
+        teacher = sync_teacher_record_for_user(current_user, db)
+        stmt = stmt.where(Submission.enrollment.has(Enrollment.course.has(Course.teacher_id == teacher.id)))
+    return stmt
+
+
+@router.get("/grading", response_model=list[AdminGradingSubmissionOut])
 def manual_grading_queue(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[Submission]:
-    ensure_admin(current_user)
+    ensure_question_staff(current_user)
     return list(
         db.scalars(
-            select(Submission)
-            .where(Submission.status == SubmissionStatus.pending_manual)
-            .order_by(Submission.created_at.asc())
+            manual_grading_base_stmt(current_user, db).order_by(Submission.created_at.asc())
         )
     )
+
+
+def grading_lesson_item_question_ids(item: LessonItem) -> list[int]:
+    return [
+        int(question_id)
+        for question_id in (item.body or {}).get("question_ids", [])
+        if isinstance(question_id, int)
+    ]
+
+
+def recalculate_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
+    total_items = db.scalar(
+        select(func.count(LessonItem.id))
+        .join(LessonItem.chapter)
+        .where(LessonItem.chapter.has(course_id=enrollment.course_id))
+    )
+    completed_items = db.scalar(
+        select(func.count(ProgressRecord.id)).where(
+            ProgressRecord.enrollment_id == enrollment.id,
+            ProgressRecord.completed_at.is_not(None),
+        )
+    )
+    enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
+    enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
+
+
+def recalculate_quiz_progress_after_grading(db: Session, item: LessonItem, enrollment: Enrollment) -> None:
+    question_ids = grading_lesson_item_question_ids(item)
+    if not question_ids:
+        return
+
+    questions = list(
+        db.scalars(
+            select(Question).where(
+                Question.id.in_(question_ids),
+                Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
+            )
+        )
+    )
+    question_by_id = {question.id: question for question in questions}
+    submissions = list(
+        db.scalars(
+            select(Submission)
+            .where(
+                Submission.user_id == enrollment.user_id,
+                Submission.enrollment_id == enrollment.id,
+                Submission.lesson_item_id == item.id,
+                Submission.question_id.in_(list(question_by_id)),
+            )
+            .order_by(Submission.question_id, Submission.created_at.desc(), Submission.id.desc())
+        )
+    )
+    latest_by_question_id: dict[int, Submission] = {}
+    for submission in submissions:
+        if submission.question_id not in latest_by_question_id:
+            latest_by_question_id[submission.question_id] = submission
+
+    latest_submissions = [
+        latest_by_question_id[question_id]
+        for question_id in question_ids
+        if question_id in question_by_id and question_id in latest_by_question_id
+    ]
+    if any(submission.status == SubmissionStatus.pending_manual for submission in latest_submissions):
+        return
+
+    total_score = sum(float(question.points or 0) for question in questions)
+    earned_score = sum(float(submission.score or 0) for submission in latest_submissions)
+    passed = total_score > 0 and earned_score / total_score >= 0.8
+    progress = db.scalar(
+        select(ProgressRecord).where(
+            ProgressRecord.enrollment_id == enrollment.id,
+            ProgressRecord.lesson_item_id == item.id,
+        )
+    )
+    if passed:
+        if not progress:
+            progress = ProgressRecord(enrollment_id=enrollment.id, lesson_item_id=item.id)
+            db.add(progress)
+        progress.completed_at = datetime.utcnow()
+        progress.notes = None
+        progress.score = earned_score
+    elif progress:
+        db.delete(progress)
+    recalculate_enrollment_progress(db, enrollment)
 
 
 @router.patch("/submissions/{submission_id}/grade", response_model=SubmissionOut)
@@ -1237,14 +1394,19 @@ def grade_submission(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> Submission:
-    ensure_admin(current_user)
-    submission = db.get(Submission, submission_id)
+    ensure_question_staff(current_user)
+    submission = db.scalar(
+        manual_grading_base_stmt(current_user, db).where(Submission.id == submission_id)
+    )
     if not submission:
         raise HTTPException(status_code=404, detail="Submission not found")
     submission.score = payload.score
     submission.feedback = payload.feedback
     submission.status = SubmissionStatus.manually_graded
     submission.grader_id = current_user.id
+    if submission.lesson_item and submission.enrollment and submission.lesson_item.item_type == LessonItemType.quiz:
+        db.flush()
+        recalculate_quiz_progress_after_grading(db, submission.lesson_item, submission.enrollment)
     db.commit()
     db.refresh(submission)
     return submission

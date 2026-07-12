@@ -8,6 +8,7 @@ import type {
   Question,
   StudentLeaderboard,
   StudentLeaderboardDetail,
+  StudentPublicProfile,
   Teacher
 } from "./types";
 
@@ -18,6 +19,20 @@ async function fetchJson<T>(path: string, fallback: T): Promise<T> {
     const response = await fetch(`${API_BASE_URL}${path}`, {
       cache: "no-store",
       headers: { "x-demo-user-id": "1" }
+    });
+    if (!response.ok) {
+      return fallback;
+    }
+    return (await response.json()) as T;
+  } catch {
+    return fallback;
+  }
+}
+
+async function fetchPublicJson<T>(path: string, fallback: T): Promise<T> {
+  try {
+    const response = await fetch(`${API_BASE_URL}${path}`, {
+      cache: "no-store"
     });
     if (!response.ok) {
       return fallback;
@@ -55,6 +70,10 @@ export function getStudentLeaderboard(): Promise<StudentLeaderboard> {
 
 export function getStudentLeaderboardDetail(studentId: number): Promise<StudentLeaderboardDetail | undefined> {
   return fetchJson(`/leaderboard/${studentId}`, undefined);
+}
+
+export function getStudentPublicProfile(studentId: number): Promise<StudentPublicProfile | undefined> {
+  return fetchPublicJson(`/learn/students/${studentId}/profile`, undefined);
 }
 
 export function getPublishedQuestions(): Promise<Question[]> {

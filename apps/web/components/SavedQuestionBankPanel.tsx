@@ -15,6 +15,7 @@ import {
 import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 
 import { CommunityQuestionBox } from "@/components/CommunityQuestionBox";
+import { MathText } from "@/components/MathText";
 import { getStudentRequestHeaders, type StudentSessionUser } from "@/lib/student-session";
 import type { Question, QuestionMedia, QuestionOption, QuestionType } from "@/lib/types";
 
@@ -41,6 +42,19 @@ type SubmissionResponse = {
   status?: string;
   feedback?: string | null;
   created_at: string;
+};
+type CodeRunResult = {
+  ok: boolean;
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+  error?: string | null;
+  duration_ms: number;
+  tests: Array<{
+    test: string;
+    passed: boolean;
+    message?: string;
+  }>;
 };
 type BankTab = "active" | "completed";
 
@@ -101,7 +115,6 @@ const questionTypeLabels: Record<QuestionType, string> = {
   multiple_choice: "\u591a\u9009\u9898",
   writing: "\u5f00\u653e\u5f0f\u7b54\u6848\u9898",
   coding: "\u4ee3\u7801\u7f16\u5199\u9898",
-  code_review: "\u4ee3\u7801\u4fee\u6539\u9898",
   true_false: "\u5224\u65ad\u9898",
   reading: "\u9605\u8bfb\u7406\u89e3\u9898",
   listening: "\u542c\u529b\u9898",
@@ -578,7 +591,7 @@ function CompletedQuestionCard({ index, record, question, onRemove }: { index: n
         </div>
       </summary>
       <div className="border-t border-slate-100 px-4 pb-5 pt-4 md:ml-14">
-        {question ? <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</p> : null}
+        {question ? <MathText className="block whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</MathText> : null}
         {question ? <QuestionMediaList mediaAssets={question.media_assets} /> : null}
         <div className="mt-4 grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700 md:grid-cols-2">
           <div><p className="font-bold text-ink">{ui.yourAnswer}</p><p className="mt-1 whitespace-pre-wrap leading-7">{formatAnswerValue(record.answer)}</p></div>
@@ -622,7 +635,7 @@ function QuestionPracticeCard({ index, question, answer, status, isSubmitting, s
         </div>
       </summary>
       <div className="border-t border-slate-100 px-4 pb-5 pt-4 md:ml-14">
-        <p className="whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</p>
+        <MathText className="block whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</MathText>
         <QuestionMediaList mediaAssets={question.media_assets} />
         <QuestionAnswerInput question={question} answer={answer} onChange={onChange} />
         <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
@@ -632,7 +645,7 @@ function QuestionPracticeCard({ index, question, answer, status, isSubmitting, s
             <button type="button" onClick={onSubmit} disabled={isSubmitting} className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isSubmitting ? ui.submittingShort : ui.submitAnswer}</button>
           </div>
         </div>
-        {hint && isHintVisible ? <div className="mt-3 whitespace-pre-wrap rounded-lg border border-mint/30 bg-mint/10 p-4 text-sm leading-7 text-slate-700">{hint}</div> : null}
+        {hint && isHintVisible ? <div className="mt-3 whitespace-pre-wrap rounded-lg border border-mint/30 bg-mint/10 p-4 text-sm leading-7 text-slate-700"><MathText>{hint}</MathText></div> : null}
         {studentSession ? (
           <div className="mt-4">
             <CommunityQuestionBox
@@ -697,9 +710,83 @@ function QuestionMediaPreview({ media }: { media: QuestionMedia }) {
   );
 }
 
+function SavedCodeRunResultPanel({ result }: { result: CodeRunResult }) {
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-[#0b1220] p-3 text-xs text-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={`inline-flex items-center gap-1.5 font-bold ${result.passed ? "text-mint" : "text-coral"}`}>
+          {result.passed ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+          {result.passed ? "\u6d4b\u8bd5\u901a\u8fc7" : "\u6d4b\u8bd5\u672a\u901a\u8fc7"}
+        </span>
+        <span className="text-slate-400">{result.duration_ms}ms</span>
+      </div>
+      {result.error ? <pre className="mt-2 whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.error}</pre> : null}
+      {result.stdout ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stdout</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono">{result.stdout}</pre>
+        </div>
+      ) : null}
+      {result.stderr ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stderr</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.stderr}</pre>
+        </div>
+      ) : null}
+      {result.tests.length ? (
+        <div className="mt-2 grid gap-1.5">
+          {result.tests.map((test, index) => (
+            <div key={`${test.test}-${index}`} className="rounded border border-white/10 bg-white/5 p-2">
+              <p className={`font-bold ${test.passed ? "text-mint" : "text-coral"}`}>
+                {test.passed ? "\u901a\u8fc7" : "\u672a\u901a\u8fc7"} · {test.test}
+              </p>
+              {test.message ? <p className="mt-1 text-slate-300">{test.message}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function QuestionAnswerInput({ question, answer, onChange, disabled = false }: { question: Question; answer: QuestionAnswer | undefined; onChange: (answer: QuestionAnswer) => void; disabled?: boolean }) {
   const options = sortedOptions(question.options);
   const disabledClass = disabled ? " cursor-not-allowed opacity-80" : "";
+  const [codeRunResult, setCodeRunResult] = useState<CodeRunResult | null>(null);
+  const [codeRunStatus, setCodeRunStatus] = useState("");
+  const [codeRunning, setCodeRunning] = useState(false);
+
+  async function runQuestionCode(code: string) {
+    if (!code.trim() || disabled) {
+      return;
+    }
+    setCodeRunning(true);
+    setCodeRunStatus("\u6b63\u5728\u8fd0\u884c\u4ee3\u7801...");
+    setCodeRunResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/learn/questions/${question.id}/run-code`, {
+        method: "POST",
+        headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ code, language: "python" })
+      });
+      if (!response.ok) {
+        throw new Error("run failed");
+      }
+      const payload = (await response.json()) as CodeRunResult;
+      setCodeRunResult(payload);
+      setCodeRunStatus(
+        payload.ok
+          ? payload.passed
+            ? "\u8fd0\u884c\u5b8c\u6210\uff0c\u6d4b\u8bd5\u5df2\u901a\u8fc7\u3002"
+            : "\u8fd0\u884c\u5b8c\u6210\uff0c\u8fd8\u6709\u6d4b\u8bd5\u672a\u901a\u8fc7\u3002"
+          : "\u8fd0\u884c\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u4ee3\u7801\u3002"
+      );
+    } catch {
+      setCodeRunStatus("\u4ee3\u7801\u8fd0\u884c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
+    } finally {
+      setCodeRunning(false);
+    }
+  }
 
   if (question.type === "single_choice") {
     return (
@@ -707,7 +794,7 @@ function QuestionAnswerInput({ question, answer, onChange, disabled = false }: {
         {options.map((option) => (
           <label key={option.id} className={`flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm${disabledClass}`}>
             <input type="radio" name={`saved-question-${question.id}`} value={option.label} checked={answer === option.label} disabled={disabled} onChange={() => onChange(option.label)} className="mt-1" />
-            <span><span className="font-bold text-ink">{option.label}.</span> {option.text}</span>
+            <span><span className="font-bold text-ink">{option.label}.</span> <MathText>{option.text}</MathText></span>
           </label>
         ))}
       </div>
@@ -723,7 +810,7 @@ function QuestionAnswerInput({ question, answer, onChange, disabled = false }: {
           return (
             <label key={option.id} className={`flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm${disabledClass}`}>
               <input type="checkbox" checked={checked} disabled={disabled} onChange={() => onChange(checked ? selectedAnswers.filter((item) => item !== option.label) : [...selectedAnswers, option.label])} className="mt-1" />
-              <span><span className="font-bold text-ink">{option.label}.</span> {option.text}</span>
+              <span><span className="font-bold text-ink">{option.label}.</span> <MathText>{option.text}</MathText></span>
             </label>
           );
         })}
@@ -756,13 +843,25 @@ function QuestionAnswerInput({ question, answer, onChange, disabled = false }: {
     );
   }
 
-  if (question.type === "coding" || question.type === "code_review") {
+  if (question.type === "coding") {
     const starterCode = typeof question.content?.starter_code === "string" ? question.content.starter_code : "";
     const value = typeof answer === "string" ? answer : starterCode;
     return (
       <div className="mt-4 rounded-lg border border-slate-200 bg-[#111827] p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-bold text-skysoft"><Code2 size={16} />{ui.codeEditor}</div>
         <textarea value={value} onChange={(event) => onChange(event.target.value)} disabled={disabled} spellCheck={false} className="h-72 w-full resize-y rounded-lg border border-white/10 bg-[#0b1220] p-3 font-mono text-sm leading-6 text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-80" placeholder={ui.codePlaceholder} />
+        {!disabled ? (
+          <button
+            type="button"
+            onClick={() => void runQuestionCode(value)}
+            disabled={codeRunning || !value.trim()}
+            className="focus-ring mt-3 rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-500"
+          >
+            {codeRunning ? "\u8fd0\u884c\u4e2d..." : "\u8fd0\u884c\u4ee3\u7801"}
+          </button>
+        ) : null}
+        {codeRunStatus ? <p className="mt-3 text-sm font-semibold text-slate-200">{codeRunStatus}</p> : null}
+        {codeRunResult ? <SavedCodeRunResultPanel result={codeRunResult} /> : null}
       </div>
     );
   }

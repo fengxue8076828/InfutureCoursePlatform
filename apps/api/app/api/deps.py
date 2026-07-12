@@ -17,3 +17,11 @@ def get_current_user(
     if not user:
         raise HTTPException(status_code=401, detail="No demo user found. Seed the database first.")
     return user
+
+
+def get_optional_current_user(
+    db: Session = Depends(get_db), x_demo_user_id: int | None = Header(default=None)
+) -> User | None:
+    if not x_demo_user_id:
+        return None
+    return db.get(User, x_demo_user_id)

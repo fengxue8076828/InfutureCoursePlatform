@@ -11,7 +11,7 @@ router = APIRouter()
 
 VIDEO_UPLOAD_KINDS = {"course_intro_video", "lesson_video"}
 HANDOUT_UPLOAD_KINDS = {"handout"}
-IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo"}
+IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo", "student_post_image"}
 UPLOAD_LIMITS = {
     "video": 200 * 1024 * 1024,
     "handout": 30 * 1024 * 1024,
@@ -23,9 +23,14 @@ ADMIN_UPLOAD_ROLES = {UserRole.institution_admin, UserRole.super_admin}
 STAFF_UPLOAD_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
 STAFF_UPLOAD_KINDS = VIDEO_UPLOAD_KINDS | HANDOUT_UPLOAD_KINDS | {"course_cover", "question_media", "avatar"}
 ADMIN_ONLY_UPLOAD_KINDS = {"logo"}
+STUDENT_UPLOAD_KINDS = {"student_post_image"}
 
 
 def ensure_upload_permission(kind: str, current_user: User) -> None:
+    if kind in STUDENT_UPLOAD_KINDS:
+        if current_user.role != UserRole.student:
+            raise HTTPException(status_code=403, detail="Student role required")
+        return
     if kind in ADMIN_ONLY_UPLOAD_KINDS:
         if current_user.role not in ADMIN_UPLOAD_ROLES:
             raise HTTPException(status_code=403, detail="Admin role required")
@@ -111,3 +116,15 @@ async def upload_admin_file(
     relative_path = f"{category}/{filename}"
     url = str(request.url_for("uploads", path=relative_path))
     return {"url": url, "filename": file.filename or filename, "size": total_bytes}
+
+
+@router.post("/student/uploads")
+async def upload_student_file(
+    request: Request,
+    kind: str = Form("student_post_image"),
+    file: UploadFile = File(...),
+    current_user: User = Depends(get_current_user),
+) -> dict[str, str | int]:
+    if kind != "student_post_image":
+        raise HTTPException(status_code=422, detail="Unsupported student upload kind")
+    return await upload_admin_file(request=request, kind=kind, file=file, current_user=current_user)

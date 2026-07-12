@@ -39,6 +39,7 @@ class InstitutionUpdate(BaseModel):
 
 class CourseCategoryOut(OrmModel):
     id: int
+    institution_id: int
     parent_id: int | None = None
     name: str
     slug: str
@@ -125,6 +126,15 @@ class BlogPostOut(OrmModel):
     created_at: datetime
 
 
+class StudentPointLevelOut(BaseModel):
+    index: int
+    name: str
+    icon: str
+    min_points: int
+    next_level_points: int | None = None
+    progress_percent: float
+
+
 class StudentLeaderboardEntry(BaseModel):
     rank: int
     student_id: int
@@ -135,6 +145,7 @@ class StudentLeaderboardEntry(BaseModel):
     completed_courses: int
     active_courses: int
     average_progress: float
+    level: StudentPointLevelOut
 
 
 class StudentLeaderboardOut(BaseModel):
@@ -340,6 +351,7 @@ class StudentLearningNoteOut(BaseModel):
 class StudentPostCreate(BaseModel):
     content: str = Field(min_length=1, max_length=1200)
     course_id: int | None = None
+    image_urls: list[str] = Field(default_factory=list, max_length=9)
 
 
 class StudentPostOut(BaseModel):
@@ -348,6 +360,7 @@ class StudentPostOut(BaseModel):
     student_name: str
     avatar_url: str | None = None
     content: str
+    image_urls: list[str] = Field(default_factory=list)
     course_id: int | None = None
     course_title: str | None = None
     created_at: datetime
@@ -360,6 +373,7 @@ class StudentSocialHomeOut(BaseModel):
     recommended_courses: list[CourseCardOut]
     total_points: int
     weekly_points: int
+    level: StudentPointLevelOut
     achievements: list[str]
     posts: list[StudentPostOut]
     suggested_students: list[StudentProfileSummaryOut]
@@ -598,6 +612,31 @@ class StudentQuestionOut(OrmModel):
 class SubmissionIn(BaseModel):
     answer: dict[str, Any]
     enrollment_id: int | None = None
+    lesson_item_id: int | None = None
+
+
+class CodeRunIn(BaseModel):
+    code: str = Field(min_length=1, max_length=20_000)
+    tests: list[str] = Field(default_factory=list, max_length=30)
+    language: str = "python"
+    enrollment_id: int | None = None
+    lesson_item_id: int | None = None
+
+
+class CodeRunTestOut(BaseModel):
+    test: str
+    passed: bool
+    message: str = ""
+
+
+class CodeRunOut(BaseModel):
+    ok: bool
+    passed: bool
+    stdout: str = ""
+    stderr: str = ""
+    error: str | None = None
+    tests: list[CodeRunTestOut] = []
+    duration_ms: int
 
 
 class QuizAnswerIn(BaseModel):
@@ -614,6 +653,7 @@ class SubmissionOut(OrmModel):
     id: int
     user_id: int
     question_id: int
+    lesson_item_id: int | None = None
     answer: dict[str, Any]
     score: float | None
     status: SubmissionStatus
@@ -621,11 +661,44 @@ class SubmissionOut(OrmModel):
     created_at: datetime
 
 
+class GradingUserOut(OrmModel):
+    id: int
+    full_name: str
+    email: EmailStr
+
+
+class GradingCourseOut(OrmModel):
+    id: int
+    title: str
+    category: str
+    level: str
+
+
+class GradingEnrollmentOut(OrmModel):
+    id: int
+    course: GradingCourseOut
+
+
+class GradingLessonItemOut(OrmModel):
+    id: int
+    title: str
+    item_type: LessonItemType
+    position: int
+
+
+class AdminGradingSubmissionOut(SubmissionOut):
+    question: StudentQuestionOut
+    user: GradingUserOut
+    enrollment: GradingEnrollmentOut | None = None
+    lesson_item: GradingLessonItemOut | None = None
+
+
 class QuizSubmissionOut(BaseModel):
     status: str
     score: float
     total_score: float
-    passed: bool
+    passed: bool | None = None
+    pending_manual_count: int = 0
     submissions: list[SubmissionOut]
 
 
@@ -635,6 +708,7 @@ class LessonItemSubmissionStateOut(BaseModel):
     score: float
     total_score: float
     passed: bool | None = None
+    pending_manual_count: int = 0
     completed_at: datetime | None = None
     submissions: list[SubmissionOut]
 

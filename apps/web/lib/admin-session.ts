@@ -27,6 +27,10 @@ export function getAdminSessionUserId() {
   if (typeof window === "undefined") {
     return 2;
   }
+  const sessionUser = getAdminSessionUser();
+  if (sessionUser?.id && Number.isFinite(sessionUser.id) && sessionUser.id > 0) {
+    return sessionUser.id;
+  }
   const storedId = Number(window.localStorage.getItem(ADMIN_USER_ID_STORAGE_KEY));
   if (Number.isFinite(storedId) && storedId > 0) {
     return storedId;

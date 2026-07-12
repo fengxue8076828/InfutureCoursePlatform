@@ -19,27 +19,59 @@ import {
   Upload
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, SyntheticEvent as ReactSyntheticEvent } from "react";
 
 import { CommunityQuestionBox } from "@/components/CommunityQuestionBox";
+import { MathText } from "@/components/MathText";
 import { getStudentRequestHeaders } from "@/lib/student-session";
 import type { Chapter, Enrollment, LessonItem, Question, QuestionMedia, QuestionOption } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
+const LEARN_LAYOUT_STORAGE_KEY = "infuture-learn-console-layout";
+const DEFAULT_SIDEBAR_WIDTH = 304;
+const DEFAULT_NOTES_WIDTH = 352;
+const DEFAULT_NOTE_EDITOR_HEIGHT = 420;
+const MIN_SIDEBAR_WIDTH = 240;
+const MAX_SIDEBAR_WIDTH = 440;
+const MIN_NOTES_WIDTH = 280;
+const MAX_NOTES_WIDTH = 560;
+const MIN_NOTE_EDITOR_HEIGHT = 220;
+const MAX_NOTE_EDITOR_HEIGHT = 760;
+
+function clampPanelWidth(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, Math.round(value)));
+}
+
+function readStoredLearnLayout() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const rawLayout = window.localStorage.getItem(LEARN_LAYOUT_STORAGE_KEY);
+    if (!rawLayout) return null;
+    const layout = JSON.parse(rawLayout) as { sidebarWidth?: number; notesWidth?: number; noteEditorHeight?: number };
+    return {
+      sidebarWidth: typeof layout.sidebarWidth === "number" ? clampPanelWidth(layout.sidebarWidth, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH) : null,
+      notesWidth: typeof layout.notesWidth === "number" ? clampPanelWidth(layout.notesWidth, MIN_NOTES_WIDTH, MAX_NOTES_WIDTH) : null,
+      noteEditorHeight: typeof layout.noteEditorHeight === "number" ? clampPanelWidth(layout.noteEditorHeight, MIN_NOTE_EDITOR_HEIGHT, MAX_NOTE_EDITOR_HEIGHT) : null
+    };
+  } catch {
+    return null;
+  }
+}
 
 const questionTypeLabels: Record<string, string> = {
-  fill_blank: "填空题",
-  single_choice: "单选题",
-  multiple_choice: "多选题",
-  writing: "开放式答案题",
-  coding: "代码编写题",
-  code_review: "代码修改题",
-  true_false: "判断题",
-  reading: "阅读理解题",
-  listening: "听力题",
-  pronunciation: "口语题",
-  media_upload: "素材上传题"
+  fill_blank: "\u586b\u7a7a\u9898",
+  single_choice: "\u5355\u9009\u9898",
+  multiple_choice: "\u591a\u9009\u9898",
+  writing: "\u5f00\u653e\u5f0f\u7b54\u6848\u9898",
+  coding: "\u4ee3\u7801\u7f16\u5199\u9898",
+  true_false: "\u5224\u65ad\u9898",
+  reading: "\u9605\u8bfb\u7406\u89e3\u9898",
+  listening: "\u542c\u529b\u9898",
+  pronunciation: "\u53e3\u8bed\u9898",
+  media_upload: "\u7d20\u6750\u4e0a\u4f20\u9898"
 };
 
 const iconMap = {
@@ -50,6 +82,20 @@ const iconMap = {
 };
 
 type QuestionAnswer = string | string[] | boolean | { fileName: string; fileType: string };
+
+type CodeRunResult = {
+  ok: boolean;
+  passed: boolean;
+  stdout: string;
+  stderr: string;
+  error?: string | null;
+  duration_ms: number;
+  tests: Array<{
+    test: string;
+    passed: boolean;
+    message?: string;
+  }>;
+};
 
 type SubmissionRecord = {
   id: number;
@@ -67,6 +113,7 @@ type ItemSubmissionState = {
   score: number;
   total_score: number;
   passed?: boolean | null;
+  pending_manual_count?: number;
   completed_at?: string | null;
   submissions: SubmissionRecord[];
 };
@@ -92,6 +139,11 @@ function resolveResourceUrl(url: string | null | undefined) {
   return normalizedUrl;
 }
 
+function isVideoResourceUrl(url: string) {
+  if (!url) return false;
+  return /^(blob:|data:video\/)/i.test(url) || /\/uploads\/video\//i.test(url) || /\.(mp4|webm|ogg|mov|m4v)([?#].*)?$/i.test(url);
+}
+
 type LessonItemProgressState = "completed" | "warning" | "pending";
 
 function completedItemIdSet(enrollment: Enrollment | undefined) {
@@ -101,7 +153,6 @@ function completedItemIdSet(enrollment: Enrollment | undefined) {
       .map((record) => record.lesson_item_id)
   );
 }
-
 export function LearnConsole({
   enrollments,
   initialCourseSlug
@@ -111,10 +162,25 @@ export function LearnConsole({
 }) {
   const selectedEnrollment =
     enrollments.find((item) => item.course.slug === initialCourseSlug) ?? enrollments[0];
+  const isCourseCompleted = selectedEnrollment?.status === "completed";
   const course = selectedEnrollment?.course;
   const items = useMemo(() => course?.chapters?.flatMap((chapter) => chapter.items) ?? [], [course]);
+  const itemIdsKey = useMemo(() => items.map((item) => item.id).join(","), [items]);
+  const firstItemId = items[0]?.id;
   const [itemId, setItemId] = useState<number | undefined>(items[0]?.id);
   const [notesOpen, setNotesOpen] = useState(true);
+  const [sidebarWidth, setSidebarWidth] = useState(DEFAULT_SIDEBAR_WIDTH);
+  const [notesWidth, setNotesWidth] = useState(DEFAULT_NOTES_WIDTH);
+  const [noteEditorHeight, setNoteEditorHeight] = useState(DEFAULT_NOTE_EDITOR_HEIGHT);
+  const [resizingPanel, setResizingPanel] = useState<"sidebar" | "notes" | "noteQuestion" | null>(null);
+  const resizeStateRef = useRef<{
+    panel: "sidebar" | "notes" | "noteQuestion";
+    startX: number;
+    startY: number;
+    sidebarWidth: number;
+    notesWidth: number;
+    noteEditorHeight: number;
+  } | null>(null);
   const [questionsByItemId, setQuestionsByItemId] = useState<Record<number, Question[]>>({});
   const [questionsLoading, setQuestionsLoading] = useState(false);
   const [questionsStatus, setQuestionsStatus] = useState("");
@@ -122,10 +188,18 @@ export function LearnConsole({
   const [notesStatus, setNotesStatus] = useState("");
   const [completionStatus, setCompletionStatus] = useState("");
   const [completedItemIds, setCompletedItemIds] = useState<Set<number>>(() => completedItemIdSet(selectedEnrollment));
+  const completedItemIdsRef = useRef(completedItemIds);
+  const completedProgressKey = (selectedEnrollment?.progress_records ?? [])
+    .filter((record) => Boolean(record.completed_at))
+    .map((record) => record.lesson_item_id)
+    .join(",");
   const [warningItemIds, setWarningItemIds] = useState<Set<number>>(() => new Set());
   const [completionBusyIds, setCompletionBusyIds] = useState<Set<number>>(() => new Set());
+  const completionBusyIdsRef = useRef(completionBusyIds);
   const [collapsedChapterIds, setCollapsedChapterIds] = useState<Set<number>>(() => new Set());
   const activeItem = items.find((item) => item.id === itemId) ?? items[0];
+  const activeItemId = activeItem?.id;
+  const activeItemType = activeItem?.item_type;
   const activeChapter = useMemo(
     () => course?.chapters?.find((chapter) => chapter.items.some((item) => item.id === activeItem?.id)),
     [activeItem?.id, course?.chapters]
@@ -133,13 +207,18 @@ export function LearnConsole({
   const activeChapterId = activeChapter?.id;
   const activeQuestionIds = useMemo(() => lessonItemQuestionIds(activeItem), [activeItem]);
   const activeQuestionKey = activeQuestionIds.join(",");
-  const activeQuestions = activeItem ? questionsByItemId[activeItem.id] ?? [] : [];
+  const activeQuestions = activeItem && activeQuestionIds.length ? questionsByItemId[activeItem.id] ?? [] : [];
 
   const completeLessonItem = useCallback(
     async (item: LessonItem, score?: number) => {
-      if (completedItemIds.has(item.id) || completionBusyIds.has(item.id)) {
+      if (isCourseCompleted) {
+        setCompletionStatus("\u8bfe\u7a0b\u5df2\u5b8c\u6210\uff0c\u5f53\u524d\u4e3a\u590d\u4e60\u6a21\u5f0f\u3002");
         return;
       }
+      if (completedItemIdsRef.current.has(item.id) || completionBusyIdsRef.current.has(item.id)) {
+        return;
+      }
+      completionBusyIdsRef.current = new Set(completionBusyIdsRef.current).add(item.id);
       setCompletionBusyIds((current) => new Set(current).add(item.id));
       setCompletionStatus("\u6b63\u5728\u66f4\u65b0\u5b66\u4e60\u8fdb\u5ea6...");
       try {
@@ -151,6 +230,7 @@ export function LearnConsole({
         if (!response.ok) {
           throw new Error("complete failed");
         }
+        completedItemIdsRef.current = new Set(completedItemIdsRef.current).add(item.id);
         setCompletedItemIds((current) => new Set(current).add(item.id));
         setWarningItemIds((current) => {
           const next = new Set(current);
@@ -161,6 +241,9 @@ export function LearnConsole({
       } catch {
         setCompletionStatus("\u8fdb\u5ea6\u66f4\u65b0\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
       } finally {
+        const nextBusyIds = new Set(completionBusyIdsRef.current);
+        nextBusyIds.delete(item.id);
+        completionBusyIdsRef.current = nextBusyIds;
         setCompletionBusyIds((current) => {
           const next = new Set(current);
           next.delete(item.id);
@@ -168,11 +251,11 @@ export function LearnConsole({
         });
       }
     },
-    [completedItemIds, completionBusyIds]
+    [isCourseCompleted]
   );
 
   useEffect(() => {
-    if (!activeItem || activeItem.item_type !== "handout" || completedItemIds.has(activeItem.id)) {
+    if (isCourseCompleted || !activeItem || activeItem.item_type !== "handout" || completedItemIds.has(activeItem.id)) {
       return;
     }
     const waitMs = Math.max(activeItem.required_minutes || 0, 0) * 60_000;
@@ -180,7 +263,100 @@ export function LearnConsole({
       void completeLessonItem(activeItem);
     }, waitMs > 0 ? waitMs : 1000);
     return () => window.clearTimeout(timer);
-  }, [activeItem, completedItemIds, completeLessonItem]);
+  }, [activeItem, completedItemIds, completeLessonItem, isCourseCompleted]);
+
+  useEffect(() => {
+    const frameId = window.requestAnimationFrame(() => {
+      const layout = readStoredLearnLayout();
+      if (!layout) return;
+      if (typeof layout.sidebarWidth === "number") {
+        setSidebarWidth(layout.sidebarWidth);
+      }
+      if (typeof layout.notesWidth === "number") {
+        setNotesWidth(layout.notesWidth);
+      }
+      if (typeof layout.noteEditorHeight === "number") {
+        setNoteEditorHeight(layout.noteEditorHeight);
+      }
+    });
+    return () => window.cancelAnimationFrame(frameId);
+  }, []);
+
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(LEARN_LAYOUT_STORAGE_KEY, JSON.stringify({ sidebarWidth, notesWidth, noteEditorHeight }));
+    } catch {
+      // Layout persistence is optional.
+    }
+  }, [noteEditorHeight, notesWidth, sidebarWidth]);
+
+  useEffect(() => {
+    const syncTimer = window.setTimeout(() => {
+      const validItemIds = new Set(
+        itemIdsKey
+          .split(",")
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id))
+      );
+      setItemId((currentItemId) =>
+        currentItemId && validItemIds.has(currentItemId) ? currentItemId : firstItemId
+      );
+    }, 0);
+    return () => window.clearTimeout(syncTimer);
+  }, [firstItemId, itemIdsKey]);
+
+  useEffect(() => {
+    const syncTimer = window.setTimeout(() => {
+      const nextCompletedIds = new Set(
+        completedProgressKey
+          .split(",")
+          .map((id) => Number(id))
+          .filter((id) => Number.isFinite(id))
+      );
+      completedItemIdsRef.current = nextCompletedIds;
+      setCompletedItemIds(nextCompletedIds);
+    }, 0);
+    return () => window.clearTimeout(syncTimer);
+  }, [completedProgressKey]);
+
+  useEffect(() => {
+    if (!resizingPanel) return;
+
+    function handlePointerMove(event: PointerEvent) {
+      const state = resizeStateRef.current;
+      if (!state) return;
+      const deltaX = event.clientX - state.startX;
+      const deltaY = event.clientY - state.startY;
+      if (state.panel === "sidebar") {
+        setSidebarWidth(clampPanelWidth(state.sidebarWidth + deltaX, MIN_SIDEBAR_WIDTH, MAX_SIDEBAR_WIDTH));
+      } else if (state.panel === "notes") {
+        setNotesWidth(clampPanelWidth(state.notesWidth - deltaX, MIN_NOTES_WIDTH, MAX_NOTES_WIDTH));
+      } else {
+        setNoteEditorHeight(clampPanelWidth(state.noteEditorHeight + deltaY, MIN_NOTE_EDITOR_HEIGHT, MAX_NOTE_EDITOR_HEIGHT));
+      }
+    }
+
+    function stopResize() {
+      resizeStateRef.current = null;
+      setResizingPanel(null);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+
+    document.addEventListener("pointermove", handlePointerMove);
+    document.addEventListener("pointerup", stopResize);
+    document.addEventListener("pointercancel", stopResize);
+    document.body.style.cursor = resizingPanel === "noteQuestion" ? "row-resize" : "col-resize";
+    document.body.style.userSelect = "none";
+
+    return () => {
+      document.removeEventListener("pointermove", handlePointerMove);
+      document.removeEventListener("pointerup", stopResize);
+      document.removeEventListener("pointercancel", stopResize);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    };
+  }, [resizingPanel]);
 
   useEffect(() => {
     if (!activeChapterId) {
@@ -218,14 +394,25 @@ export function LearnConsole({
   }, [activeChapterId, selectedEnrollment.id]);
 
   useEffect(() => {
-    if (!activeItem || (activeItem.item_type !== "exercise" && activeItem.item_type !== "quiz")) {
+    if (!activeItemId || (activeItemType !== "exercise" && activeItemType !== "quiz")) {
       return;
     }
-    if (!activeQuestionIds.length) {
-      return;
-    }
-    if (questionsByItemId[activeItem.id]) {
-      return;
+    const requestQuestionIds = activeQuestionKey
+      .split(",")
+      .map((id) => Number(id))
+      .filter((id) => Number.isFinite(id));
+    if (!requestQuestionIds.length) {
+      const clearTimer = window.setTimeout(() => {
+        setQuestionsByItemId((current) => {
+          if (!current[activeItemId]) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[activeItemId];
+          return next;
+        });
+      }, 0);
+      return () => window.clearTimeout(clearTimer);
     }
 
     let ignore = false;
@@ -241,11 +428,11 @@ export function LearnConsole({
           throw new Error("load failed");
         }
         const payload = (await response.json()) as Question[];
-        const sortedQuestions = activeQuestionIds
+        const sortedQuestions = requestQuestionIds
           .map((questionId) => payload.find((question) => question.id === questionId))
           .filter((question): question is Question => Boolean(question));
         if (!ignore) {
-          setQuestionsByItemId((current) => ({ ...current, [activeItem.id]: sortedQuestions }));
+          setQuestionsByItemId((current) => ({ ...current, [activeItemId]: sortedQuestions }));
           setQuestionsStatus(sortedQuestions.length ? "" : "\u5f53\u524d\u9879\u76ee\u914d\u7f6e\u7684\u9898\u76ee\u8fd8\u6ca1\u6709\u53d1\u5e03\u3002");
         }
       } catch {
@@ -263,20 +450,49 @@ export function LearnConsole({
     return () => {
       ignore = true;
     };
-  }, [activeItem, activeQuestionIds, activeQuestionKey, questionsByItemId]);
+  }, [activeItemId, activeItemType, activeQuestionKey]);
+
+  const completeVideoItem = useCallback(
+    (item: LessonItem | undefined) => {
+      if (!item || item.item_type !== "video") {
+        return;
+      }
+      void completeLessonItem(item);
+    },
+    [completeLessonItem]
+  );
+
+  const handleVideoTimeUpdate = useCallback(
+    (event: ReactSyntheticEvent<HTMLVideoElement>, item: LessonItem) => {
+      const video = event.currentTarget;
+      const duration = video.duration;
+      if (!Number.isFinite(duration) || duration <= 0) {
+        return;
+      }
+      const watchedRatio = video.currentTime / duration;
+      const remainingSeconds = duration - video.currentTime;
+      if (watchedRatio >= 0.98 || remainingSeconds <= 1) {
+        completeVideoItem(item);
+      }
+    },
+    [completeVideoItem]
+  );
 
   if (!course || !activeItem) {
     return <div className="panel rounded-lg p-8 text-center text-slate-500">{"\u5f53\u524d\u8bfe\u7a0b\u8fd8\u6ca1\u6709\u53ef\u5b66\u4e60\u7684\u7ae0\u8282\u5185\u5bb9\u3002"}</div>;
   }
 
   const videoUrl = resolveResourceUrl(activeItem.content_url ?? course.intro_video_url);
-  const isDirectVideo = Boolean(videoUrl && /\.(mp4|webm|ogg)(\?.*)?$/i.test(videoUrl));
+  const isDirectVideo = isVideoResourceUrl(videoUrl);
   const activeQuestionStatus =
     activeQuestionIds.length === 0 && (activeItem.item_type === "exercise" || activeItem.item_type === "quiz")
       ? "\u5f53\u524d\u9879\u76ee\u8fd8\u6ca1\u6709\u914d\u7f6e\u9898\u76ee\u3002"
       : questionsStatus;
 
   function itemProgressState(item: LessonItem): LessonItemProgressState {
+    if (isCourseCompleted) {
+      return "completed";
+    }
     if (completedItemIds.has(item.id)) {
       return "completed";
     }
@@ -287,10 +503,16 @@ export function LearnConsole({
   }
 
   function isChapterCompleted(chapter: Chapter) {
+    if (isCourseCompleted) {
+      return true;
+    }
     return chapter.items.every((item) => completedItemIds.has(item.id));
   }
 
   function isChapterUnlocked(chapter: Chapter) {
+    if (isCourseCompleted) {
+      return true;
+    }
     const chapters = course.chapters ?? [];
     const chapterIndex = chapters.findIndex((item) => item.id === chapter.id);
     if (chapterIndex <= 0) {
@@ -309,6 +531,13 @@ export function LearnConsole({
       }
       return next;
     });
+  }
+
+  function startResize(panel: "sidebar" | "notes" | "noteQuestion", event: ReactPointerEvent<HTMLButtonElement>) {
+    event.preventDefault();
+    resizeStateRef.current = { panel, startX: event.clientX, startY: event.clientY, sidebarWidth, notesWidth, noteEditorHeight };
+    setResizingPanel(panel);
+    event.currentTarget.setPointerCapture?.(event.pointerId);
   }
 
   async function saveChapterNote() {
@@ -331,9 +560,15 @@ export function LearnConsole({
     }
   }
 
+  const layoutStyle = {
+    "--learn-grid-columns": `${sidebarWidth}px 0.625rem minmax(0,1fr)`,
+    "--learn-notes-width": `${notesWidth}px`,
+    "--learn-note-editor-height": `${noteEditorHeight}px`
+  } as CSSProperties;
+
   return (
-    <div className="grid min-h-[calc(100vh-11rem)] gap-5 lg:grid-cols-[19rem_minmax(0,1fr)]">
-      <aside className="panel rounded-lg p-4">
+    <div className="grid min-h-[calc(100vh-11rem)] gap-5 lg:grid-cols-[var(--learn-grid-columns)] lg:gap-0" style={layoutStyle}>
+      <aside className="panel min-w-0 rounded-lg p-4">
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-bold uppercase text-slate-400">{"\u5f53\u524d\u8bfe\u7a0b"}</p>
           <p className="mt-1 line-clamp-2 text-sm font-bold text-ink">{course.title}</p>
@@ -405,9 +640,13 @@ export function LearnConsole({
         </div>
       </aside>
 
+      <ResizeHandle active={resizingPanel === "sidebar"} label={"\u8c03\u6574\u7ae0\u8282\u76ee\u5f55\u5bbd\u5ea6"} onPointerDown={(event) => startResize("sidebar", event)} />
+
       <main
-        className={`grid gap-5 ${
-          notesOpen ? "xl:grid-cols-[minmax(0,1fr)_22rem]" : "xl:grid-cols-[minmax(0,1fr)_4.25rem]"
+        className={`grid gap-5 xl:gap-0 ${
+          notesOpen
+            ? "xl:grid-cols-[minmax(0,1fr)_0.625rem_var(--learn-notes-width)]"
+            : "xl:grid-cols-[minmax(0,1fr)_0.625rem_4.25rem]"
         }`}
       >
         <section className="panel rounded-lg p-5">
@@ -417,7 +656,12 @@ export function LearnConsole({
               <h1 className="mt-1 text-2xl font-bold text-ink">{activeItem.title || "\u672a\u547d\u540d\u9879\u76ee"}</h1>
             </div>
             <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
-              {completedItemIds.has(activeItem.id) ? (
+              {isCourseCompleted ? (
+                <>
+                  <CheckCircle2 size={16} className="text-mint" />
+                  <span>{"\u590d\u4e60\u6a21\u5f0f"}</span>
+                </>
+              ) : completedItemIds.has(activeItem.id) ? (
                 <>
                   <CheckCircle2 size={16} className="text-mint" />
                   <span>{"\u5df2\u5b8c\u6210"}</span>
@@ -442,7 +686,8 @@ export function LearnConsole({
                     controls
                     src={videoUrl}
                     className="aspect-video w-full bg-ink"
-                    onEnded={() => void completeLessonItem(activeItem)}
+                    onEnded={() => completeVideoItem(activeItem)}
+                    onTimeUpdate={(event) => handleVideoTimeUpdate(event, activeItem)}
                   />
                 ) : (
                   <iframe src={videoUrl} title={activeItem.title} className="aspect-video w-full" allowFullScreen />
@@ -467,6 +712,7 @@ export function LearnConsole({
               status={activeQuestionStatus}
               onItemComplete={(score) => void completeLessonItem(activeItem, score)}
               onQuizComplete={() => {
+                completedItemIdsRef.current = new Set(completedItemIdsRef.current).add(activeItem.id);
                 setCompletedItemIds((current) => new Set(current).add(activeItem.id));
                 setWarningItemIds((current) => {
                   const next = new Set(current);
@@ -480,6 +726,9 @@ export function LearnConsole({
                 setCompletionStatus("\u6d4b\u9a8c\u672a\u8fbe\u5230\u603b\u5206\u7684 80%\uff0c\u8bf7\u91cd\u65b0\u5c1d\u8bd5\u3002");
               }}
               onItemReset={() => {
+                const nextCompletedIds = new Set(completedItemIdsRef.current);
+                nextCompletedIds.delete(activeItem.id);
+                completedItemIdsRef.current = nextCompletedIds;
                 setCompletedItemIds((current) => {
                   const next = new Set(current);
                   next.delete(activeItem.id);
@@ -492,16 +741,25 @@ export function LearnConsole({
                 });
                 setCompletionStatus("\u5df2\u6e05\u9664\u4e0a\u6b21\u7b54\u9898\u8bb0\u5f55\uff0c\u53ef\u4ee5\u91cd\u65b0\u5b8c\u6210\u8be5\u9879\u76ee\u3002");
               }}
+              readOnly={isCourseCompleted}
             />
           ) : null}
         </section>
 
-        <aside className={`panel rounded-lg ${notesOpen ? "p-5" : "grid place-items-start p-3"}`}>
+        <ResizeHandle
+          active={resizingPanel === "notes"}
+          disabled={!notesOpen}
+          label={"\u8c03\u6574\u7b14\u8bb0\u680f\u5bbd\u5ea6"}
+          onPointerDown={(event) => startResize("notes", event)}
+          scope="xl"
+        />
+
+        <aside className={`panel min-w-0 rounded-lg ${notesOpen ? "flex min-h-[32rem] flex-col p-5" : "grid place-items-start p-3"}`}>
           <button
             type="button"
             onClick={() => setNotesOpen((current) => !current)}
             className={`focus-ring flex items-center rounded-lg text-sm font-bold text-ink ${
-              notesOpen ? "w-full justify-between gap-3" : "h-11 w-11 justify-center border border-slate-200 bg-white"
+              notesOpen ? "w-full shrink-0 justify-between gap-3" : "h-11 w-11 justify-center border border-slate-200 bg-white"
             }`}
             aria-expanded={notesOpen}
             aria-label={notesOpen ? "\u6298\u53e0\u5b66\u4e60\u7b14\u8bb0" : "\u5c55\u5f00\u5b66\u4e60\u7b14\u8bb0"}
@@ -516,35 +774,80 @@ export function LearnConsole({
           {notesOpen ? (
             <>
               {activeChapter ? (
-                <p className="mt-3 text-xs font-bold text-slate-400">{activeChapter.title}</p>
+                <p className="mt-3 shrink-0 text-xs font-bold text-slate-400">{activeChapter.title}</p>
               ) : null}
-              <StudentNotesEditor value={notesHtml} onChange={setNotesHtml} />
-              {notesStatus ? <p className="mt-3 text-sm font-semibold text-slate-500">{notesStatus}</p> : null}
-              <button
-                type="button"
-                onClick={() => void saveChapterNote()}
-                className="focus-ring mt-3 w-full rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white"
-              >
-                {"\u4fdd\u5b58\u672c\u7ae0\u7b14\u8bb0"}
-              </button>
-              {activeChapter ? (
-                <div className="mt-4">
-                  <CommunityQuestionBox
-                    compact
-                    title={"\u672c\u7ae0\u63d0\u95ee"}
-                    description={"\u95ee\u9898\u4f1a\u81ea\u52a8\u5173\u8054\u5230\u5f53\u524d\u8bfe\u7a0b\u548c\u7ae0\u8282\u3002"}
-                    initialTitle={`${activeChapter.title} \u7684\u95ee\u9898`}
-                    courseId={course.id}
-                    chapterId={activeChapter.id}
-                    tags={[course.title, activeChapter.title]}
-                  />
+              <div className="mt-3 grid min-h-0 flex-1" style={{ gridTemplateRows: activeChapter ? "minmax(13rem,var(--learn-note-editor-height)) 0.625rem minmax(11rem,1fr)" : "minmax(0,1fr)" }}>
+                <div className="min-h-0 overflow-auto pr-1">
+                  <StudentNotesEditor value={notesHtml} onChange={setNotesHtml} />
+                  {notesStatus ? <p className="mt-3 text-sm font-semibold text-slate-500">{notesStatus}</p> : null}
+                  <button
+                    type="button"
+                    onClick={() => void saveChapterNote()}
+                    className="focus-ring mt-3 w-full rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white"
+                  >
+                    {"\u4fdd\u5b58\u672c\u7ae0\u7b14\u8bb0"}
+                  </button>
                 </div>
-              ) : null}
+                {activeChapter ? (
+                  <ResizeHandle
+                    active={resizingPanel === "noteQuestion"}
+                    direction="row"
+                    label={"\u8c03\u6574\u7b14\u8bb0\u548c\u63d0\u95ee\u533a\u57df\u9ad8\u5ea6"}
+                    onPointerDown={(event) => startResize("noteQuestion", event)}
+                    scope="always"
+                  />
+                ) : null}
+                {activeChapter ? (
+                  <div className="min-h-0 overflow-auto pr-1">
+                    <CommunityQuestionBox
+                      compact
+                      title={"\u672c\u7ae0\u63d0\u95ee"}
+                      description={"\u95ee\u9898\u4f1a\u81ea\u52a8\u5173\u8054\u5230\u5f53\u524d\u8bfe\u7a0b\u548c\u7ae0\u8282\u3002"}
+                      initialTitle={`${activeChapter.title} \u7684\u95ee\u9898`}
+                      courseId={course.id}
+                      chapterId={activeChapter.id}
+                      tags={[course.title, activeChapter.title]}
+                    />
+                  </div>
+                ) : null}
+              </div>
             </>
           ) : null}
         </aside>
       </main>
     </div>
+  );
+}
+
+function ResizeHandle({
+  active,
+  disabled = false,
+  direction = "column",
+  label,
+  onPointerDown,
+  scope = "lg"
+}: {
+  active: boolean;
+  disabled?: boolean;
+  direction?: "column" | "row";
+  label: string;
+  onPointerDown: (event: ReactPointerEvent<HTMLButtonElement>) => void;
+  scope?: "always" | "lg" | "xl";
+}) {
+  const visibilityClass = scope === "always" ? "flex" : scope === "xl" ? "hidden xl:flex" : "hidden lg:flex";
+  const directionClass =
+    direction === "row"
+      ? "h-2.5 w-full cursor-row-resize items-center justify-stretch"
+      : "h-full min-h-0 w-2.5 cursor-col-resize items-stretch justify-center";
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      disabled={disabled}
+      onPointerDown={disabled ? undefined : onPointerDown}
+      className={`${visibilityClass} ${directionClass} rounded-lg bg-transparent outline-none transition disabled:cursor-default disabled:opacity-30`}
+      data-resizing={active ? "true" : undefined}
+    />
   );
 }
 
@@ -630,13 +933,13 @@ function StudentNotesEditor({
       <div className="grid gap-2 border-b border-slate-100 bg-slate-50 p-2">
         <div className="grid grid-cols-2 gap-2">
           <label className="grid gap-1 text-xs font-bold text-slate-500">
-            字体
+            {"\u5b57\u4f53"}
             <select
               className="focus-ring rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700"
               defaultValue="Microsoft YaHei"
               onChange={(event) => runCommand("fontName", event.target.value)}
             >
-              <option value="Microsoft YaHei">微软雅黑</option>
+              <option value="Microsoft YaHei">{"\u5fae\u8f6f\u96c5\u9ed1"}</option>
               <option value="Arial">Arial</option>
               <option value="Georgia">Georgia</option>
               <option value="Times New Roman">Times</option>
@@ -644,36 +947,36 @@ function StudentNotesEditor({
             </select>
           </label>
           <label className="grid gap-1 text-xs font-bold text-slate-500">
-            字号
+            {"\u5b57\u53f7"}
             <select
               className="focus-ring rounded-lg border border-slate-200 bg-white px-2 py-1.5 text-sm text-slate-700"
               defaultValue="3"
               onChange={(event) => runCommand("fontSize", event.target.value)}
             >
-              <option value="2">小</option>
-              <option value="3">正文</option>
-              <option value="4">大</option>
-              <option value="5">标题</option>
+              <option value="2">{"\u5c0f"}</option>
+              <option value="3">{"\u6b63\u6587"}</option>
+              <option value="4">{"\u5927"}</option>
+              <option value="5">{"\u6807\u9898"}</option>
             </select>
           </label>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => runCommand("bold")} className={toolbarButtonClass} aria-label="粗体">
+          <button type="button" onClick={() => runCommand("bold")} className={toolbarButtonClass} aria-label="\u7c97\u4f53">
             <Bold size={16} />
           </button>
-          <button type="button" onClick={() => runCommand("italic")} className={toolbarButtonClass} aria-label="斜体">
+          <button type="button" onClick={() => runCommand("italic")} className={toolbarButtonClass} aria-label="\u659c\u4f53">
             <Italic size={16} />
           </button>
           <button
             type="button"
             onClick={() => runCommand("insertUnorderedList")}
             className={toolbarButtonClass}
-            aria-label="项目符号"
+            aria-label="\u9879\u76ee\u7b26\u53f7"
           >
             <List size={16} />
           </button>
-          <label className={`${toolbarButtonClass} cursor-pointer`} title="文字颜色" onMouseDown={saveSelection}>
+          <label className={`${toolbarButtonClass} cursor-pointer`} title="\u6587\u5b57\u989c\u8272" onMouseDown={saveSelection}>
             <Palette size={16} />
             <input
               type="color"
@@ -682,7 +985,7 @@ function StudentNotesEditor({
               onChange={(event) => runCommand("foreColor", event.target.value)}
             />
           </label>
-          <label className={`${toolbarButtonClass} cursor-pointer`} title="高亮颜色" onMouseDown={saveSelection}>
+          <label className={`${toolbarButtonClass} cursor-pointer`} title="\u9ad8\u4eae\u989c\u8272" onMouseDown={saveSelection}>
             <Highlighter size={16} />
             <input
               type="color"
@@ -691,7 +994,7 @@ function StudentNotesEditor({
               onChange={(event) => applyHighlight(event.target.value)}
             />
           </label>
-          <button type="button" onClick={() => runCommand("removeFormat")} className={toolbarButtonClass} aria-label="清除格式">
+          <button type="button" onClick={() => runCommand("removeFormat")} className={toolbarButtonClass} aria-label="\u6e05\u9664\u683c\u5f0f">
             <Type size={16} />
           </button>
         </div>
@@ -699,7 +1002,7 @@ function StudentNotesEditor({
       <div className="relative">
         {!hasContent && !focused ? (
           <span className="pointer-events-none absolute left-3 top-3 text-sm font-semibold text-slate-400">
-            记录本节课的重点、问题和作业想法
+            {"\u8bb0\u5f55\u672c\u7ae0\u8bfe\u7684\u91cd\u70b9\u3001\u95ee\u9898\u548c\u4f5c\u4e1a\u60f3\u6cd5"}
           </span>
         ) : null}
         <div
@@ -1231,7 +1534,7 @@ function MarkdownHandoutLegacy({ markdown }: { markdown: string }) {
         }
         if (trimmedLine.startsWith("- ")) {
           return (
-            <p key={index} className="ml-4 text-sm leading-7 before:mr-2 before:content-['•']">
+            <p key={index} className="ml-4 text-sm leading-7 before:mr-2 before:content-['鈥?]">
               {trimmedLine.slice(2)}
             </p>
           );
@@ -1248,7 +1551,7 @@ function MarkdownHandoutLegacy({ markdown }: { markdown: string }) {
 
 function getQuestionTitle(question: Question) {
   const title = question.content?.title;
-  return typeof title === "string" && title.trim() ? title : `题目 ${question.id}`;
+  return typeof title === "string" && title.trim() ? title : `\u9898\u76ee ${question.id}`;
 }
 
 function sortedOptions(options: QuestionOption[]) {
@@ -1262,8 +1565,12 @@ function getBlankLabels(question: Question) {
   if (optionLabels.length) {
     return optionLabels;
   }
-  const blankCount = Math.max(question.prompt.match(/_{2,}|（\s*）|\(\s*\)/g)?.length ?? 1, 1);
-  return Array.from({ length: blankCount }, (_, index) => `空${index + 1}`);
+  const blankCount = Math.max(question.prompt.match(/_{2,}|\(\s*\)/g)?.length ?? 1, 1);
+  const labels: string[] = [];
+  for (let index = 0; index < blankCount; index += 1) {
+    labels.push(`\u7a7a${index + 1}`);
+  }
+  return labels;
 }
 
 function hasAnswer(answer: QuestionAnswer | undefined) {
@@ -1321,9 +1628,9 @@ function answerFromSubmission(question: Question, answerPayload: Record<string, 
 
 function submissionResultText(submission: { score?: number | null }) {
   if (typeof submission.score === "number") {
-    return submission.score > 0 ? "回答正确" : "回答错误";
+    return submission.score > 0 ? "鍥炵瓟姝ｇ‘" : "鍥炵瓟閿欒";
   }
-  return "等待老师批改";
+  return "绛夊緟鑰佸笀鎵规敼";
 }
 
 function QuestionSet({
@@ -1335,7 +1642,8 @@ function QuestionSet({
   onItemComplete,
   onQuizComplete,
   onQuizWarning,
-  onItemReset
+  onItemReset,
+  readOnly = false
 }: {
   enrollmentId: number;
   item: LessonItem;
@@ -1346,6 +1654,7 @@ function QuestionSet({
   onQuizComplete?: (score?: number) => void;
   onQuizWarning: () => void;
   onItemReset: () => void;
+  readOnly?: boolean;
 }) {
   const [answers, setAnswers] = useState<Record<number, QuestionAnswer>>({});
   const [submittedScores, setSubmittedScores] = useState<Record<number, number | null>>({});
@@ -1366,6 +1675,9 @@ function QuestionSet({
       : 0;
 
   function updateAnswer(questionId: number, answer: QuestionAnswer) {
+    if (readOnly) {
+      return;
+    }
     setAnswers((current) => ({ ...current, [questionId]: answer }));
     setSubmissionStatus((current) => ({ ...current, [questionId]: "" }));
     setSubmittedScores((current) => {
@@ -1431,17 +1743,24 @@ function QuestionSet({
 
         if (payload.submissions.length && item.item_type === "quiz") {
           const percent = payload.total_score > 0 ? Math.round((payload.score / payload.total_score) * 100) : 0;
-          setQuizSubmitStatus(
-            payload.passed
-              ? `上次测验已通过：${payload.score} / ${payload.total_score} 分（${percent}%）。`
-              : `上次测验未通过：${payload.score} / ${payload.total_score} 分（${percent}%）。`
-          );
+          if (payload.pending_manual_count || payload.passed === null) {
+            const pendingText = payload.pending_manual_count
+              ? `${payload.pending_manual_count} \u9053\u9898`
+              : "\u9898\u76ee";
+            setQuizSubmitStatus(`\u6d4b\u9a8c\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u8001\u5e08\u6279\u6539 ${pendingText}\u3002`);
+          } else {
+            setQuizSubmitStatus(
+              payload.passed
+                ? `\u4e0a\u6b21\u6d4b\u9a8c\u5df2\u901a\u8fc7\uff1a${payload.score} / ${payload.total_score} \u5206\uff08${percent}%\uff09\u3002`
+                : `\u4e0a\u6b21\u6d4b\u9a8c\u672a\u901a\u8fc7\uff1a${payload.score} / ${payload.total_score} \u5206\uff08${percent}%\uff09\u3002`
+            );
+          }
         } else if (payload.submissions.length) {
-          setHistoryStatus("已恢复上次练习结果。");
+          setHistoryStatus("\u5df2\u6062\u590d\u4e0a\u6b21\u7ec3\u4e60\u7ed3\u679c\u3002");
         }
       } catch {
         if (!ignore) {
-          setHistoryStatus("上次答题记录读取失败，请确认 FastAPI 服务正在运行。");
+          setHistoryStatus("\u4e0a\u6b21\u7b54\u9898\u8bb0\u5f55\u8bfb\u53d6\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
         }
       } finally {
         if (!ignore) {
@@ -1455,6 +1774,81 @@ function QuestionSet({
       ignore = true;
     };
   }, [enrollmentId, item.id, item.item_type, questionById, questionKey]);
+
+  useEffect(() => {
+    if (item.item_type !== "quiz" || submissionState?.passed !== null || !hasSubmissionHistory) {
+      return;
+    }
+
+    let ignore = false;
+    async function pollManualGradingState() {
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/learn/items/${item.id}/submissions?enrollment_id=${enrollmentId}`,
+          { headers: getStudentRequestHeaders(), cache: "no-store" }
+        );
+        if (!response.ok) {
+          return;
+        }
+        const payload = (await response.json()) as ItemSubmissionState;
+        if (ignore || !payload.submissions.length) {
+          return;
+        }
+
+        const nextScores: Record<number, number | null> = {};
+        const nextStatuses: Record<number, string> = {};
+        payload.submissions.forEach((submission) => {
+          const question = questionById.get(submission.question_id);
+          if (!question) {
+            return;
+          }
+          nextScores[question.id] = submission.score ?? null;
+          nextStatuses[question.id] = submissionResultText(submission);
+        });
+        setSubmittedScores(nextScores);
+        setSubmissionStatus(nextStatuses);
+        setSubmissionState(payload);
+
+        if (payload.pending_manual_count || payload.passed === null) {
+          const pendingText = payload.pending_manual_count
+            ? `${payload.pending_manual_count} \u9053\u9898`
+            : "\u9898\u76ee";
+          setQuizSubmitStatus(`\u6d4b\u9a8c\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u8001\u5e08\u6279\u6539 ${pendingText}\u3002`);
+          return;
+        }
+
+        const percent = payload.total_score > 0 ? Math.round((payload.score / payload.total_score) * 100) : 0;
+        setQuizSubmitStatus(
+          payload.passed
+            ? `\u8001\u5e08\u5df2\u5b8c\u6210\u6279\u6539\uff0c\u6d4b\u9a8c\u5df2\u901a\u8fc7\uff1a${payload.score} / ${payload.total_score} \u5206\uff08${percent}%\uff09\u3002`
+            : `\u8001\u5e08\u5df2\u5b8c\u6210\u6279\u6539\uff0c\u6d4b\u9a8c\u672a\u901a\u8fc7\uff1a${payload.score} / ${payload.total_score} \u5206\uff08${percent}%\uff09\u3002`
+        );
+        if (payload.passed) {
+          onQuizComplete?.(payload.score);
+        } else {
+          onQuizWarning();
+        }
+      } catch {
+        // Keep the current pending state if the background refresh fails.
+      }
+    }
+
+    void pollManualGradingState();
+    const timer = window.setInterval(() => void pollManualGradingState(), 15000);
+    return () => {
+      ignore = true;
+      window.clearInterval(timer);
+    };
+  }, [
+    enrollmentId,
+    hasSubmissionHistory,
+    item.id,
+    item.item_type,
+    onQuizComplete,
+    onQuizWarning,
+    questionById,
+    submissionState?.passed
+  ]);
 
   function evaluateItemCompletion(nextScores: Record<number, number | null>) {
     const allQuestionsSubmitted = questions.length > 0 && questions.every((question) => question.id in nextScores);
@@ -1478,6 +1872,10 @@ function QuestionSet({
   }
 
   async function submitQuestion(question: Question) {
+    if (readOnly) {
+      setHistoryStatus("\u8bfe\u7a0b\u5df2\u5b8c\u6210\uff0c\u5f53\u524d\u4e3a\u590d\u4e60\u6a21\u5f0f\uff0c\u4e0d\u80fd\u91cd\u65b0\u63d0\u4ea4\u7ec3\u4e60\u3002");
+      return;
+    }
     const answer = answers[question.id];
     if (!hasAnswer(answer)) {
       setSubmissionStatus((current) => ({ ...current, [question.id]: "\u8bf7\u5148\u586b\u5199\u7b54\u6848\u3002" }));
@@ -1490,6 +1888,7 @@ function QuestionSet({
         headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
         body: JSON.stringify({
           enrollment_id: enrollmentId,
+          lesson_item_id: item.id,
           answer: toSubmissionAnswer(answer as QuestionAnswer)
         })
       });
@@ -1500,14 +1899,14 @@ function QuestionSet({
       const resultText =
         typeof payload.score === "number"
           ? payload.score > 0
-            ? "回答正确"
-            : "回答错误"
-          : "等待老师批改";
+            ? "\u56de\u7b54\u6b63\u786e"
+            : "\u56de\u7b54\u9519\u8bef"
+          : "\u7b49\u5f85\u8001\u5e08\u6279\u6539";
       const nextScores = { ...submittedScores, [question.id]: payload.score ?? null };
       setSubmittedScores(nextScores);
       setSubmissionStatus((current) => ({ ...current, [question.id]: resultText }));
       setHasSubmissionHistory(true);
-      setHistoryStatus("答案已保存。");
+      setHistoryStatus("\u7b54\u6848\u5df2\u4fdd\u5b58\u3002");
       evaluateItemCompletion(nextScores);
     } catch {
       setSubmissionStatus((current) => ({
@@ -1518,6 +1917,10 @@ function QuestionSet({
   }
 
   async function submitQuizPaper() {
+    if (readOnly) {
+      setQuizSubmitStatus("\u8bfe\u7a0b\u5df2\u5b8c\u6210\uff0c\u5f53\u524d\u4e3a\u590d\u4e60\u6a21\u5f0f\uff0c\u4e0d\u80fd\u91cd\u65b0\u63d0\u4ea4\u6d4b\u9a8c\u3002");
+      return;
+    }
     const missingQuestions = questions.filter((question) => !hasAnswer(answers[question.id]));
     if (missingQuestions.length) {
       setSubmissionStatus((current) => {
@@ -1527,7 +1930,7 @@ function QuestionSet({
         });
         return nextStatus;
       });
-      setQuizSubmitStatus(`还有 ${missingQuestions.length} 道题未作答，请完成后再提交试卷。`);
+      setQuizSubmitStatus(`\u8fd8\u6709 ${missingQuestions.length} \u9053\u9898\u672a\u4f5c\u7b54\uff0c\u8bf7\u5b8c\u6210\u540e\u518d\u63d0\u4ea4\u8bd5\u5377\u3002`);
       return;
     }
 
@@ -1554,7 +1957,9 @@ function QuestionSet({
       const payload = (await response.json()) as {
         score?: number;
         total_score?: number;
-        passed?: boolean;
+        passed?: boolean | null;
+        status?: string;
+        pending_manual_count?: number;
         submissions?: SubmissionRecord[];
       };
       const nextScores: Record<number, number | null> = {};
@@ -1562,7 +1967,7 @@ function QuestionSet({
       (payload.submissions ?? []).forEach((submission) => {
         nextScores[submission.question_id] = submission.score ?? null;
         nextStatuses[submission.question_id] =
-          typeof submission.score === "number" ? (submission.score > 0 ? "回答正确" : "回答错误") : "等待老师批改";
+          typeof submission.score === "number" ? (submission.score > 0 ? "鍥炵瓟姝ｇ‘" : "鍥炵瓟閿欒") : "绛夊緟鑰佸笀鎵规敼";
       });
 
       setSubmittedScores(nextScores);
@@ -1573,9 +1978,15 @@ function QuestionSet({
         0
       );
       const totalScore = questions.reduce((total, question) => total + Math.max(question.points || 0, 0), 0);
-      const passedByRatio = totalScore > 0 && earnedScore / totalScore >= 0.8;
+      const pendingManualCount =
+        typeof payload.pending_manual_count === "number"
+          ? payload.pending_manual_count
+          : (payload.submissions ?? []).filter((submission) => submission.status === "pending_manual").length;
+      const passedByRatio = pendingManualCount === 0 && totalScore > 0 && earnedScore / totalScore >= 0.8;
 
-      if (payload.passed || passedByRatio) {
+      if (pendingManualCount > 0 || payload.status === "pending_manual" || payload.passed === null) {
+        setQuizSubmitStatus(`\u6d4b\u9a8c\u5df2\u63d0\u4ea4\uff0c\u6b63\u5728\u7b49\u5f85\u8001\u5e08\u6279\u6539 ${pendingManualCount || ""} \u9053\u9898\u3002`);
+      } else if (payload.passed || passedByRatio) {
         setQuizSubmitStatus("\u6d4b\u9a8c\u5df2\u901a\u8fc7\uff0c\u540e\u7eed\u7ae0\u8282\u5df2\u89e3\u9501\u3002");
         onQuizComplete?.(earnedScore);
       } else {
@@ -1587,7 +1998,8 @@ function QuestionSet({
         enrollment_id: enrollmentId,
         score: typeof payload.score === "number" ? payload.score : earnedScore,
         total_score: typeof payload.total_score === "number" ? payload.total_score : totalScore,
-        passed: Boolean(payload.passed || passedByRatio),
+        passed: pendingManualCount > 0 || payload.passed === null ? null : Boolean(payload.passed || passedByRatio),
+        pending_manual_count: pendingManualCount,
         completed_at: payload.passed || passedByRatio ? new Date().toISOString() : null,
         submissions: payload.submissions ?? []
       });
@@ -1600,6 +2012,10 @@ function QuestionSet({
   }
 
   async function resetSubmissions() {
+    if (readOnly) {
+      setHistoryStatus("\u8bfe\u7a0b\u5df2\u5b8c\u6210\uff0c\u5f53\u524d\u4e3a\u590d\u4e60\u6a21\u5f0f\uff0c\u4e0d\u80fd\u6e05\u9664\u7b54\u9898\u8bb0\u5f55\u3002");
+      return;
+    }
     setResetting(true);
     setHistoryStatus("");
     setQuizSubmitStatus("");
@@ -1616,10 +2032,10 @@ function QuestionSet({
       setSubmissionStatus({});
       setSubmissionState(null);
       setHasSubmissionHistory(false);
-      setHistoryStatus(item.item_type === "quiz" ? "已清除上次测验结果，请重新作答。" : "已清除上次练习结果，请重新作答。");
+      setHistoryStatus(item.item_type === "quiz" ? "\u5df2\u6e05\u9664\u4e0a\u6b21\u6d4b\u9a8c\u7ed3\u679c\uff0c\u8bf7\u91cd\u65b0\u4f5c\u7b54\u3002" : "\u5df2\u6e05\u9664\u4e0a\u6b21\u7ec3\u4e60\u7ed3\u679c\uff0c\u8bf7\u91cd\u65b0\u4f5c\u7b54\u3002");
       onItemReset();
     } catch {
-      setHistoryStatus("重做失败，请确认 FastAPI 服务正在运行。");
+      setHistoryStatus("\u91cd\u505a\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
     } finally {
       setResetting(false);
     }
@@ -1634,15 +2050,15 @@ function QuestionSet({
             <p className="mt-1 text-sm text-slate-500">{item.title}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {historyLoading ? <span className="text-xs font-bold text-slate-400">{"正在读取上次结果..."}</span> : null}
-            {hasSavedSubmissions ? (
+            {historyLoading ? <span className="text-xs font-bold text-slate-400">{"姝ｅ湪璇诲彇涓婃缁撴灉..."}</span> : null}
+            {hasSavedSubmissions && !readOnly ? (
               <button
                 type="button"
                 onClick={() => void resetSubmissions()}
                 disabled={resetting}
                 className="focus-ring rounded-lg border border-coral/30 bg-white px-3 py-1.5 text-xs font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
               >
-                {resetting ? "清除中..." : item.item_type === "quiz" ? "重做测验" : "重新练习"}
+                {resetting ? "娓呴櫎涓?.." : item.item_type === "quiz" ? "閲嶅仛娴嬮獙" : "閲嶆柊缁冧範"}
               </button>
             ) : null}
             <span className="rounded-full bg-mint/12 px-3 py-1 text-xs font-bold text-mint">
@@ -1651,15 +2067,24 @@ function QuestionSet({
           </div>
         </div>
         {historyStatus ? <p className="mt-3 text-sm font-semibold text-slate-500">{historyStatus}</p> : null}
+        {readOnly ? (
+          <p className="mt-3 rounded-lg border border-mint/30 bg-mint/10 px-3 py-2 text-sm font-semibold text-mint">
+            {"\u8bfe\u7a0b\u5df2\u5b8c\u6210\uff0c\u5f53\u524d\u4e3a\u590d\u4e60\u6a21\u5f0f\uff0c\u53ef\u4ee5\u67e5\u770b\u5185\u5bb9\u4f46\u4e0d\u80fd\u91cd\u65b0\u4f5c\u7b54\u3002"}
+          </p>
+        ) : null}
         {item.item_type === "quiz" && submissionState ? (
           <div
             className={`mt-3 rounded-lg border p-3 text-sm font-semibold ${
-              submissionState.passed
-                ? "border-mint/30 bg-mint/10 text-mint"
-                : "border-coral/30 bg-coral/10 text-coral"
+              submissionState.passed === null
+                ? "border-amber-200 bg-amber-50 text-amber-700"
+                : submissionState.passed
+                  ? "border-mint/30 bg-mint/10 text-mint"
+                  : "border-coral/30 bg-coral/10 text-coral"
             }`}
           >
-            {submissionState.passed ? "测验已通过" : "测验未通过"} · {submissionState.score} / {submissionState.total_score} 分 · {quizScorePercent}%
+            {submissionState.passed === null
+              ? `\u7b49\u5f85\u8001\u5e08\u6279\u6539${submissionState.pending_manual_count ? ` \u00b7 ${submissionState.pending_manual_count} \u9053\u9898` : ""} \u00b7 ${submissionState.score} / ${submissionState.total_score} \u5206`
+              : `${submissionState.passed ? "\u6d4b\u9a8c\u5df2\u901a\u8fc7" : "\u6d4b\u9a8c\u672a\u901a\u8fc7"} \u00b7 ${submissionState.score} / ${submissionState.total_score} \u5206 \u00b7 ${quizScorePercent}%`}
           </div>
         ) : null}
       </div>
@@ -1682,7 +2107,8 @@ function QuestionSet({
             status={submissionStatus[question.id]}
             onChange={(answer) => updateAnswer(question.id, answer)}
             onSubmit={() => void submitQuestion(question)}
-            showSubmitButton={item.item_type === "exercise"}
+            showSubmitButton={item.item_type === "exercise" && !readOnly}
+            readOnly={readOnly}
           />
         ))
       )}
@@ -1690,17 +2116,17 @@ function QuestionSet({
       {!isLoading && !status && item.item_type === "quiz" && questions.length ? (
         <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4">
           <div>
-            <p className="font-bold text-ink">{"整张试卷提交"}</p>
-            <p className="mt-1 text-sm text-slate-500">{"达到总分的 80% 后通过测验，并解锁后续章节。"}</p>
+            <p className="font-bold text-ink">{"\u6574\u5f20\u8bd5\u5377\u63d0\u4ea4"}</p>
+            <p className="mt-1 text-sm text-slate-500">{"\u8fbe\u5230\u603b\u5206\u7684 80% \u540e\u901a\u8fc7\u6d4b\u9a8c\uff0c\u5e76\u89e3\u9501\u540e\u7eed\u7ae0\u8282\u3002"}</p>
             {quizSubmitStatus ? <p className="mt-2 text-sm font-semibold text-slate-500">{quizSubmitStatus}</p> : null}
           </div>
           <button
             type="button"
             onClick={() => void submitQuizPaper()}
-            disabled={quizSubmitting}
+            disabled={quizSubmitting || readOnly}
             className="focus-ring rounded-lg bg-ink px-5 py-2.5 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {quizSubmitting ? "提交中..." : "提交试卷"}
+            {readOnly ? "\u4ec5\u53ef\u590d\u4e60" : quizSubmitting ? "\u63d0\u4ea4\u4e2d..." : "\u63d0\u4ea4\u8bd5\u5377"}
           </button>
         </div>
       ) : null}
@@ -1715,7 +2141,8 @@ function QuestionCard({
   status,
   onChange,
   onSubmit,
-  showSubmitButton = true
+  showSubmitButton = true,
+  readOnly = false
 }: {
   index: number;
   question: Question;
@@ -1724,6 +2151,7 @@ function QuestionCard({
   onChange: (answer: QuestionAnswer) => void;
   onSubmit: () => void;
   showSubmitButton?: boolean;
+  readOnly?: boolean;
 }) {
   const [isHintVisible, setIsHintVisible] = useState(false);
   const hint = question.hint?.trim() ?? "";
@@ -1733,19 +2161,19 @@ function QuestionCard({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <p className="text-sm font-bold text-coral">
-            第 {index + 1} 题 · {questionTypeLabels[question.type] ?? question.type}
+            {"\u7b2c"}{index + 1}{" \u9898 \u00b7 "}{questionTypeLabels[question.type] ?? question.type}
           </p>
           <h3 className="mt-1 text-lg font-bold text-ink">{getQuestionTitle(question)}</h3>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</p>
+          <MathText className="mt-2 block whitespace-pre-wrap text-sm leading-7 text-slate-700">{question.prompt}</MathText>
         </div>
         <div className="flex flex-wrap gap-2 text-xs font-bold">
-          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{question.difficulty || "未分级"}</span>
-          <span className="rounded-full bg-skysoft/20 px-2.5 py-1 text-blue-700">{question.points} 分</span>
+          <span className="rounded-full bg-slate-100 px-2.5 py-1 text-slate-600">{question.difficulty || "\u672a\u5206\u7ea7"}</span>
+          <span className="rounded-full bg-skysoft/20 px-2.5 py-1 text-blue-700">{question.points}{" \u5206"}</span>
         </div>
       </div>
 
       <QuestionMediaList mediaAssets={question.media_assets} />
-      <QuestionAnswerInput question={question} answer={answer} onChange={onChange} />
+      <QuestionAnswerInput question={question} answer={answer} onChange={onChange} disabled={readOnly} />
 
       <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
         <QuestionSubmissionStatus status={status} />
@@ -1757,7 +2185,7 @@ function QuestionCard({
                 onClick={() => setIsHintVisible((current) => !current)}
                 className="focus-ring rounded-lg border border-mint/40 bg-mint/10 px-3 py-2 text-sm font-bold text-mint"
               >
-                {isHintVisible ? "收起提示" : "查看提示"}
+                {isHintVisible ? "\u6536\u8d77\u63d0\u793a" : "\u67e5\u770b\u63d0\u793a"}
               </button>
             ) : null}
             {showSubmitButton ? (
@@ -1766,7 +2194,7 @@ function QuestionCard({
                 onClick={onSubmit}
                 className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white"
               >
-                提交答案
+                鎻愪氦绛旀
               </button>
             ) : null}
           </div>
@@ -1774,7 +2202,7 @@ function QuestionCard({
       </div>
       {hint && isHintVisible ? (
         <div className="mt-3 whitespace-pre-wrap rounded-lg border border-mint/30 bg-mint/10 p-4 text-sm leading-7 text-slate-700">
-          {hint}
+          <MathText>{hint}</MathText>
         </div>
       ) : null}
     </article>
@@ -1785,7 +2213,7 @@ function QuestionSubmissionStatus({ status }: { status?: string }) {
   if (!status) {
     return <p className="text-sm font-semibold text-slate-500" />;
   }
-  if (status === "回答正确") {
+  if (status === "鍥炵瓟姝ｇ‘") {
     return (
       <p className="inline-flex items-center gap-1.5 text-sm font-bold text-mint">
         <CheckCircle2 size={16} />
@@ -1793,7 +2221,7 @@ function QuestionSubmissionStatus({ status }: { status?: string }) {
       </p>
     );
   }
-  if (status === "回答错误") {
+  if (status === "鍥炵瓟閿欒") {
     return (
       <p className="inline-flex items-center gap-1.5 text-sm font-bold text-coral">
         <AlertTriangle size={16} />
@@ -1802,6 +2230,47 @@ function QuestionSubmissionStatus({ status }: { status?: string }) {
     );
   }
   return <p className="text-sm font-semibold text-slate-500">{status}</p>;
+}
+
+function CodeRunResultPanel({ result }: { result: CodeRunResult }) {
+  return (
+    <div className="mt-3 rounded-lg border border-white/10 bg-[#0b1220] p-3 text-xs text-slate-200">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className={`inline-flex items-center gap-1.5 font-bold ${result.passed ? "text-mint" : "text-coral"}`}>
+          {result.passed ? <CheckCircle2 size={14} /> : <AlertTriangle size={14} />}
+          {result.passed ? "\u6d4b\u8bd5\u901a\u8fc7" : "\u6d4b\u8bd5\u672a\u901a\u8fc7"}
+        </span>
+        <span className="text-slate-400">{result.duration_ms}ms</span>
+      </div>
+      {result.error ? (
+        <pre className="mt-2 whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.error}</pre>
+      ) : null}
+      {result.stdout ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stdout</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-black/30 p-2 font-mono">{result.stdout}</pre>
+        </div>
+      ) : null}
+      {result.stderr ? (
+        <div className="mt-2">
+          <p className="mb-1 font-bold text-slate-400">stderr</p>
+          <pre className="max-h-40 overflow-auto whitespace-pre-wrap rounded bg-coral/10 p-2 font-mono text-coral">{result.stderr}</pre>
+        </div>
+      ) : null}
+      {result.tests.length ? (
+        <div className="mt-2 grid gap-1.5">
+          {result.tests.map((test, index) => (
+            <div key={`${test.test}-${index}`} className="rounded border border-white/10 bg-white/5 p-2">
+              <p className={`font-bold ${test.passed ? "text-mint" : "text-coral"}`}>
+                {test.passed ? "\u901a\u8fc7" : "\u672a\u901a\u8fc7"} 路 {test.test}
+              </p>
+              {test.message ? <p className="mt-1 text-slate-300">{test.message}</p> : null}
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
 }
 
 function QuestionMediaList({ mediaAssets }: { mediaAssets: QuestionMedia[] }) {
@@ -1834,7 +2303,7 @@ function QuestionMediaPreview({ media }: { media: QuestionMedia }) {
         <iframe src={url} title={media.title} className="h-96 w-full rounded-lg border border-slate-200 bg-white" />
       ) : (
         <a href={url} target="_blank" rel="noreferrer" className="text-sm font-bold text-coral">
-          打开素材
+          鎵撳紑绱犳潗
         </a>
       )}
     </div>
@@ -1844,29 +2313,72 @@ function QuestionMediaPreview({ media }: { media: QuestionMedia }) {
 function QuestionAnswerInput({
   question,
   answer,
-  onChange
+  onChange,
+  disabled = false
 }: {
   question: Question;
   answer: QuestionAnswer | undefined;
   onChange: (answer: QuestionAnswer) => void;
+  disabled?: boolean;
 }) {
   const options = sortedOptions(question.options);
+  const [codeRunResult, setCodeRunResult] = useState<CodeRunResult | null>(null);
+  const [codeRunStatus, setCodeRunStatus] = useState("");
+  const [codeRunning, setCodeRunning] = useState(false);
+
+  async function runQuestionCode(code: string) {
+    if (disabled) {
+      return;
+    }
+    if (!code.trim()) {
+      setCodeRunResult(null);
+      setCodeRunStatus("\u8bf7\u5148\u7f16\u5199\u4ee3\u7801\u3002");
+      return;
+    }
+    setCodeRunning(true);
+    setCodeRunStatus("\u6b63\u5728\u8fd0\u884c\u4ee3\u7801...");
+    setCodeRunResult(null);
+    try {
+      const response = await fetch(`${API_BASE_URL}/learn/questions/${question.id}/run-code`, {
+        method: "POST",
+        headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ code, language: "python" })
+      });
+      if (!response.ok) {
+        throw new Error("run failed");
+      }
+      const payload = (await response.json()) as CodeRunResult;
+      setCodeRunResult(payload);
+      setCodeRunStatus(
+        payload.ok
+          ? payload.passed
+            ? "\u8fd0\u884c\u5b8c\u6210\uff0c\u6d4b\u8bd5\u5df2\u901a\u8fc7\u3002"
+            : "\u8fd0\u884c\u5b8c\u6210\uff0c\u8fd8\u6709\u6d4b\u8bd5\u672a\u901a\u8fc7\u3002"
+          : "\u8fd0\u884c\u5931\u8d25\uff0c\u8bf7\u68c0\u67e5\u4ee3\u7801\u3002"
+      );
+    } catch {
+      setCodeRunStatus("\u4ee3\u7801\u8fd0\u884c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
+    } finally {
+      setCodeRunning(false);
+    }
+  }
 
   if (question.type === "single_choice") {
     return (
       <div className="mt-4 grid gap-2">
         {options.map((option) => (
-          <label key={option.id} className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+          <label key={option.id} className={`flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}>
             <input
               type="radio"
               name={`question-${question.id}`}
               value={option.label}
               checked={answer === option.label}
+              disabled={disabled}
               onChange={() => onChange(option.label)}
               className="mt-1"
             />
             <span>
-              <span className="font-bold text-ink">{option.label}.</span> {option.text}
+              <span className="font-bold text-ink">{option.label}.</span> <MathText>{option.text}</MathText>
             </span>
           </label>
         ))}
@@ -1881,10 +2393,11 @@ function QuestionAnswerInput({
         {options.map((option) => {
           const checked = selectedAnswers.includes(option.label);
           return (
-            <label key={option.id} className="flex cursor-pointer items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm">
+            <label key={option.id} className={`flex items-start gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}>
               <input
                 type="checkbox"
                 checked={checked}
+                disabled={disabled}
                 onChange={() =>
                   onChange(
                     checked
@@ -1895,7 +2408,7 @@ function QuestionAnswerInput({
                 className="mt-1"
               />
               <span>
-                <span className="font-bold text-ink">{option.label}.</span> {option.text}
+                <span className="font-bold text-ink">{option.label}.</span> <MathText>{option.text}</MathText>
               </span>
             </label>
           );
@@ -1913,14 +2426,15 @@ function QuestionAnswerInput({
           <label key={`${question.id}-${label}`} className="grid gap-1.5 text-sm font-semibold text-slate-700">
             {label}
             <input
-              className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-2 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
               value={values[index] ?? ""}
+              disabled={disabled}
               onChange={(event) => {
                 const nextValues = [...values];
                 nextValues[index] = event.target.value;
                 onChange(nextValues);
               }}
-              placeholder="填写答案"
+              placeholder="\u586b\u5199\u7b54\u6848"
             />
           </label>
         ))}
@@ -1932,14 +2446,15 @@ function QuestionAnswerInput({
     return (
       <div className="mt-4 flex flex-wrap gap-2">
         {[
-          { label: "正确", value: true },
-          { label: "错误", value: false }
+          { label: "姝ｇ‘", value: true },
+          { label: "閿欒", value: false }
         ].map((item) => (
           <button
             key={item.label}
             type="button"
+            disabled={disabled}
             onClick={() => onChange(item.value)}
-            className={`focus-ring rounded-lg border px-4 py-2 text-sm font-bold ${
+            className={`focus-ring rounded-lg border px-4 py-2 text-sm font-bold disabled:cursor-not-allowed disabled:opacity-60 ${
               answer === item.value
                 ? "border-mint bg-mint text-white"
                 : "border-slate-200 bg-white text-slate-700"
@@ -1952,7 +2467,7 @@ function QuestionAnswerInput({
     );
   }
 
-  if (question.type === "coding" || question.type === "code_review") {
+  if (question.type === "coding") {
     const starterCode =
       typeof question.content?.starter_code === "string" ? question.content.starter_code : "";
     const value = typeof answer === "string" ? answer : starterCode;
@@ -1960,18 +2475,21 @@ function QuestionAnswerInput({
       <div className="mt-4 rounded-lg border border-slate-200 bg-[#111827] p-4">
         <div className="mb-3 flex items-center gap-2 text-sm font-bold text-skysoft">
           <Code2 size={16} />
-          在线代码编辑
+          {"\u5728\u7ebf\u4ee3\u7801\u7f16\u8f91"}
         </div>
         <textarea
           value={value}
+          disabled={disabled}
           onChange={(event) => onChange(event.target.value)}
           spellCheck={false}
-          className="h-72 w-full resize-y rounded-lg border border-white/10 bg-[#0b1220] p-3 font-mono text-sm leading-6 text-slate-100 outline-none"
-          placeholder="在这里编写或修改代码"
+          className="h-72 w-full resize-y rounded-lg border border-white/10 bg-[#0b1220] p-3 font-mono text-sm leading-6 text-slate-100 outline-none disabled:cursor-not-allowed disabled:opacity-70"
+          placeholder="\u5728\u8fd9\u91cc\u7f16\u5199\u6216\u4fee\u6539\u4ee3\u7801"
         />
-        <button type="button" className="focus-ring mt-3 rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white">
-          运行代码
+        <button type="button" onClick={() => void runQuestionCode(value)} disabled={disabled || codeRunning || !value.trim()} className="focus-ring mt-3 rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-500">
+          {"\u8fd0\u884c\u4ee3\u7801"}
         </button>
+        {codeRunStatus ? <p className="mt-3 text-sm font-semibold text-slate-200">{codeRunStatus}</p> : null}
+        {codeRunResult ? <CodeRunResultPanel result={codeRunResult} /> : null}
       </div>
     );
   }
@@ -1981,12 +2499,13 @@ function QuestionAnswerInput({
     const currentFile = typeof answer === "object" && !Array.isArray(answer) ? answer : null;
     return (
       <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4">
-        <label className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
+        <label className={`focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 ${disabled ? "cursor-not-allowed opacity-70" : "cursor-pointer"}`}>
           <Upload size={16} />
-          {question.type === "pronunciation" ? "上传口语音频" : "上传图片、音频或视频"}
+          {question.type === "pronunciation" ? "\u4e0a\u4f20\u53e3\u8bed\u97f3\u9891" : "\u4e0a\u4f20\u56fe\u7247\u3001\u97f3\u9891\u6216\u89c6\u9891"}
           <input
             type="file"
             accept={accept}
+            disabled={disabled}
             className="sr-only"
             onChange={(event) => {
               const file = event.target.files?.[0];
@@ -1997,7 +2516,7 @@ function QuestionAnswerInput({
           />
         </label>
         {currentFile ? (
-          <p className="mt-3 text-sm font-semibold text-slate-600">已选择：{currentFile.fileName}</p>
+          <p className="mt-3 text-sm font-semibold text-slate-600">{"\u5df2\u9009\u62e9\uff1a"}{currentFile.fileName}</p>
         ) : null}
       </div>
     );
@@ -2006,14 +2525,15 @@ function QuestionAnswerInput({
   return (
     <textarea
       value={typeof answer === "string" ? answer : ""}
+      disabled={disabled}
       onChange={(event) => onChange(event.target.value)}
-      className="focus-ring mt-4 h-44 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7"
+      className="focus-ring mt-4 h-44 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-500"
       placeholder={
         question.type === "listening"
-          ? "听完素材后在这里作答"
+          ? "\u542c\u5b8c\u7d20\u6750\u540e\u5728\u8fd9\u91cc\u4f5c\u7b54"
           : question.type === "reading"
-            ? "阅读材料后在这里作答"
-            : "请输入你的答案"
+            ? "\u9605\u8bfb\u6750\u6599\u540e\u5728\u8fd9\u91cc\u4f5c\u7b54"
+            : "\u8bf7\u8f93\u5165\u4f60\u7684\u7b54\u6848"
       }
     />
   );
