@@ -21,3 +21,4 @@ dev-server.*.log
 postgres_data/
 redis_data/
 apps/api/uploads/
+backups/
