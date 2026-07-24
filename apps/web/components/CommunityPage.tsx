@@ -135,6 +135,14 @@ export function CommunityPage() {
     setHome((current) => updateQuestionCollections(current, (question) => question.id === questionId ? { ...question, answers: question.answers.map((item) => item.id === answer.id ? { ...item, liked_by_me: payload.liked, likes_count: payload.likes_count } : item) } : question));
   }
 
+  async function toggleQuestionLike(question: CommunityQuestion) {
+    if (!requireStudentLogin("点赞问题")) return;
+    const response = await fetch(`${API_BASE_URL}/learn/community/questions/${question.id}/like`, { method: "POST", headers: getStudentRequestHeaders() });
+    if (!response.ok) return;
+    const payload = (await response.json()) as { liked: boolean; likes_count: number };
+    setHome((current) => updateQuestionCollections(current, (item) => item.id === question.id ? { ...item, liked_by_me: payload.liked, likes_count: payload.likes_count } : item));
+  }
+
   async function toggleNoteLike(note: CommunityNoteShare) {
     if (!requireStudentLogin("点赞笔记")) return;
     const response = await fetch(`${API_BASE_URL}/learn/community/notes/${note.id}/like`, { method: "POST", headers: getStudentRequestHeaders() });
@@ -230,6 +238,7 @@ export function CommunityPage() {
                   messageDrafts={messageDrafts}
                   setMessageDrafts={setMessageDrafts}
                   onSubmitAnswer={submitAnswer}
+                  onLikeQuestion={toggleQuestionLike}
                   onLikeAnswer={toggleAnswerLike}
                   onLikeNote={toggleNoteLike}
                   onFollow={toggleFollow}
@@ -246,6 +255,7 @@ export function CommunityPage() {
                   answerDrafts={answerDrafts}
                   setAnswerDrafts={setAnswerDrafts}
                   onSubmitAnswer={submitAnswer}
+                  onLikeQuestion={toggleQuestionLike}
                   onLikeAnswer={toggleAnswerLike}
                   onFollow={toggleFollow}
                 />
@@ -260,6 +270,7 @@ export function CommunityPage() {
                 answerDrafts={answerDrafts}
                 setAnswerDrafts={setAnswerDrafts}
                 onSubmitAnswer={submitAnswer}
+                onLikeQuestion={toggleQuestionLike}
                 onLikeAnswer={toggleAnswerLike}
                 onFollow={toggleFollow}
               />
@@ -315,6 +326,7 @@ function SearchResultsPanel({
   messageDrafts,
   setMessageDrafts,
   onSubmitAnswer,
+  onLikeQuestion,
   onLikeAnswer,
   onLikeNote,
   onFollow,
@@ -331,6 +343,7 @@ function SearchResultsPanel({
   messageDrafts: Record<number, string>;
   setMessageDrafts: Dispatch<SetStateAction<Record<number, string>>>;
   onSubmitAnswer: (questionId: number) => void;
+  onLikeQuestion: (question: CommunityQuestion) => void;
   onLikeAnswer: (questionId: number, answer: CommunityAnswer) => void;
   onLikeNote: (note: CommunityNoteShare) => void;
   onFollow: (studentId: number) => void;
@@ -355,6 +368,7 @@ function SearchResultsPanel({
                 answerDraft={answerDrafts[question.id] ?? ""}
                 setAnswerDraft={(value) => setAnswerDrafts((current) => ({ ...current, [question.id]: value }))}
                 onSubmitAnswer={() => onSubmitAnswer(question.id)}
+                onLikeQuestion={() => onLikeQuestion(question)}
                 onLikeAnswer={(answer) => onLikeAnswer(question.id, answer)}
                 onFollow={() => onFollow(question.user_id)}
               />
@@ -463,11 +477,11 @@ function SearchNoteCard({ note, currentUserId, following, onLike, onFollow }: { 
   );
 }
 
-function QuestionsPanel({ questions, emptyText, currentUserId, followingIds, answerDrafts, setAnswerDrafts, onSubmitAnswer, onLikeAnswer, onFollow }: { questions: CommunityQuestion[]; emptyText: string; currentUserId: number; followingIds: number[]; answerDrafts: Record<number, string>; setAnswerDrafts: Dispatch<SetStateAction<Record<number, string>>>; onSubmitAnswer: (questionId: number) => void; onLikeAnswer: (questionId: number, answer: CommunityAnswer) => void; onFollow: (studentId: number) => void }) {
-  return <div className="grid gap-2.5">{questions.length === 0 ? <EmptyState icon={<HelpCircle />} title="还没有找到问题" text={emptyText} /> : null}{questions.map((question) => <QuestionCard key={question.id} question={question} currentUserId={currentUserId} following={followingIds.includes(question.user_id)} answerDraft={answerDrafts[question.id] ?? ""} setAnswerDraft={(value) => setAnswerDrafts((current) => ({ ...current, [question.id]: value }))} onSubmitAnswer={() => onSubmitAnswer(question.id)} onLikeAnswer={(answer) => onLikeAnswer(question.id, answer)} onFollow={() => onFollow(question.user_id)} />)}</div>;
+function QuestionsPanel({ questions, emptyText, currentUserId, followingIds, answerDrafts, setAnswerDrafts, onSubmitAnswer, onLikeQuestion, onLikeAnswer, onFollow }: { questions: CommunityQuestion[]; emptyText: string; currentUserId: number; followingIds: number[]; answerDrafts: Record<number, string>; setAnswerDrafts: Dispatch<SetStateAction<Record<number, string>>>; onSubmitAnswer: (questionId: number) => void; onLikeQuestion: (question: CommunityQuestion) => void; onLikeAnswer: (questionId: number, answer: CommunityAnswer) => void; onFollow: (studentId: number) => void }) {
+  return <div className="grid gap-2.5">{questions.length === 0 ? <EmptyState icon={<HelpCircle />} title="还没有找到问题" text={emptyText} /> : null}{questions.map((question) => <QuestionCard key={question.id} question={question} currentUserId={currentUserId} following={followingIds.includes(question.user_id)} answerDraft={answerDrafts[question.id] ?? ""} setAnswerDraft={(value) => setAnswerDrafts((current) => ({ ...current, [question.id]: value }))} onSubmitAnswer={() => onSubmitAnswer(question.id)} onLikeQuestion={() => onLikeQuestion(question)} onLikeAnswer={(answer) => onLikeAnswer(question.id, answer)} onFollow={() => onFollow(question.user_id)} />)}</div>;
 }
 
-function QuestionCard({ question, currentUserId, following, answerDraft, setAnswerDraft, onSubmitAnswer, onLikeAnswer, onFollow }: { question: CommunityQuestion; currentUserId: number; following: boolean; answerDraft: string; setAnswerDraft: (value: string) => void; onSubmitAnswer: () => void; onLikeAnswer: (answer: CommunityAnswer) => void; onFollow: () => void }) {
+function QuestionCard({ question, currentUserId, following, answerDraft, setAnswerDraft, onSubmitAnswer, onLikeQuestion, onLikeAnswer, onFollow }: { question: CommunityQuestion; currentUserId: number; following: boolean; answerDraft: string; setAnswerDraft: (value: string) => void; onSubmitAnswer: () => void; onLikeQuestion: () => void; onLikeAnswer: (answer: CommunityAnswer) => void; onFollow: () => void }) {
   return (
     <details className="group rounded-lg border border-slate-100 bg-white p-0 shadow-sm open:ring-2 open:ring-mint/20">
       <summary className="cursor-pointer list-none p-3.5">
@@ -479,6 +493,7 @@ function QuestionCard({ question, currentUserId, following, answerDraft, setAnsw
           </div>
           <div className="flex items-center gap-2 justify-self-start md:justify-self-end">
             {question.user_id !== currentUserId ? <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onFollow(); }} className={`focus-ring rounded-lg px-3 py-2 text-xs font-black ${following ? "border border-slate-200 text-slate-500" : "bg-ink text-white"}`}>{following ? "已关注" : "关注"}</button> : null}
+            <button type="button" onClick={(event) => { event.preventDefault(); event.stopPropagation(); onLikeQuestion(); }} className={`focus-ring inline-flex items-center gap-1 rounded-lg px-3 py-2 text-sm font-black ${question.liked_by_me ? "bg-coral/10 text-coral" : "bg-slate-50 text-slate-500 hover:text-coral"}`}><Heart size={15} fill={question.liked_by_me ? "currentColor" : "none"} />{question.likes_count ?? 0}</button>
             <span className="inline-flex items-center gap-1 rounded-lg bg-slate-50 px-3 py-2 text-sm font-black text-slate-600"><MessageCircle size={15} />{question.answers_count}</span>
             <ChevronDown className="text-slate-400 transition group-open:rotate-180" size={18} />
           </div>

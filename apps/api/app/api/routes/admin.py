@@ -15,14 +15,26 @@ from app.api.deps import get_current_user
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
+    ActivityRegistrationStatus,
+    InstitutionActivity,
     Course,
     CourseCategory,
     CourseChapter,
     CourseStatus,
     Enrollment,
+    CompetitionRegistration,
+    ExamPaper,
+    ExamPaperKind,
+    ExamPaperQuestion,
+    ExamPaperSourceType,
+    ExamPaperStatus,
+    ExamPaperSubmission,
     Institution,
     LessonItem,
     LessonItemType,
+    LearningPath,
+    LearningPathCourse,
+    LearningPathStatus,
     ProgressRecord,
     Question,
     QuestionMedia,
@@ -38,7 +50,11 @@ from app.models import (
 )
 from app.models import SubmissionStatus
 from app.schemas import (
+    ActivityCreate,
+    ActivityRegistrationOut,
+    ActivityUpdate,
     AdminOverviewOut,
+    AdminActivityOut,
     AdminGradingSubmissionOut,
     AdminPasswordCodeOut,
     AdminPasswordUpdate,
@@ -56,9 +72,19 @@ from app.schemas import (
     CourseCreate,
     CourseDetailOut,
     CourseUpdate,
+    ExamPaperCreate,
+    ExamPaperOut,
+    ExamPaperQuestionOut,
+    ExamPaperSubmissionOut,
+    ExamPaperUpdate,
+    CompetitionRegistrationOut,
     GradeSubmissionIn,
     InstitutionOut,
     InstitutionUpdate,
+    LearningPathCreate,
+    LearningPathCourseOut,
+    LearningPathOut,
+    LearningPathUpdate,
     QuestionCreate,
     QuestionOut,
     QuestionUpdate,
@@ -129,6 +155,54 @@ def get_current_institution_id_or_403(current_user: User) -> int:
     if current_user.institution_id:
         return current_user.institution_id
     raise HTTPException(status_code=403, detail="Institution context required")
+
+
+def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
+    registrations = [
+        ActivityRegistrationOut.model_validate(registration)
+        for registration in sorted(activity.registrations, key=lambda item: item.created_at, reverse=True)
+    ]
+    return AdminActivityOut(
+        id=activity.id,
+        institution_id=activity.institution_id,
+        institution_name=activity.institution.name if activity.institution else "",
+        title=activity.title,
+        description=activity.description,
+        starts_at=activity.starts_at,
+        ends_at=activity.ends_at,
+        mode=activity.mode,
+        meeting_url=activity.meeting_url,
+        location=activity.location,
+        audience=activity.audience,
+        registration_status=activity.registration_status,
+        capacity=activity.capacity,
+        registrations_count=len(registrations),
+        registrations=registrations,
+        created_at=activity.created_at,
+        updated_at=activity.updated_at,
+    )
+
+
+def get_activity_or_404(activity_id: int, current_user: User, db: Session) -> InstitutionActivity:
+    institution_id = get_current_institution_id_or_403(current_user)
+    activity = db.scalar(
+        select(InstitutionActivity)
+        .where(InstitutionActivity.id == activity_id, InstitutionActivity.institution_id == institution_id)
+        .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
+    )
+    if not activity:
+        raise HTTPException(status_code=404, detail="Activity not found")
+    return activity
+
+
+def normalize_activity_payload(data: dict) -> dict:
+    mode = data.get("mode")
+    mode_value = mode.value if hasattr(mode, "value") else str(mode)
+    if mode_value == "online":
+        data["location"] = None
+    else:
+        data["meeting_url"] = None
+    return data
 
 
 def normalize_email(value: object) -> str:
@@ -379,6 +453,23 @@ def unique_course_category_slug(db: Session, name: str, category_id: int | None 
         index += 1
 
 
+def unique_learning_path_slug(db: Session, title: str, institution_id: int, path_id: int | None = None) -> str:
+    base_slug = make_slug(title)
+    if base_slug == "category":
+        base_slug = f"path-{institution_id}"
+    slug = base_slug
+    index = 2
+    while True:
+        stmt = select(LearningPath).where(LearningPath.slug == slug)
+        if path_id is not None:
+            stmt = stmt.where(LearningPath.id != path_id)
+        exists = db.scalar(stmt)
+        if not exists:
+            return slug
+        slug = f"{base_slug}-{index}"
+        index += 1
+
+
 def get_course_category_or_404(
     category_id: int, db: Session, institution_id: int | None = None
 ) -> CourseCategory:
@@ -503,6 +594,274 @@ def ensure_current_teacher_owns_course(course: Course, current_user: User, db: S
     teacher = sync_teacher_record_for_user(current_user, db)
     if course.teacher_id != teacher.id:
         raise HTTPException(status_code=403, detail="Only the assigned teacher can modify this course")
+
+
+def learning_path_detail_stmt():
+    return select(LearningPath).options(
+        joinedload(LearningPath.institution),
+        selectinload(LearningPath.course_links)
+        .joinedload(LearningPathCourse.course)
+        .joinedload(Course.institution),
+        selectinload(LearningPath.course_links)
+        .joinedload(LearningPathCourse.course)
+        .joinedload(Course.teacher)
+        .joinedload(Teacher.institution),
+    )
+
+
+def learning_path_to_out(path: LearningPath) -> LearningPathOut:
+    links = sorted(path.course_links, key=lambda link: link.position)
+    return LearningPathOut(
+        id=path.id,
+        slug=path.slug,
+        title=path.title,
+        subtitle=path.subtitle,
+        description=path.description,
+        cover_url=path.cover_url,
+        intro_video_url=path.intro_video_url,
+        audience=path.audience,
+        level=path.level,
+        status=path.status,
+        institution=InstitutionOut.model_validate(path.institution),
+        course_count=len(links),
+        courses=[
+            LearningPathCourseOut(
+                id=link.id,
+                position=link.position,
+                course=CourseCardOut.model_validate(link.course),
+            )
+            for link in links
+            if link.course
+        ],
+        created_at=path.created_at,
+        updated_at=path.updated_at,
+    )
+
+
+def get_learning_path_or_404(path_id: int, current_user: User, db: Session) -> LearningPath:
+    institution_id = get_current_institution_id_or_403(current_user)
+    path = db.scalar(
+        learning_path_detail_stmt().where(
+            LearningPath.id == path_id,
+            LearningPath.institution_id == institution_id,
+            LearningPath.status != LearningPathStatus.archived,
+        )
+    )
+    if not path:
+        raise HTTPException(status_code=404, detail="Learning path not found")
+    return path
+
+
+def normalize_course_ids(course_ids: list[int]) -> list[int]:
+    seen: set[int] = set()
+    normalized: list[int] = []
+    for course_id in course_ids:
+        if course_id not in seen:
+            normalized.append(course_id)
+            seen.add(course_id)
+    return normalized
+
+
+def validate_learning_path_courses(
+    course_ids: list[int], current_user: User, db: Session
+) -> list[int]:
+    normalized_ids = normalize_course_ids(course_ids)
+    if not normalized_ids:
+        return []
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = select(Course).where(
+        Course.id.in_(normalized_ids),
+        Course.institution_id == institution_id,
+        Course.status != CourseStatus.archived,
+    )
+    existing_courses = list(db.scalars(stmt))
+    existing_course_ids = {course.id for course in existing_courses}
+    missing_ids = [course_id for course_id in normalized_ids if course_id not in existing_course_ids]
+    if missing_ids:
+        raise HTTPException(status_code=422, detail="部分课程不属于当前机构或已经不存在，不能加入学习路径")
+    return normalized_ids
+
+
+def sync_learning_path_courses(path: LearningPath, course_ids: list[int], db: Session) -> None:
+    path.course_links.clear()
+    if path.id is not None:
+        db.flush()
+    for index, course_id in enumerate(course_ids, start=1):
+        path.course_links.append(LearningPathCourse(course_id=course_id, position=index))
+
+
+def unique_exam_paper_slug(db: Session, title: str, institution_id: int, paper_id: int | None = None) -> str:
+    base_slug = make_slug(title)
+    if base_slug == "category":
+        base_slug = f"paper-{institution_id}"
+    slug = base_slug
+    index = 2
+    while True:
+        stmt = select(ExamPaper).where(ExamPaper.slug == slug)
+        if paper_id is not None:
+            stmt = stmt.where(ExamPaper.id != paper_id)
+        exists = db.scalar(stmt)
+        if not exists:
+            return slug
+        slug = f"{base_slug}-{index}"
+        index += 1
+
+
+def exam_paper_detail_stmt():
+    return select(ExamPaper).options(
+        joinedload(ExamPaper.institution),
+        joinedload(ExamPaper.category),
+        selectinload(ExamPaper.question_links)
+        .joinedload(ExamPaperQuestion.question)
+        .selectinload(Question.options),
+        selectinload(ExamPaper.question_links)
+        .joinedload(ExamPaperQuestion.question)
+        .selectinload(Question.media_assets),
+        selectinload(ExamPaper.registrations),
+        selectinload(ExamPaper.submissions),
+    )
+
+
+def exam_paper_to_out(paper: ExamPaper) -> ExamPaperOut:
+    links = sorted(paper.question_links, key=lambda link: link.position)
+    registrations = sorted(paper.registrations, key=lambda item: item.created_at, reverse=True)
+    submissions = sorted(paper.submissions, key=lambda item: item.submitted_at, reverse=True)
+    return ExamPaperOut(
+        id=paper.id,
+        institution_id=paper.institution_id,
+        slug=paper.slug,
+        title=paper.title,
+        description=paper.description,
+        cover_url=paper.cover_url,
+        instructions=paper.instructions,
+        audience=paper.audience,
+        kind=paper.kind,
+        source_type=paper.source_type,
+        past_year=paper.past_year,
+        duration_minutes=paper.duration_minutes,
+        status=paper.status,
+        starts_at=paper.starts_at,
+        ends_at=paper.ends_at,
+        institution=InstitutionOut.model_validate(paper.institution),
+        category=CourseCategoryOut.model_validate(paper.category) if paper.category else None,
+        questions_count=len(links),
+        registrations_count=len(registrations),
+        submissions_count=len(submissions),
+        questions=[
+            ExamPaperQuestionOut(
+                id=link.id,
+                position=link.position,
+                points=link.points_override if link.points_override is not None else link.question.points,
+                question=QuestionOut.model_validate(link.question),
+            )
+            for link in links
+            if link.question
+        ],
+        registrations=[CompetitionRegistrationOut.model_validate(registration) for registration in registrations],
+        submissions=[ExamPaperSubmissionOut.model_validate(submission) for submission in submissions],
+        created_at=paper.created_at,
+        updated_at=paper.updated_at,
+    )
+
+
+def get_exam_paper_or_404(paper_id: int, current_user: User, db: Session) -> ExamPaper:
+    institution_id = get_current_institution_id_or_403(current_user)
+    paper = db.scalar(
+        exam_paper_detail_stmt().where(
+            ExamPaper.id == paper_id,
+            ExamPaper.institution_id == institution_id,
+            ExamPaper.status != ExamPaperStatus.archived,
+        )
+    )
+    if not paper:
+        raise HTTPException(status_code=404, detail="Exam paper not found")
+    return paper
+
+
+def validate_exam_category(category_id: int | None, institution_id: int, db: Session) -> int | None:
+    if category_id is None:
+        return None
+    category = db.scalar(
+        select(CourseCategory).where(CourseCategory.id == category_id, CourseCategory.institution_id == institution_id)
+    )
+    if not category:
+        raise HTTPException(status_code=422, detail="Course category does not belong to this institution")
+    return category.id
+
+
+def normalize_exam_question_inputs(question_inputs: list) -> list:
+    seen: set[int] = set()
+    normalized: list = []
+    for question_input in question_inputs:
+        if question_input.question_id in seen:
+            continue
+        seen.add(question_input.question_id)
+        normalized.append(question_input)
+    return normalized
+
+
+def validate_exam_questions(question_inputs: list, institution_id: int, db: Session) -> list:
+    normalized = normalize_exam_question_inputs(question_inputs)
+    if not normalized:
+        return []
+    question_ids = [question_input.question_id for question_input in normalized]
+    questions = list(
+        db.scalars(
+            select(Question).where(
+                Question.id.in_(question_ids),
+                Question.institution_id == institution_id,
+                Question.status == QuestionStatus.published,
+                Question.type != QuestionType.code_review,
+            )
+        )
+    )
+    existing_ids = {question.id for question in questions}
+    missing_ids = [question_id for question_id in question_ids if question_id not in existing_ids]
+    if missing_ids:
+        raise HTTPException(status_code=422, detail="Some selected questions are not available")
+    return normalized
+
+
+def normalize_exam_paper_payload(payload: ExamPaperCreate | ExamPaperUpdate, institution_id: int, db: Session) -> dict:
+    data = payload.model_dump(exclude={"questions"})
+    data["title"] = data["title"].strip()
+    data["description"] = data.get("description", "").strip()
+    data["cover_url"] = data.get("cover_url", "").strip()
+    data["instructions"] = data.get("instructions", "").strip()
+    data["audience"] = data.get("audience", "").strip()
+    data["category_id"] = validate_exam_category(data.get("category_id"), institution_id, db)
+
+    if data["source_type"] == ExamPaperSourceType.past_paper and not data.get("past_year"):
+        raise HTTPException(status_code=422, detail="Past paper year is required")
+    if data["source_type"] == ExamPaperSourceType.mock:
+        data["past_year"] = None
+
+    if data["kind"] == ExamPaperKind.competition:
+        if not data.get("starts_at") or not data.get("ends_at"):
+            raise HTTPException(status_code=422, detail="Competition start and end time are required")
+        if data["ends_at"] <= data["starts_at"]:
+            raise HTTPException(status_code=422, detail="Competition end time must be after start time")
+    else:
+        data["starts_at"] = None
+        data["ends_at"] = None
+
+    if data["status"] == ExamPaperStatus.published and not payload.questions:
+        raise HTTPException(status_code=422, detail="Published papers must include at least one question")
+    return data
+
+
+def sync_exam_paper_questions(paper: ExamPaper, question_inputs: list, db: Session) -> None:
+    paper.question_links.clear()
+    if paper.id is not None:
+        db.flush()
+    for index, question_input in enumerate(question_inputs, start=1):
+        paper.question_links.append(
+            ExamPaperQuestion(
+                question_id=question_input.question_id,
+                position=index,
+                points_override=question_input.points_override,
+            )
+        )
 
 
 def sync_question_children(
@@ -851,6 +1210,65 @@ def update_admin_institution(
     return institution
 
 
+@router.get("/activities", response_model=list[AdminActivityOut])
+def admin_activities(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[AdminActivityOut]:
+    ensure_admin(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    activities = db.scalars(
+        select(InstitutionActivity)
+        .where(InstitutionActivity.institution_id == institution_id)
+        .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
+        .order_by(InstitutionActivity.starts_at.desc(), InstitutionActivity.updated_at.desc())
+    ).all()
+    return [admin_activity_to_out(activity) for activity in activities]
+
+
+@router.post("/activities", response_model=AdminActivityOut, status_code=201)
+def create_activity(
+    payload: ActivityCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminActivityOut:
+    ensure_admin(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    data = normalize_activity_payload(payload.model_dump())
+    activity = InstitutionActivity(institution_id=institution_id, **data)
+    db.add(activity)
+    db.commit()
+    return admin_activity_to_out(get_activity_or_404(activity.id, current_user, db))
+
+
+@router.put("/activities/{activity_id}", response_model=AdminActivityOut)
+def update_activity(
+    activity_id: int,
+    payload: ActivityUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> AdminActivityOut:
+    ensure_admin(current_user)
+    activity = get_activity_or_404(activity_id, current_user, db)
+    data = normalize_activity_payload(payload.model_dump())
+    for field, value in data.items():
+        setattr(activity, field, value)
+    db.commit()
+    return admin_activity_to_out(get_activity_or_404(activity.id, current_user, db))
+
+
+@router.delete("/activities/{activity_id}")
+def delete_activity(
+    activity_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    ensure_admin(current_user)
+    activity = get_activity_or_404(activity_id, current_user, db)
+    db.delete(activity)
+    db.commit()
+    return {"id": activity_id, "deleted": True}
+
+
 @router.get("/difficulty-levels")
 def admin_difficulty_levels(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -936,6 +1354,171 @@ def delete_course_category(
     return {"id": category_id, "deleted": True}
 
 
+@router.get("/learning-paths", response_model=list[LearningPathOut])
+def admin_learning_paths(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[LearningPathOut]:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = (
+        learning_path_detail_stmt()
+        .where(LearningPath.institution_id == institution_id, LearningPath.status != LearningPathStatus.archived)
+        .order_by(LearningPath.updated_at.desc())
+    )
+    return [learning_path_to_out(path) for path in db.scalars(stmt).unique()]
+
+
+@router.get("/learning-path-course-options", response_model=list[CourseCardOut])
+def admin_learning_path_course_options(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[Course]:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = (
+        select(Course)
+        .options(joinedload(Course.institution), joinedload(Course.teacher))
+        .where(Course.institution_id == institution_id, Course.status != CourseStatus.archived)
+        .order_by(Course.updated_at.desc())
+    )
+    return list(db.scalars(stmt))
+
+
+@router.post("/learning-paths", response_model=LearningPathOut, status_code=201)
+def create_learning_path(
+    payload: LearningPathCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LearningPathOut:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    course_ids = validate_learning_path_courses(payload.course_ids, current_user, db)
+    path = LearningPath(
+        institution_id=institution_id,
+        slug=unique_learning_path_slug(db, payload.title, institution_id),
+        title=payload.title.strip(),
+        subtitle=payload.subtitle.strip(),
+        description=payload.description.strip(),
+        cover_url=payload.cover_url.strip(),
+        intro_video_url=payload.intro_video_url.strip(),
+        audience=payload.audience.strip(),
+        level=payload.level.strip(),
+        status=payload.status,
+    )
+    db.add(path)
+    sync_learning_path_courses(path, course_ids, db)
+    db.commit()
+    return learning_path_to_out(get_learning_path_or_404(path.id, current_user, db))
+
+
+@router.put("/learning-paths/{path_id}", response_model=LearningPathOut)
+def update_learning_path(
+    path_id: int,
+    payload: LearningPathUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> LearningPathOut:
+    ensure_course_staff(current_user)
+    path = get_learning_path_or_404(path_id, current_user, db)
+    course_ids = validate_learning_path_courses(payload.course_ids, current_user, db)
+    path.title = payload.title.strip()
+    path.slug = unique_learning_path_slug(db, path.title, path.institution_id, path.id)
+    path.subtitle = payload.subtitle.strip()
+    path.description = payload.description.strip()
+    path.cover_url = payload.cover_url.strip()
+    path.intro_video_url = payload.intro_video_url.strip()
+    path.audience = payload.audience.strip()
+    path.level = payload.level.strip()
+    path.status = payload.status
+    sync_learning_path_courses(path, course_ids, db)
+    db.commit()
+    return learning_path_to_out(get_learning_path_or_404(path.id, current_user, db))
+
+
+@router.delete("/learning-paths/{path_id}")
+def delete_learning_path(
+    path_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    ensure_course_staff(current_user)
+    path = get_learning_path_or_404(path_id, current_user, db)
+    db.delete(path)
+    db.commit()
+    return {"id": path_id, "deleted": True}
+
+
+@router.get("/exam-papers", response_model=list[ExamPaperOut])
+def admin_exam_papers(
+    kind: ExamPaperKind | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[ExamPaperOut]:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = (
+        exam_paper_detail_stmt()
+        .where(ExamPaper.institution_id == institution_id, ExamPaper.status != ExamPaperStatus.archived)
+        .order_by(ExamPaper.updated_at.desc())
+    )
+    if kind is not None:
+        stmt = stmt.where(ExamPaper.kind == kind)
+    return [exam_paper_to_out(paper) for paper in db.scalars(stmt).unique()]
+
+
+@router.post("/exam-papers", response_model=ExamPaperOut, status_code=201)
+def create_exam_paper(
+    payload: ExamPaperCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExamPaperOut:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    data = normalize_exam_paper_payload(payload, institution_id, db)
+    question_inputs = validate_exam_questions(payload.questions, institution_id, db)
+    paper = ExamPaper(
+        institution_id=institution_id,
+        slug=unique_exam_paper_slug(db, data["title"], institution_id),
+        **data,
+    )
+    db.add(paper)
+    sync_exam_paper_questions(paper, question_inputs, db)
+    db.commit()
+    return exam_paper_to_out(get_exam_paper_or_404(paper.id, current_user, db))
+
+
+@router.put("/exam-papers/{paper_id}", response_model=ExamPaperOut)
+def update_exam_paper(
+    paper_id: int,
+    payload: ExamPaperUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> ExamPaperOut:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    paper = get_exam_paper_or_404(paper_id, current_user, db)
+    data = normalize_exam_paper_payload(payload, institution_id, db)
+    question_inputs = validate_exam_questions(payload.questions, institution_id, db)
+    for field, value in data.items():
+        setattr(paper, field, value)
+    paper.slug = unique_exam_paper_slug(db, paper.title, institution_id, paper.id)
+    sync_exam_paper_questions(paper, question_inputs, db)
+    db.commit()
+    return exam_paper_to_out(get_exam_paper_or_404(paper.id, current_user, db))
+
+
+@router.delete("/exam-papers/{paper_id}")
+def delete_exam_paper(
+    paper_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    ensure_course_staff(current_user)
+    paper = get_exam_paper_or_404(paper_id, current_user, db)
+    db.delete(paper)
+    db.commit()
+    return {"id": paper_id, "deleted": True}
+
+
 @router.get("/courses", response_model=list[CourseCardOut])
 def admin_courses(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -950,7 +1533,7 @@ def admin_courses(
     if current_user.role == UserRole.teacher:
         teacher = sync_teacher_record_for_user(current_user, db)
         stmt = stmt.where(Course.teacher_id == teacher.id)
-    elif current_user.role == UserRole.institution_admin and current_user.institution_id:
+    elif current_user.institution_id:
         stmt = stmt.where(Course.institution_id == current_user.institution_id)
     return list(db.scalars(stmt))
 

@@ -103,6 +103,8 @@ def ensure_schema_extensions(db: Session) -> None:
         student_post_columns = {column["name"] for column in inspector.get_columns("student_posts")}
         if "image_urls" not in student_post_columns:
             db.execute(text("ALTER TABLE student_posts ADD COLUMN image_urls JSONB NOT NULL DEFAULT '[]'::jsonb"))
+        if "likes_count" not in student_post_columns:
+            db.execute(text("ALTER TABLE student_posts ADD COLUMN likes_count INTEGER NOT NULL DEFAULT 0"))
 
     if "course_categories" in inspector.get_table_names():
         course_category_columns = {column["name"] for column in inspector.get_columns("course_categories")}
@@ -158,6 +160,11 @@ def ensure_schema_extensions(db: Session) -> None:
                 """
             )
         )
+
+    if "learning_paths" in inspector.get_table_names():
+        learning_path_columns = {column["name"] for column in inspector.get_columns("learning_paths")}
+        if "intro_video_url" not in learning_path_columns:
+            db.execute(text("ALTER TABLE learning_paths ADD COLUMN intro_video_url VARCHAR(500) NOT NULL DEFAULT ''"))
 
     if "submissions" in inspector.get_table_names():
         submission_columns = {column["name"] for column in inspector.get_columns("submissions")}

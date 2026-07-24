@@ -65,7 +65,14 @@ export function getTeachers(): Promise<Teacher[]> {
 }
 
 export function getStudentLeaderboard(): Promise<StudentLeaderboard> {
-  return fetchJson("/leaderboard", { total_points: [], rising: [] });
+  return fetchJson("/leaderboard", {
+    total_points: [],
+    rising: [],
+    course_points: [],
+    community_points: [],
+    competition_points: [],
+    followers: []
+  });
 }
 
 export function getStudentLeaderboardDetail(studentId: number): Promise<StudentLeaderboardDetail | undefined> {

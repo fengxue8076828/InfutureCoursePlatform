@@ -1,100 +1,213 @@
-import { ArrowRight, Award, BookOpenCheck, Medal, Trophy, TrendingUp } from "lucide-react";
+import {
+  ArrowRight,
+  Award,
+  BookOpenCheck,
+  Heart,
+  Medal,
+  MessageCircle,
+  Sparkles,
+  Trophy,
+  TrendingUp,
+  type LucideIcon
+} from "lucide-react";
 import Link from "next/link";
 
 import { getStudentLeaderboard } from "@/lib/api";
 import type { StudentLeaderboardEntry } from "@/lib/types";
 
-function initials(name: string) {
-  return name.trim().slice(0, 1).toUpperCase() || "\u5b66";
-}
+type RankingMetric = "total" | "weekly" | "course" | "community" | "competition" | "followers";
+type RankingTone = "coral" | "mint" | "blue" | "amber" | "violet" | "rose";
 
-function formatPoints(points: number) {
-  return points.toLocaleString("zh-CN");
-}
+const toneStyles: Record<
+  RankingTone,
+  {
+    panel: string;
+    icon: string;
+    rank: string;
+    badge: string;
+    line: string;
+  }
+> = {
+  coral: {
+    panel: "border-coral/20 bg-[linear-gradient(135deg,#fffaf7_0%,#ffffff_54%,#fff6f1_100%)]",
+    icon: "bg-coral/10 text-coral",
+    rank: "bg-coral/10 text-coral",
+    badge: "bg-coral/10 text-coral",
+    line: "bg-coral/40"
+  },
+  mint: {
+    panel: "border-mint/20 bg-[linear-gradient(135deg,#f7fdfb_0%,#ffffff_58%,#f2faf7_100%)]",
+    icon: "bg-mint/10 text-mint",
+    rank: "bg-mint/10 text-mint",
+    badge: "bg-mint/10 text-mint",
+    line: "bg-mint/40"
+  },
+  blue: {
+    panel: "border-sky-100 bg-[linear-gradient(135deg,#f7fbff_0%,#ffffff_55%,#f4f8ff_100%)]",
+    icon: "bg-sky-100 text-sky-600",
+    rank: "bg-sky-100 text-sky-600",
+    badge: "bg-sky-50 text-sky-600",
+    line: "bg-sky-300"
+  },
+  amber: {
+    panel: "border-amber-100 bg-[linear-gradient(135deg,#fffaf0_0%,#ffffff_55%,#fff8e9_100%)]",
+    icon: "bg-amber-100 text-amber-700",
+    rank: "bg-amber-100 text-amber-700",
+    badge: "bg-amber-50 text-amber-700",
+    line: "bg-amber-300"
+  },
+  violet: {
+    panel: "border-violet-100 bg-[linear-gradient(135deg,#fbf8ff_0%,#ffffff_55%,#f8f5ff_100%)]",
+    icon: "bg-violet-100 text-violet-600",
+    rank: "bg-violet-100 text-violet-600",
+    badge: "bg-violet-50 text-violet-600",
+    line: "bg-violet-300"
+  },
+  rose: {
+    panel: "border-rose-100 bg-[linear-gradient(135deg,#fff8fa_0%,#ffffff_55%,#fff9fb_100%)]",
+    icon: "bg-rose-100 text-rose-600",
+    rank: "bg-rose-100 text-rose-600",
+    badge: "bg-rose-50 text-rose-600",
+    line: "bg-rose-300"
+  }
+};
+
 const levelRows = [
-  ["\uD83C\uDF31", "\u65b0\u82bd\u5b66\u5458", "0"],
-  ["\uD83E\uDDED", "\u63a2\u7d22\u8005", "300"],
-  ["\uD83D\uDD25", "\u8fdb\u9636\u8005", "800"],
-  ["\uD83D\uDEE1\uFE0F", "\u77e5\u8bc6\u9a91\u58eb", "1500"],
-  ["\u2728", "\u5b66\u4e60\u5bfc\u5e08", "2600"],
-  ["\uD83D\uDC51", "\u667a\u6167\u5927\u5e08", "4200"],
-  ["\uD83C\uDF1F", "\u661f\u8fb0\u5b66\u8005", "6500"]
+  ["◇", "启航学徒", "0"],
+  ["◈", "路径探索者", "300"],
+  ["◉", "专注训练师", "800"],
+  ["◆", "知识骑士", "1500"],
+  ["★", "解题先锋", "2600"],
+  ["✶", "学习领航员", "4200"],
+  ["✦", "智慧守护者", "6500"],
+  ["✧", "星辰导师", "10000"]
 ];
 
 const ruleRows = [
-  ["\u4e0a\u8bfe\u901f\u5ea6", "\u89c6\u9891 +20\u3001\u8bb2\u4e49 +14\u3001\u7ec3\u4e60\u9879\u76ee +10\u3001\u6d4b\u9a8c\u9879\u76ee +12\uff0c\u8d8a\u65e9\u5b8c\u6210\u53ef\u83b7\u5f97\u901f\u5ea6\u5956\u52b1\uff1b\u6574\u95e8\u8bfe\u5b8c\u6210\u989d\u5916 +180\u3002"],
-  ["\u7ec3\u4e60\u4e0e\u6d4b\u9a8c", "\u6bcf\u9898\u63d0\u4ea4\u57fa\u7840 +2\uff0c\u5f97\u5206 \u00d73\uff1b\u6b63\u786e\u7387\u8fbe\u5230 80% \u989d\u5916 +8\uff0c\u6ee1\u5206\u518d +5\u3002"],
-  ["\u793e\u533a\u8d21\u732e", "\u63d0\u95ee +5\uff0c\u56de\u7b54 +10\uff1b\u56de\u7b54\u6bcf\u83b7 1 \u4e2a\u8d5e +4\uff0c\u88ab\u91c7\u7eb3\u4e3a\u6700\u4f73\u7b54\u6848 +20\uff1b\u5206\u4eab\u7b14\u8bb0 +8\uff0c\u7b14\u8bb0\u6bcf\u83b7 1 \u4e2a\u8d5e +4\u3002"]
+  ["课程表现", "练习和测验达到 80% 才给分，一次通过积分最高，第二次通过减半，三次及以后通过不再给分。完成整门课程和写课程笔记也会获得积分。"],
+  ["社区影响", "提出问题、回答问题、分享笔记都会获得积分；问题、回答和笔记被点赞越多，积分越高。"],
+  ["考试竞赛", "模拟考试和竞赛都会按完成数量与成绩计分，竞赛权重更高，高分会获得额外奖励。"],
+  ["人气成长", "被同学关注也会计入总积分，人气排行榜直接按关注你的学生人数排序。"]
 ];
+
+function initials(name: string) {
+  return name.trim().slice(0, 1).toUpperCase() || "学";
+}
+
+function formatNumber(value: number | undefined) {
+  return (value ?? 0).toLocaleString("zh-CN");
+}
+
+function metricValue(entry: StudentLeaderboardEntry, metric: RankingMetric) {
+  if (metric === "weekly") return entry.weekly_points;
+  if (metric === "course") return entry.course_points ?? 0;
+  if (metric === "community") return entry.community_points ?? 0;
+  if (metric === "competition") return entry.competition_points ?? 0;
+  if (metric === "followers") return entry.followers_count ?? 0;
+  return entry.total_points;
+}
+
+function metricLabel(metric: RankingMetric) {
+  if (metric === "weekly") return "近 7 天增长";
+  if (metric === "followers") return "关注人数";
+  return "积分";
+}
+
+function StudentAvatar({ entry, compact = false }: { entry: StudentLeaderboardEntry; compact?: boolean }) {
+  const size = compact ? "h-9 w-9" : "h-12 w-12";
+  if (entry.avatar_url) {
+    return <img src={entry.avatar_url} alt={entry.student_name} className={`${size} rounded-lg object-cover`} />;
+  }
+  return (
+    <span className={`${size} grid place-items-center rounded-lg bg-white text-sm font-black text-slate-500 shadow-sm`}>
+      {initials(entry.student_name)}
+    </span>
+  );
+}
+
+function RankingEntry({
+  entry,
+  metric,
+  tone,
+  featured = false
+}: {
+  entry: StudentLeaderboardEntry;
+  metric: RankingMetric;
+  tone: RankingTone;
+  featured?: boolean;
+}) {
+  const styles = toneStyles[tone];
+  return (
+    <Link
+      href={`/leaderboard/${entry.student_id}`}
+      className={`group flex items-center gap-3 rounded-lg border border-white/80 bg-white/80 transition hover:-translate-y-0.5 hover:bg-white hover:shadow-md ${
+        featured ? "p-4" : "p-3"
+      }`}
+    >
+      <span className={`grid shrink-0 place-items-center rounded-lg font-black ${styles.rank} ${featured ? "h-11 w-11 text-base" : "h-8 w-8 text-xs"}`}>
+        {entry.rank}
+      </span>
+      <StudentAvatar entry={entry} compact={!featured} />
+      <div className="min-w-0 flex-1">
+        <p className={`truncate font-black text-ink group-hover:text-coral ${featured ? "text-base" : "text-sm"}`}>{entry.student_name}</p>
+        <p className={`mt-1 inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-black ${styles.badge}`}>
+          {entry.level.icon} {entry.level.name}
+        </p>
+        {featured ? (
+          <p className="mt-1 text-xs font-semibold text-slate-500">
+            已完成 {entry.completed_courses} 门 · 平均进度 {entry.average_progress}%
+          </p>
+        ) : null}
+      </div>
+      <div className="text-right">
+        <p className={`${featured ? "text-xl" : "text-base"} font-black text-ink`}>{formatNumber(metricValue(entry, metric))}</p>
+        <p className="text-xs font-semibold text-slate-500">{metricLabel(metric)}</p>
+      </div>
+    </Link>
+  );
+}
 
 function RankingList({
   title,
   subtitle,
   entries,
   metric,
-  tone
+  icon: Icon,
+  tone,
+  featured = false
 }: {
   title: string;
   subtitle: string;
   entries: StudentLeaderboardEntry[];
-  metric: "total" | "weekly";
-  tone: "coral" | "mint";
+  metric: RankingMetric;
+  icon: LucideIcon;
+  tone: RankingTone;
+  featured?: boolean;
 }) {
-  const metricLabel = metric === "total" ? "\u603b\u79ef\u5206" : "\u672c\u5468\u589e\u957f";
-  const color = tone === "coral" ? "text-coral bg-coral/10" : "text-mint bg-mint/10";
+  const styles = toneStyles[tone];
+  const visibleEntries = featured ? entries.slice(0, 8) : entries.slice(0, 5);
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-soft md:p-6">
+    <section className={`relative overflow-hidden rounded-lg border p-4 shadow-soft ${styles.panel} ${featured ? "md:p-7" : "md:p-5"}`}>
+      <div className="pointer-events-none absolute inset-x-0 top-0 h-1.5 bg-white/60">
+        <div className={`h-full ${styles.line}`} style={{ width: featured ? "58%" : "38%" }} />
+      </div>
       <div className="flex items-start justify-between gap-4">
         <div>
-          <p className="text-sm font-bold text-coral">{subtitle}</p>
-          <h2 className="mt-1 text-2xl font-black text-ink">{title}</h2>
+          <p className={`font-black ${featured ? "text-sm" : "text-xs"} ${styles.badge} inline-flex rounded-full px-3 py-1`}>{subtitle}</p>
+          <h2 className={`mt-3 font-black text-ink ${featured ? "text-4xl sm:text-5xl" : "text-xl"}`}>{title}</h2>
         </div>
-        <span className={`grid h-12 w-12 place-items-center rounded-lg ${color}`}>
-          {metric === "total" ? <Trophy size={24} /> : <TrendingUp size={24} />}
+        <span className={`grid shrink-0 place-items-center rounded-lg shadow-sm ${styles.icon} ${featured ? "h-16 w-16" : "h-11 w-11"}`}>
+          <Icon size={featured ? 32 : 22} />
         </span>
       </div>
 
-      <div className="mt-6 grid gap-3">
-        {entries.length > 0 ? (
-          entries.map((entry) => {
-            const points = metric === "total" ? entry.total_points : entry.weekly_points;
-            return (
-              <Link
-                key={`${metric}-${entry.student_id}`}
-                href={`/leaderboard/${entry.student_id}`}
-                className="flex items-center gap-3 rounded-lg border border-slate-100 bg-slate-50/80 p-3 transition hover:border-mint/40 hover:bg-white"
-              >
-                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-ink text-sm font-black text-white">
-                  {entry.rank}
-                </span>
-                {entry.avatar_url ? (
-                  <img src={entry.avatar_url} alt={entry.student_name} className="h-11 w-11 rounded-lg object-cover" />
-                ) : (
-                  <span className="grid h-11 w-11 place-items-center rounded-lg bg-mint/15 text-sm font-black text-mint">
-                    {initials(entry.student_name)}
-                  </span>
-                )}
-                <div className="min-w-0 flex-1">
-                  <p className="truncate font-bold text-ink">{entry.student_name}</p>
-                  <p className="mt-1 inline-flex items-center gap-1 rounded-full bg-white px-2 py-0.5 text-xs font-black text-mint">{entry.level.icon} {entry.level.name}</p>
-                  <p className="mt-1 text-xs text-slate-500">
-                    {"\u5df2\u5b8c\u6210 "}
-                    {entry.completed_courses}
-                    {" \u95e8 \u00b7 \u5e73\u5747\u8fdb\u5ea6 "}
-                    {entry.average_progress}%
-                  </p>
-                </div>
-                <div className="text-right">
-                  <p className="text-lg font-black text-ink">{formatPoints(points)}</p>
-                  <p className="text-xs text-slate-500">{metricLabel}</p>
-                </div>
-              </Link>
-            );
-          })
+      <div className={`grid ${featured ? "mt-7 gap-3" : "mt-5 gap-2.5"}`}>
+        {visibleEntries.length > 0 ? (
+          visibleEntries.map((entry) => <RankingEntry key={`${metric}-${entry.student_id}`} entry={entry} metric={metric} tone={tone} featured={featured} />)
         ) : (
-          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm leading-6 text-slate-500">
-            {"\u6682\u65e0\u5b66\u751f\u79ef\u5206\u6570\u636e\uff0c\u8ba2\u9605\u8bfe\u7a0b\u5e76\u5b8c\u6210\u5b66\u4e60\u540e\u4f1a\u663e\u793a\u6392\u540d\u3002"}
+          <div className="rounded-lg border border-dashed border-slate-200 bg-white/70 p-5 text-sm leading-6 text-slate-500">
+            暂无学生积分数据。
           </div>
         )}
       </div>
@@ -104,82 +217,109 @@ function RankingList({
 
 export default async function LeaderboardPage() {
   const leaderboard = await getStudentLeaderboard();
-  const totalPoints = leaderboard?.total_points ?? [];
-  const rising = leaderboard?.rising ?? [];
+  const totalPoints = leaderboard.total_points ?? [];
+  const rising = leaderboard.rising ?? [];
+  const coursePoints = leaderboard.course_points ?? [];
+  const communityPoints = leaderboard.community_points ?? [];
+  const competitionPoints = leaderboard.competition_points ?? [];
+  const followers = leaderboard.followers ?? [];
   const topStudent = totalPoints[0] ?? rising[0];
 
   return (
     <main className="bg-[#f7fbfb]">
-      <section className="bg-[linear-gradient(135deg,#eef8f4_0%,#fff7e9_52%,#f7fbfb_100%)] py-14">
-        <div className="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-[1fr_0.85fr] lg:px-8">
+      <section className="bg-[linear-gradient(135deg,#e9fff6_0%,#fff3df_48%,#eef5ff_100%)] py-14">
+        <div className="mx-auto grid max-w-7xl gap-8 px-4 sm:px-6 lg:grid-cols-[1fr_0.78fr] lg:px-8">
           <div className="flex flex-col justify-center">
-            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-coral/15 bg-white/80 px-3 py-1.5 text-sm font-bold text-coral shadow-sm">
+            <div className="inline-flex w-fit items-center gap-2 rounded-full border border-coral/15 bg-white/85 px-3 py-1.5 text-sm font-black text-coral shadow-sm">
               <Medal size={16} />
-              {"\u79ef\u5206\u699c"}
+              学习积分榜
             </div>
             <h1 className="mt-5 max-w-3xl text-4xl font-black leading-tight text-ink sm:text-5xl">
-              {"\u770b\u89c1\u5b66\u4e60\u8fdb\u5ea6\uff0c\u8ba9\u6bcf\u4e00\u6b65\u52aa\u529b\u90fd\u6709\u56de\u54cd"}
+              每一次通过、分享和进步，都值得被看见
             </h1>
             <p className="mt-5 max-w-2xl text-base leading-8 text-slate-700 sm:text-lg">
-              {"\u5e73\u53f0\u6839\u636e\u8bfe\u7a0b\u5b8c\u6210\u901f\u5ea6\u3001\u7ae0\u8282\u8fdb\u5ea6\u548c\u6d4b\u9a8c\u8868\u73b0\u7edf\u8ba1\u5b66\u4e60\u79ef\u5206\uff0c\u5e2e\u52a9\u5b66\u751f\u548c\u5bb6\u957f\u66f4\u76f4\u89c2\u5730\u770b\u5230\u6210\u957f\u3002"}
+              总龙虎榜展示综合实力，其他小榜单记录进步速度、课程努力、社区活跃、考试竞赛和人气影响力。
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <Link href="/courses" className="inline-flex items-center gap-2 rounded-lg bg-coral px-5 py-3 text-sm font-bold text-white hover:bg-[#f25f54]">
-                {"\u53bb\u9009\u8bfe"} <ArrowRight size={18} />
+                去选课 <ArrowRight size={18} />
               </Link>
               <Link href="/learn" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-5 py-3 text-sm font-bold text-ink hover:border-mint hover:text-mint">
-                {"\u67e5\u770b\u6211\u7684\u8bfe\u5802"} <BookOpenCheck size={18} />
+                查看我的学习 <BookOpenCheck size={18} />
               </Link>
             </div>
           </div>
 
-          <div className="rounded-lg border border-white/80 bg-white/90 p-5 shadow-soft">
-            <p className="text-sm font-bold text-slate-500">{"\u5f53\u524d\u9886\u5148\u5b66\u751f"}</p>
+          <div className="relative overflow-hidden rounded-lg border border-white/80 bg-white/90 p-5 shadow-soft">
+            <div className="pointer-events-none absolute -right-12 -top-12 h-40 w-40 rounded-full bg-amber-100/55 blur-2xl" />
+            <div className="pointer-events-none absolute -bottom-16 left-10 h-44 w-44 rounded-full bg-mint/10 blur-2xl" />
+            <div className="relative flex items-center justify-between gap-3">
+              <p className="text-sm font-black text-slate-500">当前榜首</p>
+              <span className="inline-flex items-center gap-1 rounded-full border border-amber-200 bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                <Sparkles size={14} />
+                荣誉席位
+              </span>
+            </div>
             {topStudent ? (
-              <div className="mt-4 rounded-lg bg-ink p-5 text-white">
-                <div className="flex items-center gap-4">
-                  {topStudent.avatar_url ? (
-                    <img src={topStudent.avatar_url} alt={topStudent.student_name} className="h-16 w-16 rounded-lg object-cover" />
-                  ) : (
-                    <span className="grid h-16 w-16 place-items-center rounded-lg bg-white/10 text-xl font-black text-mint">
-                      {initials(topStudent.student_name)}
+              <div className="relative mt-4 overflow-hidden rounded-lg border border-amber-200/70 bg-[linear-gradient(135deg,#fffdf7_0%,#ffffff_40%,#f3fbf6_100%)] p-5 shadow-sm">
+                <div className="pointer-events-none absolute right-5 top-5 text-[92px] font-black leading-none text-amber-100/70">1</div>
+                <div className="relative flex items-start justify-between gap-4">
+                  <div className="flex items-center gap-4">
+                    <span className="grid h-14 w-14 shrink-0 place-items-center rounded-2xl border border-amber-200 bg-white text-amber-600 shadow-sm">
+                      <Trophy size={28} />
                     </span>
-                  )}
-                  <div>
-                    <p className="text-2xl font-black">{topStudent.student_name}</p>
-                    <p className="mt-1 text-sm font-bold text-mint">{topStudent.level.icon} {topStudent.level.name}</p>
-                    <p className="mt-1 text-sm text-slate-300">
-                      {"\u603b\u79ef\u5206 "}
-                      {formatPoints(topStudent.total_points)}
-                      {" \u00b7 \u672c\u5468 +"}
-                      {formatPoints(topStudent.weekly_points)}
-                    </p>
+                    <div>
+                      <div className="inline-flex items-center gap-2 rounded-full bg-amber-50 px-3 py-1 text-xs font-black text-amber-700">
+                        <Medal size={14} />
+                        总龙虎榜 No.1
+                      </div>
+                      <p className="mt-3 text-3xl font-black text-ink">{topStudent.student_name}</p>
+                      <p className="mt-1 inline-flex items-center gap-2 rounded-full bg-mint/10 px-3 py-1 text-sm font-black text-mint">
+                        {topStudent.level.icon} {topStudent.level.name}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="rounded-2xl border border-slate-100 bg-white/85 px-5 py-4 text-right shadow-sm">
+                    <p className="text-xs font-black uppercase tracking-[0.22em] text-slate-400">Total</p>
+                    <p className="mt-1 text-4xl font-black text-ink">{formatNumber(topStudent.total_points)}</p>
+                    <p className="mt-1 text-xs font-bold text-slate-500">近 7 天 +{formatNumber(topStudent.weekly_points)}</p>
                   </div>
                 </div>
-                <div className="mt-5 grid grid-cols-3 gap-3 text-center">
-                  <div className="rounded-lg bg-white/10 p-3">
-                    <p className="text-xl font-black">{topStudent.completed_courses}</p>
-                    <p className="mt-1 text-xs text-slate-300">{"\u5b8c\u6210\u8bfe\u7a0b"}</p>
-                  </div>
-                  <div className="rounded-lg bg-white/10 p-3">
-                    <p className="text-xl font-black">{topStudent.active_courses}</p>
-                    <p className="mt-1 text-xs text-slate-300">{"\u5728\u5b66\u8bfe\u7a0b"}</p>
-                  </div>
-                  <div className="rounded-lg bg-white/10 p-3">
-                    <p className="text-xl font-black">{topStudent.average_progress}%</p>
-                    <p className="mt-1 text-xs text-slate-300">{"\u5e73\u5747\u8fdb\u5ea6"}</p>
-                  </div>
+
+                <div className="relative mt-6 grid gap-3 sm:grid-cols-2">
+                  {[
+                    { label: "课程积分", value: topStudent.course_points, icon: BookOpenCheck, style: "bg-sky-50 text-sky-700" },
+                    { label: "社区互动", value: topStudent.community_points, icon: MessageCircle, style: "bg-violet-50 text-violet-700" },
+                    { label: "考试竞赛", value: topStudent.competition_points, icon: Award, style: "bg-amber-50 text-amber-700" },
+                    { label: "人气积分", value: topStudent.follower_points, icon: Heart, style: "bg-rose-50 text-rose-700" }
+                  ].map(({ label, value, icon: StatIcon, style }) => (
+                    <div key={label} className="flex items-center justify-between rounded-lg border border-slate-100 bg-white/85 p-3 shadow-sm">
+                      <div className="flex items-center gap-2">
+                        <span className={`grid h-9 w-9 place-items-center rounded-lg ${style}`}>
+                          <StatIcon size={18} />
+                        </span>
+                        <span className="text-sm font-black text-slate-600">{label}</span>
+                      </div>
+                      <span className="text-xl font-black text-ink">{formatNumber(value)}</span>
+                    </div>
+                  ))}
                 </div>
-                <Link
-                  href={`/leaderboard/${topStudent.student_id}`}
-                  className="mt-5 inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-bold text-ink hover:bg-mint hover:text-white"
-                >
-                  {"\u67e5\u770b\u8be6\u60c5"} <ArrowRight size={16} />
-                </Link>
+
+                <div className="relative mt-5 flex items-center justify-between gap-3 rounded-lg bg-slate-50 px-4 py-3">
+                  <p className="text-sm font-bold text-slate-600">
+                    已完成 {topStudent.completed_courses} 门课程 · {formatNumber(topStudent.followers_count)} 位同学关注
+                  </p>
+                  <Link
+                    href={`/leaderboard/${topStudent.student_id}`}
+                    className="inline-flex shrink-0 items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white hover:bg-coral"
+                  >
+                    查看详情 <ArrowRight size={16} />
+                  </Link>
+                </div>
               </div>
             ) : (
-              <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm leading-6 text-slate-500">
-                {"\u6682\u65e0\u9886\u5148\u5b66\u751f\uff0c\u5b8c\u6210\u5b66\u4e60\u540e\u8fd9\u91cc\u4f1a\u51fa\u73b0\u6392\u540d\u6458\u8981\u3002"}
+              <div className="relative mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-6 text-sm leading-6 text-slate-500">
+                暂无领先学生，完成学习后这里会出现排名摘要。
               </div>
             )}
           </div>
@@ -187,9 +327,20 @@ export default async function LeaderboardPage() {
       </section>
 
       <section className="py-12">
-        <div className="mx-auto grid max-w-7xl gap-6 px-4 sm:px-6 lg:grid-cols-2 lg:px-8">
-          <RankingList title={"\u5b66\u751f\u603b\u79ef\u5206\u6392\u540d"} subtitle="Total Points" entries={totalPoints} metric="total" tone="coral" />
-          <RankingList title={"\u4e0a\u5347\u901f\u5ea6\u6392\u540d"} subtitle="Rising Speed" entries={rising} metric="weekly" tone="mint" />
+        <div className="mx-auto grid max-w-7xl gap-5 px-4 sm:px-6 lg:grid-cols-[1.22fr_0.78fr] lg:px-8">
+          <RankingList title="总龙虎榜" subtitle="综合总榜" entries={totalPoints} metric="total" icon={Trophy} tone="coral" featured />
+          <div className="grid gap-5">
+            <RankingList title="进步最快榜" subtitle="冲刺速度" entries={rising} metric="weekly" icon={TrendingUp} tone="mint" />
+            <RankingList title="人气排行榜" subtitle="同学关注" entries={followers} metric="followers" icon={Heart} tone="rose" />
+          </div>
+        </div>
+      </section>
+
+      <section className="pb-12">
+        <div className="mx-auto grid max-w-7xl gap-5 px-4 sm:px-6 lg:grid-cols-3 lg:px-8">
+          <RankingList title="勤勉努力榜" subtitle="课程表现" entries={coursePoints} metric="course" icon={BookOpenCheck} tone="blue" />
+          <RankingList title="社牛达人榜" subtitle="社区互动" entries={communityPoints} metric="community" icon={MessageCircle} tone="violet" />
+          <RankingList title="竞技能手榜" subtitle="考试竞赛" entries={competitionPoints} metric="competition" icon={Award} tone="amber" />
         </div>
       </section>
 
@@ -197,7 +348,7 @@ export default async function LeaderboardPage() {
         <div className="mx-auto grid max-w-7xl gap-6 px-4 sm:px-6 lg:grid-cols-[1.15fr_0.85fr] lg:px-8">
           <div className="rounded-lg border border-slate-200 bg-white p-6 shadow-soft md:p-8">
             <p className="text-sm font-black text-coral">积分规则</p>
-            <h2 className="mt-2 text-3xl font-black text-ink">学习、答题和互助都会变成可见成长</h2>
+            <h2 className="mt-2 text-3xl font-black text-ink">更看重结果，也鼓励分享和互助</h2>
             <div className="mt-6 grid gap-3">
               {ruleRows.map(([title, text]) => (
                 <div key={title} className="rounded-lg bg-slate-50 p-4">
@@ -213,28 +364,14 @@ export default async function LeaderboardPage() {
             <div className="mt-6 grid gap-2">
               {levelRows.map(([icon, name, points]) => (
                 <div key={name} className="flex items-center justify-between rounded-lg bg-slate-50 px-4 py-3">
-                  <span className="flex items-center gap-3 font-black text-ink"><span className="text-xl">{icon}</span>{name}</span>
+                  <span className="flex items-center gap-3 font-black text-ink">
+                    <span className="text-xl">{icon}</span>
+                    {name}
+                  </span>
                   <span className="text-sm font-bold text-slate-500">{Number(points).toLocaleString("zh-CN")}+</span>
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-      </section>
-      <section className="pb-16">
-        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
-          <div className="grid gap-4 rounded-lg border border-slate-200 bg-white p-6 shadow-soft md:grid-cols-3 md:p-8">
-            {[
-              ["\u5b8c\u6210\u8d8a\u5feb", "\u6309\u65f6\u5b8c\u6210\u7ae0\u8282\u548c\u8bfe\u7a0b\uff0c\u53ef\u4ee5\u83b7\u5f97\u901f\u5ea6\u5956\u52b1\u3002"],
-              ["\u6d4b\u9a8c\u8d8a\u7a33", "\u6d4b\u9a8c\u5206\u6570\u8d8a\u9ad8\uff0c\u79ef\u5206\u52a0\u6210\u8d8a\u660e\u663e\u3002"],
-              ["\u5b66\u4e60\u8d8a\u6301\u7eed", "\u8fd1\u671f\u6d3b\u8dc3\u5b66\u4e60\u4f1a\u5e26\u6765\u4e0a\u5347\u901f\u5ea6\u699c\u8868\u73b0\u3002"]
-            ].map(([title, text]) => (
-              <div key={title} className="rounded-lg bg-slate-50 p-5">
-                <Award size={22} className="text-coral" />
-                <h3 className="mt-4 font-black text-ink">{title}</h3>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{text}</p>
-              </div>
-            ))}
           </div>
         </div>
       </section>

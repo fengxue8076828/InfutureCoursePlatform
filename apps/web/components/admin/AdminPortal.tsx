@@ -6,6 +6,7 @@ import {
   Bold,
   BookOpen,
   Building2,
+  CalendarDays,
   ChevronRight,
   ClipboardCheck,
   Database,
@@ -29,7 +30,9 @@ import {
   Settings,
   ShieldCheck,
   Trash2,
+  Timer,
   List,
+  Trophy,
   Video,
   Users,
   X
@@ -63,6 +66,10 @@ type ModuleKey =
   | "dashboard"
   | "institution"
   | "courseCategories"
+  | "activities"
+  | "learningPaths"
+  | "mockExams"
+  | "competitions"
   | "courses"
   | "questions"
   | "teachers"
@@ -75,6 +82,10 @@ const menuItems: Array<{ key: ModuleKey; label: string; icon: typeof LayoutDashb
   { key: "institution", label: "机构信息", icon: Building2 },
   { key: "users", label: "用户权限管理", icon: ShieldCheck },
   { key: "courseCategories", label: "课程类别管理", icon: ListChecks },
+  { key: "activities", label: "活动管理", icon: CalendarDays },
+  { key: "learningPaths", label: "学习路径管理", icon: List },
+  { key: "mockExams", label: "模拟考试管理", icon: Timer },
+  { key: "competitions", label: "竞赛管理", icon: Trophy },
   { key: "courses", label: "课程管理", icon: BookOpen },
   { key: "questions", label: "题库管理", icon: Database },
   { key: "teachers", label: "老师管理", icon: Users },
@@ -144,6 +155,209 @@ type AdminCourseSummary = {
   status: string;
   statusValue: CoursePublicationStatus;
   institutionId: number | null;
+};
+
+type LearningPathStatus = "draft" | "published" | "archived";
+
+type AdminLearningPath = {
+  id: number;
+  slug: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  coverUrl: string;
+  introVideoUrl: string;
+  audience: string;
+  level: string;
+  status: LearningPathStatus;
+  institutionName: string;
+  courseIds: number[];
+  courses: AdminCourseSummary[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ApiLearningPath = {
+  id: number;
+  slug: string;
+  title: string;
+  subtitle: string;
+  description: string;
+  cover_url: string;
+  intro_video_url: string;
+  audience: string;
+  level: string;
+  status: LearningPathStatus;
+  institution: { name: string };
+  courses: Array<{
+    id: number;
+    position: number;
+    course: ApiCourseCard;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+type ActivityMode = "online" | "offline";
+type ActivityRegistrationStatus = "open" | "closed";
+
+type AdminActivityRegistration = {
+  id: number;
+  activityId: number;
+  studentName: string;
+  studentEmail: string;
+  phone: string;
+  note: string;
+  createdAt: string;
+};
+
+type AdminActivity = {
+  id: number;
+  institutionId: number;
+  institutionName: string;
+  title: string;
+  description: string;
+  startsAt: string;
+  endsAt: string;
+  mode: ActivityMode;
+  meetingUrl: string;
+  location: string;
+  audience: string;
+  registrationStatus: ActivityRegistrationStatus;
+  capacity: string;
+  registrationsCount: number;
+  registrations: AdminActivityRegistration[];
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ApiAdminActivity = {
+  id: number;
+  institution_id: number;
+  institution_name: string;
+  title: string;
+  description: string;
+  starts_at: string;
+  ends_at?: string | null;
+  mode: ActivityMode;
+  meeting_url?: string | null;
+  location?: string | null;
+  audience?: string | null;
+  registration_status: ActivityRegistrationStatus;
+  capacity?: number | null;
+  registrations_count: number;
+  registrations: Array<{
+    id: number;
+    activity_id: number;
+    student_name: string;
+    student_email: string;
+    phone?: string | null;
+    note?: string | null;
+    created_at: string;
+  }>;
+  created_at: string;
+  updated_at: string;
+};
+
+type ExamPaperKind = "mock_exam" | "competition";
+type ExamPaperStatus = "draft" | "published" | "archived";
+type ExamPaperSourceType = "mock" | "past_paper";
+
+type AdminExamPaperQuestion = {
+  id: number;
+  position: number;
+  points: number;
+  question: CourseQuestion;
+};
+
+type AdminExamSubmission = {
+  id: number;
+  studentName: string;
+  studentEmail: string;
+  score: number;
+  totalScore: number;
+  status: "submitted" | "pending_manual" | "graded";
+  submittedAt: string;
+};
+
+type AdminCompetitionRegistration = {
+  id: number;
+  studentName: string;
+  studentEmail: string;
+  phone: string;
+  note: string;
+  createdAt: string;
+};
+
+type AdminExamPaper = {
+  id: number;
+  slug: string;
+  title: string;
+  description: string;
+  coverUrl: string;
+  instructions: string;
+  audience: string;
+  kind: ExamPaperKind;
+  sourceType: ExamPaperSourceType;
+  pastYear: string;
+  durationMinutes: number;
+  status: ExamPaperStatus;
+  startsAt: string;
+  endsAt: string;
+  categoryId: number | null;
+  categoryName: string;
+  institutionName: string;
+  questions: AdminExamPaperQuestion[];
+  registrations: AdminCompetitionRegistration[];
+  submissions: AdminExamSubmission[];
+  registrationsCount: number;
+  submissionsCount: number;
+  updatedAt: string;
+};
+
+type ApiExamPaper = {
+  id: number;
+  slug: string;
+  title: string;
+  description: string;
+  cover_url: string;
+  instructions: string;
+  audience: string;
+  kind: ExamPaperKind;
+  source_type: ExamPaperSourceType;
+  past_year?: number | null;
+  duration_minutes: number;
+  status: ExamPaperStatus;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  institution: { name: string };
+  category?: { id: number; name: string } | null;
+  questions?: Array<{
+    id: number;
+    position: number;
+    points: number;
+    question: unknown;
+  }>;
+  registrations?: Array<{
+    id: number;
+    student_name: string;
+    student_email: string;
+    phone?: string | null;
+    note?: string | null;
+    created_at: string;
+  }>;
+  submissions?: Array<{
+    id: number;
+    student_name: string;
+    student_email: string;
+    score: number;
+    total_score: number;
+    status: "submitted" | "pending_manual" | "graded";
+    submitted_at: string;
+  }>;
+  registrations_count: number;
+  submissions_count?: number;
+  updated_at: string;
 };
 
 type TeacherOption = {
@@ -357,6 +571,7 @@ type ApiTeacher = {
 type AdminRoleValue = "super_admin" | "institution_admin" | "teacher" | "student";
 
 type AdminProfile = {
+  institutionId: number | null;
   name: string;
   email: string;
   role: string;
@@ -448,6 +663,7 @@ type ApiInstitution = {
 };
 
 const defaultAdminProfile: AdminProfile = {
+  institutionId: adminInstitution.id,
   name: adminAccount.name,
   email: teacherUsers[0]?.email ?? "admin@example.com",
   role: adminAccount.role,
@@ -493,7 +709,7 @@ const managedUserRoleLabels: Record<ManagedUserRole, string> = {
 
 const managedUserRoleDescriptions: Record<ManagedUserRole, string> = {
   super_admin: "可访问后台所有页面",
-  institution_admin: "可访问机构信息、用户权限管理",
+  institution_admin: "可访问机构信息、用户权限管理、活动管理、学习路径管理",
   teacher: "可访问主页面板、课程管理、题库管理、测验批改、博客管理"
 };
 
@@ -501,8 +717,8 @@ const managedUserRoleOptions: ManagedUserRole[] = ["super_admin", "institution_a
 
 const menuAccessByRole: Record<ManagedUserRole, ModuleKey[]> = {
   super_admin: menuItems.map((item) => item.key),
-  institution_admin: ["institution", "users"],
-  teacher: ["dashboard", "courses", "questions", "grading", "blogs"]
+  institution_admin: ["institution", "users", "activities", "learningPaths", "mockExams", "competitions"],
+  teacher: ["dashboard", "learningPaths", "mockExams", "competitions", "courses", "questions", "grading", "blogs"]
 };
 
 function normalizeAdminRoleValue(role: string | undefined): AdminRoleValue {
@@ -551,6 +767,207 @@ function institutionFromApi(institution: ApiInstitution): InstitutionDraft {
 function optionalText(value: string) {
   const trimmed = value.trim();
   return trimmed ? trimmed : null;
+}
+
+function toDateTimeInputValue(value?: string | null) {
+  const date = value ? new Date(value) : new Date(Date.now() + 60 * 60 * 1000);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60 * 1000);
+  return offsetDate.toISOString().slice(0, 16);
+}
+
+function dateTimeInputToIso(value: string) {
+  return value ? new Date(value).toISOString() : new Date().toISOString();
+}
+
+function formatAdminDateTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "时间待定";
+  }
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "long",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  }).format(date);
+}
+
+function createBlankActivityDraft(): AdminActivity {
+  return {
+    id: -Date.now(),
+    institutionId: 0,
+    institutionName: "",
+    title: "",
+    description: "",
+    startsAt: toDateTimeInputValue(),
+    endsAt: "",
+    mode: "online",
+    meetingUrl: "",
+    location: "",
+    audience: "",
+    registrationStatus: "open",
+    capacity: "",
+    registrationsCount: 0,
+    registrations: [],
+    createdAt: "",
+    updatedAt: ""
+  };
+}
+
+function activityFromApi(activity: ApiAdminActivity): AdminActivity {
+  return {
+    id: activity.id,
+    institutionId: activity.institution_id,
+    institutionName: activity.institution_name,
+    title: activity.title,
+    description: activity.description,
+    startsAt: toDateTimeInputValue(activity.starts_at),
+    endsAt: activity.ends_at ? toDateTimeInputValue(activity.ends_at) : "",
+    mode: activity.mode,
+    meetingUrl: activity.meeting_url ?? "",
+    location: activity.location ?? "",
+    audience: activity.audience ?? "",
+    registrationStatus: activity.registration_status,
+    capacity: activity.capacity ? String(activity.capacity) : "",
+    registrationsCount: activity.registrations_count,
+    registrations: activity.registrations.map((registration) => ({
+      id: registration.id,
+      activityId: registration.activity_id,
+      studentName: registration.student_name,
+      studentEmail: registration.student_email,
+      phone: registration.phone ?? "",
+      note: registration.note ?? "",
+      createdAt: registration.created_at
+    })),
+    createdAt: activity.created_at,
+    updatedAt: activity.updated_at
+  };
+}
+
+function activityToApiPayload(activity: AdminActivity) {
+  const capacity = Number(activity.capacity);
+  return {
+    title: activity.title.trim(),
+    description: activity.description.trim(),
+    starts_at: dateTimeInputToIso(activity.startsAt),
+    ends_at: activity.endsAt ? dateTimeInputToIso(activity.endsAt) : null,
+    mode: activity.mode,
+    meeting_url: activity.mode === "online" ? optionalText(activity.meetingUrl) : null,
+    location: activity.mode === "offline" ? optionalText(activity.location) : null,
+    audience: optionalText(activity.audience),
+    registration_status: activity.registrationStatus,
+    capacity: Number.isFinite(capacity) && capacity > 0 ? capacity : null
+  };
+}
+
+function createBlankExamPaperDraft(kind: ExamPaperKind): AdminExamPaper {
+  const now = Date.now();
+  return {
+    id: -now,
+    slug: "",
+    title: kind === "competition" ? "新建竞赛" : "新建模拟考试",
+    description: "",
+    coverUrl: "",
+    instructions: "请在规定时间内完成答题，提交前请确认所有题目已经作答。",
+    audience: "",
+    kind,
+    sourceType: "mock",
+    pastYear: "",
+    durationMinutes: kind === "competition" ? 90 : 60,
+    status: "draft",
+    startsAt: kind === "competition" ? toDateTimeInputValue() : "",
+    endsAt: kind === "competition" ? toDateTimeInputValue(new Date(now + 3 * 60 * 60 * 1000).toISOString()) : "",
+    categoryId: null,
+    categoryName: "",
+    institutionName: "",
+    questions: [],
+    registrations: [],
+    submissions: [],
+    registrationsCount: 0,
+    submissionsCount: 0,
+    updatedAt: ""
+  };
+}
+
+function examPaperFromApi(paper: ApiExamPaper): AdminExamPaper {
+  return {
+    id: paper.id,
+    slug: paper.slug,
+    title: paper.title,
+    description: paper.description ?? "",
+    coverUrl: paper.cover_url ?? "",
+    instructions: paper.instructions ?? "",
+    audience: paper.audience ?? "",
+    kind: paper.kind,
+    sourceType: paper.source_type,
+    pastYear: paper.past_year ? String(paper.past_year) : "",
+    durationMinutes: paper.duration_minutes,
+    status: paper.status,
+    startsAt: paper.starts_at ? toDateTimeInputValue(paper.starts_at) : "",
+    endsAt: paper.ends_at ? toDateTimeInputValue(paper.ends_at) : "",
+    categoryId: paper.category?.id ?? null,
+    categoryName: paper.category?.name ?? "",
+    institutionName: paper.institution?.name ?? "",
+    questions: (paper.questions ?? [])
+      .map((link) => {
+        const question = normalizeQuestionForCoursePicker(link.question);
+        return question
+          ? {
+              id: link.id,
+              position: link.position,
+              points: link.points,
+              question
+            }
+          : null;
+      })
+      .filter((link): link is AdminExamPaperQuestion => Boolean(link)),
+    registrations: (paper.registrations ?? []).map((registration) => ({
+      id: registration.id,
+      studentName: registration.student_name,
+      studentEmail: registration.student_email,
+      phone: registration.phone ?? "",
+      note: registration.note ?? "",
+      createdAt: registration.created_at
+    })),
+    submissions: (paper.submissions ?? []).map((submission) => ({
+      id: submission.id,
+      studentName: submission.student_name,
+      studentEmail: submission.student_email,
+      score: submission.score,
+      totalScore: submission.total_score,
+      status: submission.status,
+      submittedAt: submission.submitted_at
+    })),
+    registrationsCount: paper.registrations_count,
+    submissionsCount: paper.submissions_count ?? 0,
+    updatedAt: paper.updated_at
+  };
+}
+
+function examPaperToApiPayload(paper: AdminExamPaper) {
+  const pastYear = Number(paper.pastYear);
+  return {
+    title: paper.title.trim(),
+    description: paper.description.trim(),
+    cover_url: paper.coverUrl.trim(),
+    instructions: paper.instructions.trim(),
+    audience: paper.audience.trim(),
+    kind: paper.kind,
+    source_type: paper.sourceType,
+    past_year: paper.sourceType === "past_paper" && Number.isFinite(pastYear) ? pastYear : null,
+    duration_minutes: Math.max(1, Number(paper.durationMinutes) || 60),
+    status: paper.status,
+    starts_at: paper.kind === "competition" && paper.startsAt ? dateTimeInputToIso(paper.startsAt) : null,
+    ends_at: paper.kind === "competition" && paper.endsAt ? dateTimeInputToIso(paper.endsAt) : null,
+    category_id: paper.categoryId,
+    questions: paper.questions.map((link) => ({
+      question_id: link.question.id,
+      points_override: link.points
+    }))
+  };
 }
 
 function institutionToApiPayload(draft: InstitutionDraft) {
@@ -610,6 +1027,7 @@ async function saveAdminInstitution(draft: InstitutionDraft): Promise<Institutio
 function profileFromApi(profile: ApiAdminProfile): AdminProfile {
   const roleValue = normalizeAdminRoleValue(profile.role);
   return {
+    institutionId: profile.institution_id,
     name: profile.full_name,
     email: profile.email,
     role: roleLabel(roleValue),
@@ -919,6 +1337,64 @@ function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
     status: courseStatusLabels[statusValue],
     statusValue,
     institutionId: course.institution?.id ?? null
+  };
+}
+
+function learningPathFromApi(path: ApiLearningPath): AdminLearningPath {
+  const orderedCourses = [...path.courses]
+    .sort((left, right) => left.position - right.position)
+    .map((item) => normalizeCourseCardFromApi(item.course));
+  return {
+    id: path.id,
+    slug: path.slug,
+    title: path.title,
+    subtitle: path.subtitle ?? "",
+    description: path.description ?? "",
+    coverUrl: path.cover_url ?? "",
+    introVideoUrl: path.intro_video_url ?? "",
+    audience: path.audience ?? "",
+    level: path.level ?? "",
+    status: path.status,
+    institutionName: path.institution?.name ?? "",
+    courseIds: orderedCourses.map((course) => course.id),
+    courses: orderedCourses,
+    createdAt: path.created_at,
+    updatedAt: path.updated_at
+  };
+}
+
+function createBlankLearningPathDraft(): AdminLearningPath {
+  return {
+    id: -Date.now(),
+    slug: "",
+    title: "",
+    subtitle: "",
+    description: "",
+    coverUrl: "",
+    introVideoUrl: "",
+    audience: "",
+    level: "",
+    status: "draft",
+    institutionName: "",
+    courseIds: [],
+    courses: [],
+    createdAt: "",
+    updatedAt: ""
+  };
+}
+
+function learningPathToApiPayload(path: AdminLearningPath) {
+  const courseIds = Array.from(new Set(path.courseIds.filter((courseId) => Number.isFinite(courseId))));
+  return {
+    title: path.title.trim(),
+    subtitle: path.subtitle.trim(),
+    description: path.description.trim(),
+    cover_url: path.coverUrl.trim(),
+    intro_video_url: path.introVideoUrl.trim(),
+    audience: path.audience.trim(),
+    level: path.level.trim(),
+    status: path.status,
+    course_ids: courseIds
   };
 }
 
@@ -2034,6 +2510,18 @@ export function AdminPortal() {
           <div className={effectiveActiveModule === "courseCategories" ? "block" : "hidden"}>
             <CourseCategoryManagement />
           </div>
+          <div className={effectiveActiveModule === "activities" ? "block" : "hidden"}>
+            <ActivityManagement />
+          </div>
+          <div className={effectiveActiveModule === "learningPaths" ? "block" : "hidden"}>
+            <LearningPathManagement />
+          </div>
+          <div className={effectiveActiveModule === "mockExams" ? "block" : "hidden"}>
+            <ExamPaperManagement kind="mock_exam" />
+          </div>
+          <div className={effectiveActiveModule === "competitions" ? "block" : "hidden"}>
+            <ExamPaperManagement kind="competition" />
+          </div>
           <div className={effectiveActiveModule === "courses" ? "block" : "hidden"}>
             <CourseManagement isActive={effectiveActiveModule === "courses"} />
           </div>
@@ -3104,6 +3592,559 @@ function CourseCategoryManagement() {
               </div>
             ) : null}
           </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function LearningPathManagement() {
+  const profile = useAdminProfile();
+  const [paths, setPaths] = useState<AdminLearningPath[]>([]);
+  const [availableCourses, setAvailableCourses] = useState<AdminCourseSummary[]>([]);
+  const [selectedPathId, setSelectedPathId] = useState<number | null>(null);
+  const [draft, setDraft] = useState<AdminLearningPath>(() => createBlankLearningPathDraft());
+  const [status, setStatus] = useState("正在加载学习路径...");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [uploadingCover, setUploadingCover] = useState(false);
+  const [uploadingIntroVideo, setUploadingIntroVideo] = useState(false);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+
+  const selectedPath = paths.find((path) => path.id === selectedPathId) ?? null;
+  const isNew = draft.id < 0;
+  const courseMap = useMemo(() => {
+    const map = new Map<number, AdminCourseSummary>();
+    [...availableCourses, ...draft.courses].forEach((course) => map.set(course.id, course));
+    return map;
+  }, [availableCourses, draft.courses]);
+  const selectedCourses = draft.courseIds
+    .map((courseId) => courseMap.get(courseId))
+    .filter((course): course is AdminCourseSummary => Boolean(course));
+  const selectedCourseIds = new Set(draft.courseIds);
+
+  async function loadLearningPathData() {
+    setStatus("正在加载学习路径...");
+    try {
+      const [pathsResponse, coursesResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/admin/learning-paths`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        }),
+        fetch(`${API_BASE_URL}/admin/learning-path-course-options`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        })
+      ]);
+      if (!pathsResponse.ok || !coursesResponse.ok) {
+        throw new Error("Learning path API unavailable");
+      }
+      const nextPaths = ((await pathsResponse.json()) as ApiLearningPath[]).map(learningPathFromApi);
+      const nextCourses = ((await coursesResponse.json()) as ApiCourseCard[]).map(normalizeCourseCardFromApi);
+      const institutionCourses = profile.institutionId
+        ? nextCourses.filter((course) => course.institutionId === profile.institutionId)
+        : nextCourses;
+      setPaths(nextPaths);
+      setAvailableCourses(institutionCourses);
+      setSelectedPathId((currentId) =>
+        currentId && nextPaths.some((path) => path.id === currentId) ? currentId : nextPaths[0]?.id ?? null
+      );
+      if (!nextPaths.length) {
+        setDraft(createBlankLearningPathDraft());
+      }
+      setStatus(nextPaths.length ? "已从数据库加载学习路径。" : "还没有学习路径，可以先新增一个。");
+    } catch {
+      setPaths([]);
+      setAvailableCourses([]);
+      setSelectedPathId(null);
+      setDraft(createBlankLearningPathDraft());
+      setStatus("学习路径 API 暂时不可用，请确认 FastAPI 服务正在运行。");
+    }
+  }
+
+  useEffect(() => {
+    void loadLearningPathData();
+  }, [profile.institutionId]);
+
+  useEffect(() => {
+    if (selectedPath) {
+      setDraft(selectedPath);
+    }
+  }, [selectedPath]);
+
+  function addLearningPath() {
+    setSelectedPathId(null);
+    setDraft(createBlankLearningPathDraft());
+    setStatus("正在创建新的学习路径。");
+  }
+
+  function updateDraft<K extends keyof AdminLearningPath>(field: K, value: AdminLearningPath[K]) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function toggleCourse(courseId: number) {
+    updateDraft(
+      "courseIds",
+      selectedCourseIds.has(courseId)
+        ? draft.courseIds.filter((id) => id !== courseId)
+        : [...draft.courseIds, courseId]
+    );
+  }
+
+  function removeCourse(courseId: number) {
+    updateDraft("courseIds", draft.courseIds.filter((id) => id !== courseId));
+  }
+
+  function moveCourse(courseId: number, direction: -1 | 1) {
+    const currentIndex = draft.courseIds.indexOf(courseId);
+    const nextIndex = currentIndex + direction;
+    if (currentIndex < 0 || nextIndex < 0 || nextIndex >= draft.courseIds.length) {
+      return;
+    }
+    const nextCourseIds = [...draft.courseIds];
+    [nextCourseIds[currentIndex], nextCourseIds[nextIndex]] = [nextCourseIds[nextIndex], nextCourseIds[currentIndex]];
+    updateDraft("courseIds", nextCourseIds);
+  }
+
+  async function uploadLearningPathCover(file: File | undefined) {
+    if (!file) return;
+    setUploadingCover(true);
+    setStatus("正在上传路径封面...");
+    try {
+      const url = await uploadAdminFile(file, "course_cover");
+      updateDraft("coverUrl", url);
+      setStatus("路径封面已上传，保存路径后生效。");
+    } catch (error) {
+      setStatus(`路径封面上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingCover(false);
+    }
+  }
+
+  async function uploadLearningPathIntroVideo(file: File | undefined) {
+    if (!file) return;
+    setUploadingIntroVideo(true);
+    setStatus("正在上传路径介绍视频...");
+    try {
+      const url = await uploadAdminFile(file, "course_intro_video");
+      updateDraft("introVideoUrl", url);
+      setStatus("路径介绍视频已上传，保存路径后生效。");
+    } catch (error) {
+      setStatus(`介绍视频上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
+    } finally {
+      setUploadingIntroVideo(false);
+    }
+  }
+
+  async function readLearningPathError(response: Response) {
+    const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    if (payload?.detail === "Some courses cannot be added to this learning path") {
+      return "部分课程不属于当前机构或已经不存在，不能加入学习路径。";
+    }
+    return typeof payload?.detail === "string" ? payload.detail : `服务器返回 ${response.status}`;
+  }
+
+  async function saveLearningPath() {
+    if (!draft.title.trim()) {
+      setStatus("请填写学习路径标题。");
+      return;
+    }
+    setSaving(true);
+    setStatus("正在保存学习路径...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/learning-paths${isNew ? "" : `/${draft.id}`}`, {
+        method: isNew ? "POST" : "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(learningPathToApiPayload(draft))
+      });
+      if (!response.ok) {
+        throw new Error(await readLearningPathError(response));
+      }
+      const savedPath = learningPathFromApi((await response.json()) as ApiLearningPath);
+      setPaths((currentPaths) => {
+        if (isNew) {
+          return [savedPath, ...currentPaths];
+        }
+        return currentPaths.map((path) => (path.id === savedPath.id ? savedPath : path));
+      });
+      setSelectedPathId(savedPath.id);
+      setDraft(savedPath);
+      setStatus("学习路径已保存。");
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "学习路径保存失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteLearningPath() {
+    if (isNew) {
+      setDraft(createBlankLearningPathDraft());
+      setStatus("已取消新学习路径草稿。");
+      return;
+    }
+    const confirmed = await confirmDelete({
+      title: "删除学习路径",
+      itemName: draft.title,
+      description: "删除后，该学习路径会从后台和前台列表中移除，路径中的课程本身不会被删除。请确认是否继续。"
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setStatus("正在删除学习路径...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/learning-paths/${draft.id}`, {
+        method: "DELETE",
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(`服务器返回 ${response.status}`);
+      }
+      const nextPaths = paths.filter((path) => path.id !== draft.id);
+      setPaths(nextPaths);
+      const nextPath = nextPaths[0] ?? null;
+      setSelectedPathId(nextPath?.id ?? null);
+      setDraft(nextPath ?? createBlankLearningPathDraft());
+      setStatus("学习路径已删除。");
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "学习路径删除失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[24rem_1fr]">
+      {deleteConfirmDialog}
+      <section className="panel rounded-lg p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">学习路径</h2>
+            <p className="mt-1 text-sm text-slate-500">{status}</p>
+          </div>
+          <button
+            type="button"
+            onClick={addLearningPath}
+            className="focus-ring inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-coral px-4 text-sm font-bold text-white shadow-sm hover:bg-[#f25f54]"
+          >
+            <Plus size={16} /> 新增路径
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3">
+          {paths.map((path) => (
+            <button
+              key={path.id}
+              type="button"
+              onClick={() => setSelectedPathId(path.id)}
+              className={`focus-ring rounded-lg border p-4 text-left transition ${
+                selectedPathId === path.id
+                  ? "border-mint bg-mint/10"
+                  : "border-slate-200 bg-white hover:border-mint/50"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-ink">{path.title}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{path.courseIds.length} 门课程</p>
+                  <p className="mt-2 text-xs font-bold text-slate-400">{path.audience || "学生人群未设置"}</p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+                    path.status === "published" ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {path.status === "published" ? "已发布" : "草稿"}
+                </span>
+              </div>
+            </button>
+          ))}
+          {!paths.length ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm font-semibold text-slate-500">
+              暂时还没有学习路径。
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">路径编辑</h2>
+            <p className="mt-1 text-sm text-slate-500">把多个课程组合成一个循序渐进的系列课程。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={deleteLearningPath}
+              disabled={deleting}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/30 px-4 py-2 text-sm font-bold text-coral hover:bg-coral/10 disabled:opacity-60"
+            >
+              <Trash2 size={16} /> 删除路径
+            </button>
+            <button
+              type="button"
+              onClick={saveLearningPath}
+              disabled={saving}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
+            >
+              <Save size={16} /> 保存路径
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            路径标题
+            <input
+              value={draft.title}
+              onChange={(event) => updateDraft("title", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="例如：IB 中文写作完整路径"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            状态
+            <select
+              value={draft.status}
+              onChange={(event) => updateDraft("status", event.target.value as LearningPathStatus)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            >
+              <option value="draft">草稿</option>
+              <option value="published">已发布</option>
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            副标题
+            <input
+              value={draft.subtitle}
+              onChange={(event) => updateDraft("subtitle", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="用一句话说明这条学习路径"
+            />
+          </label>
+          <div className="grid gap-4 lg:col-span-2 lg:grid-cols-2">
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-bold text-slate-700">路径封面图</p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-[12rem_1fr]">
+                {draft.coverUrl ? (
+                  <img
+                    src={draft.coverUrl}
+                    alt={draft.title || "学习路径封面"}
+                    className="h-32 w-full rounded-lg object-cover"
+                  />
+                ) : (
+                  <div className="grid h-32 place-items-center rounded-lg border border-dashed border-slate-200 bg-white text-sm font-bold text-slate-400">
+                    尚未上传封面
+                  </div>
+                )}
+                <div className="flex flex-col justify-center gap-3">
+                  <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-mint">
+                    <ImagePlus size={16} /> {uploadingCover ? "上传中" : "封面图片"}
+                    <input
+                      type="file"
+                      accept="image/*"
+                      className="hidden"
+                      disabled={uploadingCover}
+                      onChange={(event) => {
+                        void uploadLearningPathCover(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {draft.coverUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => updateDraft("coverUrl", "")}
+                      className="focus-ring w-fit rounded-lg border border-coral/30 bg-white px-4 py-2 text-sm font-bold text-coral hover:bg-coral/10"
+                    >
+                      移除封面
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+
+            <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-bold text-slate-700">路径介绍视频</p>
+              <div className="mt-3 grid gap-4 sm:grid-cols-[12rem_1fr]">
+                {draft.introVideoUrl ? (
+                  <video
+                    controls
+                    src={draft.introVideoUrl}
+                    className="h-32 w-full rounded-lg bg-ink object-contain"
+                  />
+                ) : (
+                  <div className="grid h-32 place-items-center rounded-lg border border-dashed border-slate-200 bg-white text-sm font-bold text-slate-400">
+                    尚未上传视频
+                  </div>
+                )}
+                <div className="flex flex-col justify-center gap-3">
+                  <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-mint">
+                    <Video size={16} /> {uploadingIntroVideo ? "上传中" : "介绍视频"}
+                    <input
+                      type="file"
+                      accept="video/*"
+                      className="hidden"
+                      disabled={uploadingIntroVideo}
+                      onChange={(event) => {
+                        void uploadLearningPathIntroVideo(event.target.files?.[0]);
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                  </label>
+                  {draft.introVideoUrl ? (
+                    <button
+                      type="button"
+                      onClick={() => updateDraft("introVideoUrl", "")}
+                      className="focus-ring w-fit rounded-lg border border-coral/30 bg-white px-4 py-2 text-sm font-bold text-coral hover:bg-coral/10"
+                    >
+                      移除视频
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+            </section>
+          </div>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            适合人群
+            <input
+              value={draft.audience}
+              onChange={(event) => updateDraft("audience", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="例如：A1-A2 初级学习者"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            路径级别
+            <input
+              value={draft.level}
+              onChange={(event) => updateDraft("level", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="例如：A1-B1"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700 lg:col-span-2">
+            路径介绍
+            <textarea
+              value={draft.description}
+              onChange={(event) => updateDraft("description", event.target.value)}
+              className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-3 text-sm leading-6"
+              placeholder="说明学习目标、课程安排和完成后能达到的能力。"
+            />
+          </label>
+        </div>
+
+        <div className="mt-6 grid gap-5 xl:grid-cols-[1fr_1fr]">
+          <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-ink">可选课程</h3>
+                <p className="mt-1 text-sm text-slate-500">选择当前机构可管理的课程加入路径。</p>
+              </div>
+              <span className="rounded-full bg-white px-3 py-1 text-xs font-bold text-slate-500">
+                {availableCourses.length} 门
+              </span>
+            </div>
+            <div className="mt-4 grid max-h-[28rem] gap-3 overflow-y-auto pr-1">
+              {availableCourses.map((course) => (
+                <button
+                  key={course.id}
+                  type="button"
+                  onClick={() => toggleCourse(course.id)}
+                  className={`focus-ring grid gap-3 rounded-lg border p-3 text-left transition md:grid-cols-[5rem_1fr_auto] ${
+                    selectedCourseIds.has(course.id)
+                      ? "border-mint bg-mint/10"
+                      : "border-slate-200 bg-white hover:border-mint/50"
+                  }`}
+                >
+                  {course.image ? (
+                    <img src={course.image} alt={course.title} className="h-16 w-full rounded-lg object-cover" />
+                  ) : (
+                    <div className="grid h-16 place-items-center rounded-lg bg-slate-100 text-xs font-bold text-slate-400">
+                      无封面
+                    </div>
+                  )}
+                  <div className="min-w-0">
+                    <p className="truncate font-bold text-ink">{course.title}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-500">
+                      {course.category} · {course.level}
+                    </p>
+                    <p className="mt-1 text-xs font-bold text-slate-400">{course.teacher}</p>
+                  </div>
+                  <span
+                    className={`self-start rounded-full px-2.5 py-1 text-xs font-bold ${
+                      course.statusValue === "published" ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"
+                    }`}
+                  >
+                    {course.status}
+                  </span>
+                </button>
+              ))}
+              {!availableCourses.length ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-white p-5 text-center text-sm font-semibold text-slate-500">
+                  暂时没有可选择的课程。
+                </div>
+              ) : null}
+            </div>
+          </section>
+
+          <section className="rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h3 className="font-bold text-ink">路径课程顺序</h3>
+                <p className="mt-1 text-sm text-slate-500">课程会按照这里的顺序显示在前台。</p>
+              </div>
+              <span className="rounded-full bg-mint/12 px-3 py-1 text-xs font-bold text-mint">
+                {selectedCourses.length} 门
+              </span>
+            </div>
+            <div className="mt-4 grid gap-3">
+              {selectedCourses.map((course, index) => (
+                <div key={course.id} className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-sm font-black text-coral">第 {index + 1} 门课</p>
+                      <p className="mt-1 truncate font-bold text-ink">{course.title}</p>
+                      <p className="mt-1 text-sm font-semibold text-slate-500">
+                        {course.category} · {course.level}
+                      </p>
+                    </div>
+                    <div className="flex shrink-0 gap-1">
+                      <button
+                        type="button"
+                        onClick={() => moveCourse(course.id, -1)}
+                        disabled={index === 0}
+                        className="focus-ring rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-600 disabled:opacity-40"
+                      >
+                        上移
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveCourse(course.id, 1)}
+                        disabled={index === selectedCourses.length - 1}
+                        className="focus-ring rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-bold text-slate-600 disabled:opacity-40"
+                      >
+                        下移
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => removeCourse(course.id)}
+                        className="focus-ring rounded-lg border border-coral/30 bg-white px-2 py-1 text-xs font-bold text-coral"
+                      >
+                        移除
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+              {!selectedCourses.length ? (
+                <div className="rounded-lg border border-dashed border-slate-200 p-5 text-center text-sm font-semibold text-slate-500">
+                  还没有添加课程，请从左侧选择。
+                </div>
+              ) : null}
+            </div>
+          </section>
         </div>
       </section>
     </div>
@@ -5890,6 +6931,964 @@ function GradingPanel({ isActive }: { isActive: boolean }) {
               暂时没有需要人工批改的测验提交。
             </div>
           ) : null}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+const examPaperKindLabels: Record<ExamPaperKind, string> = {
+  mock_exam: "模拟考试",
+  competition: "竞赛"
+};
+
+const examPaperStatusLabels: Record<ExamPaperStatus, string> = {
+  draft: "草稿",
+  published: "已发布",
+  archived: "已归档"
+};
+
+const examPaperSourceLabels: Record<ExamPaperSourceType, string> = {
+  mock: "模拟卷",
+  past_paper: "历年真题卷"
+};
+
+function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
+  const isCompetition = kind === "competition";
+  const moduleTitle = isCompetition ? "竞赛" : "模拟考试";
+  const [papers, setPapers] = useState<AdminExamPaper[]>([]);
+  const [draft, setDraft] = useState<AdminExamPaper>(() => createBlankExamPaperDraft(kind));
+  const [selectedPaperId, setSelectedPaperId] = useState<number>(draft.id);
+  const [categories, setCategories] = useState<CourseCategory[]>([]);
+  const [availableQuestions, setAvailableQuestions] = useState<CourseQuestion[]>([]);
+  const [questionQuery, setQuestionQuery] = useState("");
+  const [status, setStatus] = useState(`正在加载${moduleTitle}...`);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+
+  const categoryOptions = useMemo(() => {
+    const activeCategories = categories.filter((category) => category.isActive);
+    const parentIds = new Set(activeCategories.map((category) => category.parentId).filter(Boolean));
+    return activeCategories
+      .filter((category) => !parentIds.has(category.id))
+      .sort((left, right) => left.position - right.position || left.name.localeCompare(right.name, "zh-Hans-CN"))
+      .map((category) => ({
+        id: category.id,
+        label: buildCourseCategoryLabel(category, activeCategories)
+      }));
+  }, [categories]);
+
+  const selectedQuestionIds = useMemo(
+    () => new Set(draft.questions.map((link) => link.question.id)),
+    [draft.questions]
+  );
+
+  const filteredQuestions = useMemo(() => {
+    const query = questionQuery.trim().toLowerCase();
+    return availableQuestions
+      .filter((question) => !selectedQuestionIds.has(question.id))
+      .filter((question) => {
+        if (!query) {
+          return true;
+        }
+        return [question.title, question.prompt, question.type, question.difficulty, question.skillArea]
+          .join(" ")
+          .toLowerCase()
+          .includes(query);
+      })
+      .slice(0, 80);
+  }, [availableQuestions, questionQuery, selectedQuestionIds]);
+
+  async function loadData(nextSelectedId?: number) {
+    setIsLoading(true);
+    try {
+      const [papersResponse, categoriesResponse, questionsResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/admin/exam-papers?kind=${kind}`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        }),
+        fetch(`${API_BASE_URL}/admin/course-categories`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        }),
+        fetch(`${API_BASE_URL}/admin/question-pool`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        })
+      ]);
+
+      if (!papersResponse.ok) {
+        throw new Error(`试卷读取失败：API 返回 ${papersResponse.status}`);
+      }
+      if (categoriesResponse.ok) {
+        const nextCategories = ((await categoriesResponse.json()) as ApiCourseCategory[]).map((category) =>
+          courseCategoryFromApi(category)
+        );
+        setCategories(nextCategories);
+      }
+      if (questionsResponse.ok) {
+        const nextQuestions = ((await questionsResponse.json()) as unknown[])
+          .map((question) => normalizeQuestionForCoursePicker(question))
+          .filter((question): question is CourseQuestion => Boolean(question));
+        setAvailableQuestions(nextQuestions);
+      }
+
+      const nextPapers = ((await papersResponse.json()) as ApiExamPaper[]).map((paper) => examPaperFromApi(paper));
+      setPapers(nextPapers);
+      const selected = nextPapers.find((paper) => paper.id === nextSelectedId) ?? nextPapers[0];
+      if (selected) {
+        setDraft(selected);
+        setSelectedPaperId(selected.id);
+        setStatus(`已加载 ${nextPapers.length} 份${moduleTitle}。`);
+      } else {
+        const blank = createBlankExamPaperDraft(kind);
+        setDraft(blank);
+        setSelectedPaperId(blank.id);
+        setStatus(`当前还没有${moduleTitle}，可以从右侧创建。`);
+      }
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, `${moduleTitle}读取失败，请确认 FastAPI 服务正在运行。`));
+      const blank = createBlankExamPaperDraft(kind);
+      setDraft(blank);
+      setSelectedPaperId(blank.id);
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadData();
+  }, [kind]);
+
+  function updateDraft(updates: Partial<AdminExamPaper>) {
+    setDraft((current) => ({ ...current, ...updates }));
+  }
+
+  function createNewPaper() {
+    const blank = createBlankExamPaperDraft(kind);
+    setDraft(blank);
+    setSelectedPaperId(blank.id);
+    setStatus(`正在创建新的${moduleTitle}。`);
+  }
+
+  function addQuestion(question: CourseQuestion) {
+    setDraft((current) => ({
+      ...current,
+      questions: [
+        ...current.questions,
+        {
+          id: -Date.now() - question.id,
+          position: current.questions.length + 1,
+          points: question.points,
+          question
+        }
+      ]
+    }));
+  }
+
+  function removeQuestion(questionId: number) {
+    setDraft((current) => ({
+      ...current,
+      questions: current.questions
+        .filter((link) => link.question.id !== questionId)
+        .map((link, index) => ({ ...link, position: index + 1 }))
+    }));
+  }
+
+  function moveQuestion(questionId: number, direction: -1 | 1) {
+    setDraft((current) => {
+      const index = current.questions.findIndex((link) => link.question.id === questionId);
+      const targetIndex = index + direction;
+      if (index < 0 || targetIndex < 0 || targetIndex >= current.questions.length) {
+        return current;
+      }
+      const nextQuestions = [...current.questions];
+      const [item] = nextQuestions.splice(index, 1);
+      nextQuestions.splice(targetIndex, 0, item);
+      return {
+        ...current,
+        questions: nextQuestions.map((link, nextIndex) => ({ ...link, position: nextIndex + 1 }))
+      };
+    });
+  }
+
+  async function savePaper() {
+    setIsSaving(true);
+    try {
+      const isNew = draft.id < 0;
+      const response = await fetch(`${API_BASE_URL}/admin/exam-papers${isNew ? "" : `/${draft.id}`}`, {
+        method: isNew ? "POST" : "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(examPaperToApiPayload(draft))
+      });
+      if (!response.ok) {
+        throw new Error(`API 返回 ${response.status}`);
+      }
+      const savedPaper = examPaperFromApi((await response.json()) as ApiExamPaper);
+      setDraft(savedPaper);
+      setSelectedPaperId(savedPaper.id);
+      setStatus(`${moduleTitle}已保存。`);
+      await loadData(savedPaper.id);
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, `${moduleTitle}保存失败，请确认 FastAPI 服务正在运行。`));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deletePaper() {
+    if (draft.id < 0) {
+      createNewPaper();
+      return;
+    }
+    const confirmed = await confirmDelete({
+      title: `删除${moduleTitle}`,
+      description: `确定要删除「${draft.title}」吗？删除后学生将无法再看到这份${moduleTitle}。`,
+      confirmLabel: "删除"
+    });
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/exam-papers/${draft.id}`, {
+        method: "DELETE",
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(`API 返回 ${response.status}`);
+      }
+      setStatus(`${moduleTitle}已删除。`);
+      await loadData();
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, `${moduleTitle}删除失败，请确认 FastAPI 服务正在运行。`));
+    }
+  }
+
+  return (
+    <div className="grid gap-6 xl:grid-cols-[420px_minmax(0,1fr)]">
+      <section className="panel p-5">
+        <div className="flex items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-black text-ink">{moduleTitle}列表</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              {isLoading ? "正在读取..." : `${papers.length} 份${moduleTitle}`}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={createNewPaper}
+            className="inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-3 text-sm font-black text-white transition hover:bg-coral/90"
+          >
+            <Plus size={16} />
+            新增
+          </button>
+        </div>
+
+        <div className="mt-5 space-y-3">
+          {papers.map((paper) => (
+            <button
+              type="button"
+              key={paper.id}
+              onClick={() => {
+                setDraft(paper);
+                setSelectedPaperId(paper.id);
+                setStatus(`正在编辑「${paper.title}」。`);
+              }}
+              className={`w-full rounded-lg border p-4 text-left transition ${
+                selectedPaperId === paper.id ? "border-mint bg-mint/5" : "border-slate-200 bg-white hover:border-mint/60"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-base font-black text-ink">{paper.title}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {paper.categoryName || "未选择类别"} · {paper.durationMinutes} 分钟 · {paper.questions.length} 题
+                  </p>
+                </div>
+                <span
+                  className={`rounded-full px-3 py-1 text-xs font-black ${
+                    paper.status === "published" ? "bg-mint/15 text-mint" : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {examPaperStatusLabels[paper.status]}
+                </span>
+              </div>
+            </button>
+          ))}
+          {!papers.length ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-5 text-sm font-semibold text-slate-500">
+              还没有{moduleTitle}，点击“新增”或直接在右侧填写后保存。
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel p-6">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <h2 className="text-xl font-black text-ink">{moduleTitle}编辑</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{status}</p>
+          </div>
+          <div className="flex flex-wrap gap-3">
+            <button
+              type="button"
+              onClick={() => void deletePaper()}
+              className="inline-flex items-center gap-2 rounded-lg border border-coral/30 px-4 py-3 text-sm font-black text-coral transition hover:bg-coral/5"
+            >
+              <Trash2 size={16} />
+              删除
+            </button>
+            <button
+              type="button"
+              onClick={() => void savePaper()}
+              disabled={isSaving}
+              className="inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-3 text-sm font-black text-white transition hover:bg-ink/90 disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              <Save size={16} />
+              {isSaving ? "保存中" : "保存"}
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-4 lg:grid-cols-2">
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">标题</span>
+            <input
+              value={draft.title}
+              onChange={(event) => updateDraft({ title: event.target.value })}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">所属类别</span>
+            <select
+              value={draft.categoryId ?? ""}
+              onChange={(event) => updateDraft({ categoryId: event.target.value ? Number(event.target.value) : null })}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            >
+              <option value="">不选择类别</option>
+              {categoryOptions.map((category) => (
+                <option key={category.id} value={category.id}>
+                  {category.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">试卷类型</span>
+            <select
+              value={draft.sourceType}
+              onChange={(event) => updateDraft({ sourceType: event.target.value as ExamPaperSourceType })}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            >
+              <option value="mock">{examPaperSourceLabels.mock}</option>
+              <option value="past_paper">{examPaperSourceLabels.past_paper}</option>
+            </select>
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">真题年份</span>
+            <input
+              value={draft.pastYear}
+              disabled={draft.sourceType !== "past_paper"}
+              onChange={(event) => updateDraft({ pastYear: event.target.value })}
+              placeholder="例如 2025"
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">答题时长（分钟）</span>
+            <input
+              type="number"
+              min={1}
+              value={draft.durationMinutes}
+              onChange={(event) => updateDraft({ durationMinutes: Number(event.target.value) })}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">发布状态</span>
+            <select
+              value={draft.status}
+              onChange={(event) => updateDraft({ status: event.target.value as ExamPaperStatus })}
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            >
+              <option value="draft">草稿</option>
+              <option value="published">已发布</option>
+            </select>
+          </label>
+          {isCompetition ? (
+            <>
+              <label className="block">
+                <span className="text-sm font-black text-slate-700">开始时间</span>
+                <input
+                  type="datetime-local"
+                  value={draft.startsAt}
+                  onChange={(event) => updateDraft({ startsAt: event.target.value })}
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm font-black text-slate-700">结束时间</span>
+                <input
+                  type="datetime-local"
+                  value={draft.endsAt}
+                  onChange={(event) => updateDraft({ endsAt: event.target.value })}
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+                />
+              </label>
+            </>
+          ) : null}
+        </div>
+
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">适合学生人群</span>
+            <input
+              value={draft.audience}
+              onChange={(event) => updateDraft({ audience: event.target.value })}
+              placeholder="例如 AP 备考学生、8-10 年级数学提升"
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            />
+          </label>
+          <label className="block">
+            <span className="text-sm font-black text-slate-700">封面图链接</span>
+            <input
+              value={draft.coverUrl}
+              onChange={(event) => updateDraft({ coverUrl: event.target.value })}
+              placeholder="可选"
+              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+            />
+          </label>
+        </div>
+
+        <label className="mt-4 block">
+          <span className="text-sm font-black text-slate-700">详细介绍</span>
+          <textarea
+            value={draft.description}
+            onChange={(event) => updateDraft({ description: event.target.value })}
+            rows={4}
+            className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 focus:border-mint focus:outline-none"
+          />
+        </label>
+        <label className="mt-4 block">
+          <span className="text-sm font-black text-slate-700">考试说明</span>
+          <textarea
+            value={draft.instructions}
+            onChange={(event) => updateDraft({ instructions: event.target.value })}
+            rows={3}
+            className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 focus:border-mint focus:outline-none"
+          />
+        </label>
+
+        <div className="mt-6 rounded-lg border border-slate-200 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-black text-ink">已选题目</h3>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                {draft.questions.length} 道题 · 总分 {draft.questions.reduce((sum, link) => sum + link.points, 0)} 分
+              </p>
+            </div>
+          </div>
+          <div className="mt-4 space-y-2">
+            {draft.questions.map((link, index) => (
+              <div key={`${link.question.id}-${index}`} className="flex flex-wrap items-center gap-3 rounded-lg bg-slate-50 p-3">
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-500">第 {index + 1} 题</span>
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-black text-ink">{link.question.title}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {link.question.type} · {link.question.difficulty} · {link.question.points} 分
+                    {link.question.requiresManualGrading ? " · 需人工批改" : ""}
+                  </p>
+                </div>
+                <input
+                  type="number"
+                  min={0}
+                  value={link.points}
+                  onChange={(event) =>
+                    setDraft((current) => ({
+                      ...current,
+                      questions: current.questions.map((item) =>
+                        item.question.id === link.question.id ? { ...item, points: Number(event.target.value) } : item
+                      )
+                    }))
+                  }
+                  className="w-24 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold"
+                  aria-label="题目分值"
+                />
+                <button
+                  type="button"
+                  onClick={() => moveQuestion(link.question.id, -1)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-500"
+                >
+                  上移
+                </button>
+                <button
+                  type="button"
+                  onClick={() => moveQuestion(link.question.id, 1)}
+                  className="rounded-lg border border-slate-200 px-3 py-2 text-xs font-black text-slate-500"
+                >
+                  下移
+                </button>
+                <button
+                  type="button"
+                  onClick={() => removeQuestion(link.question.id)}
+                  className="rounded-lg border border-coral/30 px-3 py-2 text-xs font-black text-coral"
+                >
+                  移除
+                </button>
+              </div>
+            ))}
+            {!draft.questions.length ? (
+              <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm font-semibold text-slate-500">
+                请从下方题库选择题目组成试卷。
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-black text-ink">题库题目</h3>
+              <p className="mt-1 text-sm font-semibold text-slate-500">只显示本机构已发布题目。</p>
+            </div>
+            <div className="relative w-full sm:w-80">
+              <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={questionQuery}
+                onChange={(event) => setQuestionQuery(event.target.value)}
+                placeholder="搜索题干、知识点、题型"
+                className="w-full rounded-lg border border-slate-200 py-3 pl-9 pr-3 text-sm font-bold focus:border-mint focus:outline-none"
+              />
+            </div>
+          </div>
+          <div className="mt-4 grid gap-2 md:grid-cols-2">
+            {filteredQuestions.map((question) => (
+              <button
+                type="button"
+                key={question.id}
+                onClick={() => addQuestion(question)}
+                className="rounded-lg border border-slate-200 bg-white p-3 text-left transition hover:border-mint hover:bg-mint/5"
+              >
+                <p className="line-clamp-1 text-sm font-black text-ink">{question.title}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {question.type} · {question.difficulty} · {question.points} 分
+                  {question.requiresManualGrading ? " · 需人工批改" : ""}
+                </p>
+              </button>
+            ))}
+            {!filteredQuestions.length ? (
+              <div className="rounded-lg border border-dashed border-slate-200 p-4 text-sm font-semibold text-slate-500 md:col-span-2">
+                没有可添加的题目。请先在题库管理中发布题目。
+              </div>
+            ) : null}
+          </div>
+        </div>
+
+        {isCompetition ? (
+          <div className="mt-6 rounded-lg border border-slate-200 p-4">
+            <h3 className="text-lg font-black text-ink">报名学生</h3>
+            <div className="mt-3 space-y-2">
+              {draft.registrations.map((registration) => (
+                <div key={registration.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3">
+                  <div>
+                    <p className="text-sm font-black text-ink">{registration.studentName}</p>
+                    <p className="mt-1 text-xs font-semibold text-slate-500">{registration.studentEmail}</p>
+                  </div>
+                  <span className="text-xs font-semibold text-slate-400">{formatAdminDateTime(registration.createdAt)}</span>
+                </div>
+              ))}
+              {!draft.registrations.length ? (
+                <p className="rounded-lg border border-dashed border-slate-200 p-4 text-sm font-semibold text-slate-500">
+                  暂无学生报名。
+                </p>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-6 rounded-lg border border-slate-200 p-4">
+          <h3 className="text-lg font-black text-ink">提交记录</h3>
+          <div className="mt-3 space-y-2">
+            {draft.submissions.map((submission) => (
+              <div key={submission.id} className="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-slate-50 p-3">
+                <div>
+                  <p className="text-sm font-black text-ink">{submission.studentName}</p>
+                  <p className="mt-1 text-xs font-semibold text-slate-500">
+                    {submission.studentEmail} · {formatAdminDateTime(submission.submittedAt)}
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-slate-600">
+                  {submission.score}/{submission.totalScore}
+                </span>
+              </div>
+            ))}
+            {!draft.submissions.length ? (
+              <p className="rounded-lg border border-dashed border-slate-200 p-4 text-sm font-semibold text-slate-500">
+                暂无提交记录。
+              </p>
+            ) : null}
+          </div>
+        </div>
+
+        {deleteConfirmDialog}
+      </section>
+    </div>
+  );
+}
+
+function ActivityManagement() {
+  const [activities, setActivities] = useState<AdminActivity[]>([]);
+  const [draft, setDraft] = useState<AdminActivity>(() => createBlankActivityDraft());
+  const [selectedActivityId, setSelectedActivityId] = useState<number | null>(null);
+  const [status, setStatus] = useState("正在加载活动...");
+  const [saving, setSaving] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+
+  const selectedActivity = activities.find((activity) => activity.id === selectedActivityId) ?? null;
+  const isNew = draft.id < 0;
+
+  async function loadActivities() {
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/activities`, {
+        headers: getAdminRequestHeaders(),
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error("Activity API unavailable");
+      }
+      const nextActivities = ((await response.json()) as ApiAdminActivity[]).map(activityFromApi);
+      setActivities(nextActivities);
+      setSelectedActivityId((currentId) =>
+        currentId && nextActivities.some((activity) => activity.id === currentId)
+          ? currentId
+          : nextActivities[0]?.id ?? null
+      );
+      if (!nextActivities.length) {
+        setDraft(createBlankActivityDraft());
+      }
+      setStatus(nextActivities.length ? "已从数据库加载活动。" : "还没有活动，可以先新增一个。");
+    } catch {
+      setActivities([]);
+      setDraft(createBlankActivityDraft());
+      setSelectedActivityId(null);
+      setStatus("活动 API 暂时不可用，请确认 FastAPI 服务正在运行。");
+    }
+  }
+
+  useEffect(() => {
+    void loadActivities();
+  }, []);
+
+  useEffect(() => {
+    if (selectedActivity) {
+      setDraft(selectedActivity);
+    }
+  }, [selectedActivity]);
+
+  function addActivity() {
+    const nextDraft = createBlankActivityDraft();
+    setSelectedActivityId(null);
+    setDraft(nextDraft);
+    setStatus("正在创建新的活动。");
+  }
+
+  function updateDraft<K extends keyof AdminActivity>(field: K, value: AdminActivity[K]) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  async function readActivityError(response: Response) {
+    const payload = (await response.json().catch(() => null)) as { detail?: unknown } | null;
+    return typeof payload?.detail === "string" ? payload.detail : `服务器返回 ${response.status}`;
+  }
+
+  async function saveActivity() {
+    if (!draft.title.trim()) {
+      setStatus("请填写活动主题。");
+      return;
+    }
+    if (!draft.description.trim()) {
+      setStatus("请填写活动详细介绍。");
+      return;
+    }
+    if (!draft.startsAt) {
+      setStatus("请选择活动开始时间。");
+      return;
+    }
+    setSaving(true);
+    setStatus("正在保存活动...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/activities${isNew ? "" : `/${draft.id}`}`, {
+        method: isNew ? "POST" : "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(activityToApiPayload(draft))
+      });
+      if (!response.ok) {
+        throw new Error(await readActivityError(response));
+      }
+      const savedActivity = activityFromApi((await response.json()) as ApiAdminActivity);
+      setActivities((currentActivities) => {
+        if (isNew) {
+          return [savedActivity, ...currentActivities];
+        }
+        return currentActivities.map((activity) => (activity.id === savedActivity.id ? savedActivity : activity));
+      });
+      setSelectedActivityId(savedActivity.id);
+      setDraft(savedActivity);
+      setStatus("活动已保存。");
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "活动保存失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function deleteActivity() {
+    if (isNew) {
+      setDraft(createBlankActivityDraft());
+      setStatus("已取消新活动草稿。");
+      return;
+    }
+    const confirmed = await confirmDelete({
+      title: "删除活动",
+      itemName: draft.title,
+      description: "删除后，该活动和报名记录都会从后台移除。请确认是否继续。"
+    });
+    if (!confirmed) return;
+
+    setDeleting(true);
+    setStatus("正在删除活动...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/activities/${draft.id}`, {
+        method: "DELETE",
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(`服务器返回 ${response.status}`);
+      }
+      const nextActivities = activities.filter((activity) => activity.id !== draft.id);
+      setActivities(nextActivities);
+      const nextActivity = nextActivities[0] ?? null;
+      setSelectedActivityId(nextActivity?.id ?? null);
+      setDraft(nextActivity ?? createBlankActivityDraft());
+      setStatus("活动已删除。");
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "活动删除失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setDeleting(false);
+    }
+  }
+
+  return (
+    <div className="grid gap-5 xl:grid-cols-[24rem_1fr]">
+      {deleteConfirmDialog}
+      <section className="panel rounded-lg p-5">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">活动列表</h2>
+            <p className="mt-1 text-sm text-slate-500">{status}</p>
+          </div>
+          <button
+            type="button"
+            onClick={addActivity}
+            className="focus-ring inline-flex h-11 shrink-0 items-center justify-center gap-2 rounded-lg bg-coral px-4 text-sm font-bold text-white shadow-sm hover:bg-[#f25f54]"
+          >
+            <Plus size={16} /> 新增活动
+          </button>
+        </div>
+
+        <div className="mt-5 grid gap-3">
+          {activities.map((activity) => (
+            <button
+              key={activity.id}
+              type="button"
+              onClick={() => setSelectedActivityId(activity.id)}
+              className={`focus-ring rounded-lg border p-4 text-left transition ${
+                selectedActivityId === activity.id
+                  ? "border-mint bg-mint/10"
+                  : "border-slate-200 bg-white hover:border-mint/50"
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate font-bold text-ink">{activity.title}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{formatAdminDateTime(activity.startsAt)}</p>
+                  <p className="mt-2 text-xs font-bold text-slate-400">
+                    {activity.mode === "online" ? "线上活动" : "线下活动"} · {activity.registrationsCount} 人报名
+                  </p>
+                </div>
+                <span
+                  className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
+                    activity.registrationStatus === "open"
+                      ? "bg-mint/12 text-mint"
+                      : "bg-slate-100 text-slate-500"
+                  }`}
+                >
+                  {activity.registrationStatus === "open" ? "开放" : "关闭"}
+                </span>
+              </div>
+            </button>
+          ))}
+          {!activities.length ? (
+            <div className="rounded-lg border border-dashed border-slate-200 p-6 text-center text-sm font-semibold text-slate-500">
+              暂时还没有活动。
+            </div>
+          ) : null}
+        </div>
+      </section>
+
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-bold text-ink">活动编辑</h2>
+            <p className="mt-1 text-sm text-slate-500">发布线上或线下活动，并在这里查看报名学生。</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={deleteActivity}
+              disabled={deleting}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/30 px-4 py-2 text-sm font-bold text-coral hover:bg-coral/10 disabled:opacity-60"
+            >
+              <Trash2 size={16} /> 删除活动
+            </button>
+            <button
+              type="button"
+              onClick={saveActivity}
+              disabled={saving}
+              className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:bg-slate-300"
+            >
+              <Save size={16} /> 保存活动
+            </button>
+          </div>
+        </div>
+
+        <div className="mt-5 grid gap-4 lg:grid-cols-2">
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            活动主题
+            <input
+              value={draft.title}
+              onChange={(event) => updateDraft("title", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="例如：欧洲中文写作公开课"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            适合学生人群
+            <input
+              value={draft.audience}
+              onChange={(event) => updateDraft("audience", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="例如：7-12 岁中文学习者"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            开始时间
+            <input
+              type="datetime-local"
+              value={draft.startsAt}
+              onChange={(event) => updateDraft("startsAt", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            结束时间
+            <input
+              type="datetime-local"
+              value={draft.endsAt}
+              onChange={(event) => updateDraft("endsAt", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            活动类型
+            <select
+              value={draft.mode}
+              onChange={(event) => updateDraft("mode", event.target.value as ActivityMode)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            >
+              <option value="online">线上活动</option>
+              <option value="offline">线下活动</option>
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            活动状态
+            <select
+              value={draft.registrationStatus}
+              onChange={(event) => updateDraft("registrationStatus", event.target.value as ActivityRegistrationStatus)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            >
+              <option value="open">开放注册</option>
+              <option value="closed">关闭注册</option>
+            </select>
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            {draft.mode === "online" ? "在线会议链接" : "线下活动地点"}
+            <input
+              value={draft.mode === "online" ? draft.meetingUrl : draft.location}
+              onChange={(event) =>
+                draft.mode === "online"
+                  ? updateDraft("meetingUrl", event.target.value)
+                  : updateDraft("location", event.target.value)
+              }
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder={draft.mode === "online" ? "https://..." : "城市、地址或教室"}
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            人数上限
+            <input
+              type="number"
+              min={1}
+              value={draft.capacity}
+              onChange={(event) => updateDraft("capacity", event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+              placeholder="不填写表示不限人数"
+            />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700 lg:col-span-2">
+            活动详细介绍
+            <textarea
+              value={draft.description}
+              onChange={(event) => updateDraft("description", event.target.value)}
+              className="focus-ring min-h-36 rounded-lg border border-slate-200 px-3 py-3 text-sm leading-6"
+              placeholder="介绍活动主题、适合学生、流程安排和准备事项。"
+            />
+          </label>
+        </div>
+
+        <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h3 className="font-bold text-ink">报名学生</h3>
+              <p className="mt-1 text-sm text-slate-500">{draft.registrationsCount} 人已报名</p>
+            </div>
+          </div>
+          <div className="mt-4 grid gap-3">
+            {draft.registrations.map((registration) => (
+              <div
+                key={registration.id}
+                className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-[1fr_1fr_auto]"
+              >
+                <div>
+                  <p className="font-bold text-ink">{registration.studentName}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">{registration.studentEmail}</p>
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-slate-500">{registration.phone || "未填写电话"}</p>
+                  {registration.note ? <p className="mt-1 text-sm text-slate-500">{registration.note}</p> : null}
+                </div>
+                <p className="text-sm font-semibold text-slate-400">{formatAdminDateTime(registration.createdAt)}</p>
+              </div>
+            ))}
+            {!draft.registrations.length ? (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-white p-5 text-center text-sm font-semibold text-slate-500">
+                暂时还没有学生报名。
+              </div>
+            ) : null}
+          </div>
         </div>
       </section>
     </div>

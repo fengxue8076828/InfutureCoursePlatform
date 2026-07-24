@@ -6,6 +6,11 @@ export type Institution = {
   category: string;
   region: string;
   description: string;
+  website?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  address?: string | null;
+  contact_person?: string | null;
 };
 
 export type CourseCategory = {
@@ -32,7 +37,7 @@ export type Teacher = {
 export type LessonItem = {
   id: number;
   title: string;
-  item_type: "video" | "handout" | "exercise" | "quiz";
+  item_type: "video" | "handout" | "exercise" | "quiz" | "review";
   content_url?: string | null;
   body: Record<string, unknown>;
   required_minutes: number;
@@ -62,9 +67,21 @@ export type Course = {
   tags?: { items: string[] };
   is_hot: boolean;
   students_count: number;
+  rating_average?: number;
+  rating_count?: number;
   institution: Institution;
   teacher: Teacher;
   chapters?: Chapter[];
+};
+
+export type CourseReview = {
+  id?: number | null;
+  course_id: number;
+  enrollment_id?: number | null;
+  rating?: number | null;
+  comment: string;
+  created_at?: string | null;
+  updated_at?: string | null;
 };
 
 export type BlogPost = {
@@ -108,6 +125,11 @@ export type StudentLeaderboardEntry = {
   avatar_url?: string | null;
   total_points: number;
   weekly_points: number;
+  course_points?: number;
+  community_points?: number;
+  competition_points?: number;
+  follower_points?: number;
+  followers_count?: number;
   completed_courses: number;
   active_courses: number;
   average_progress: number;
@@ -117,6 +139,10 @@ export type StudentLeaderboardEntry = {
 export type StudentLeaderboard = {
   total_points: StudentLeaderboardEntry[];
   rising: StudentLeaderboardEntry[];
+  course_points?: StudentLeaderboardEntry[];
+  community_points?: StudentLeaderboardEntry[];
+  competition_points?: StudentLeaderboardEntry[];
+  followers?: StudentLeaderboardEntry[];
 };
 
 export type StudentPointEvent = {
@@ -137,6 +163,7 @@ export type StudentCoursePointBreakdown = {
   progress_points: number;
   activity_points: number;
   assessment_points: number;
+  note_points?: number;
   completion_bonus: number;
   total_points: number;
 };
@@ -172,6 +199,16 @@ export type StudentLearningNote = {
   updated_at?: string | null;
 };
 
+export type StudentPostComment = {
+  id: number;
+  post_id: number;
+  user_id: number;
+  student_name: string;
+  avatar_url?: string | null;
+  body: string;
+  created_at: string;
+};
+
 export type StudentPost = {
   id: number;
   user_id: number;
@@ -181,6 +218,10 @@ export type StudentPost = {
   image_urls?: string[];
   course_id?: number | null;
   course_title?: string | null;
+  likes_count?: number;
+  liked_by_me?: boolean;
+  comments_count?: number;
+  comments?: StudentPostComment[];
   created_at: string;
 };
 
@@ -196,6 +237,13 @@ export type StudentSocialHome = {
   posts: StudentPost[];
   suggested_students: StudentProfileSummary[];
   following_ids: number[];
+  following_students?: StudentProfileSummary[];
+  follower_students?: StudentProfileSummary[];
+  following_count?: number;
+  followers_count?: number;
+  questions?: CommunityQuestion[];
+  answered_questions?: CommunityQuestion[];
+  notes?: CommunityNoteShare[];
 };
 
 export type StudentPublicProfile = {
@@ -203,6 +251,13 @@ export type StudentPublicProfile = {
   active_courses: Enrollment[];
   completed_courses: Enrollment[];
   posts: StudentPost[];
+  questions?: CommunityQuestion[];
+  answered_questions?: CommunityQuestion[];
+  notes?: CommunityNoteShare[];
+  following_students?: StudentProfileSummary[];
+  follower_students?: StudentProfileSummary[];
+  following_count?: number;
+  followers_count?: number;
   is_following: boolean;
 };
 export type CommunityReferenceChapter = {
@@ -232,6 +287,7 @@ export type CommunityAnswer = {
   user_id: number;
   student_name: string;
   avatar_url?: string | null;
+  student_level?: StudentPointLevel | null;
   body: string;
   likes_count: number;
   liked_by_me: boolean;
@@ -254,6 +310,8 @@ export type CommunityQuestion = {
   linked_question_title?: string | null;
   tags: string[];
   is_resolved: boolean;
+  likes_count?: number;
+  liked_by_me?: boolean;
   answers_count: number;
   answers: CommunityAnswer[];
   created_at: string;
@@ -264,6 +322,7 @@ export type CommunityNoteShare = {
   user_id: number;
   student_name: string;
   avatar_url?: string | null;
+  chapter_note_id?: number | null;
   title: string;
   content: string;
   course_id?: number | null;
@@ -340,6 +399,70 @@ export type Question = {
   requires_manual_grading: boolean;
   options: QuestionOption[];
   media_assets: QuestionMedia[];
+};
+
+export type ExamPaperKind = "mock_exam" | "competition";
+export type ExamPaperSourceType = "mock" | "past_paper";
+export type ExamPaperStatus = "draft" | "published" | "archived";
+export type ExamSubmissionStatus = "submitted" | "pending_manual" | "graded";
+
+export type ExamPaperQuestion = {
+  id: number;
+  position: number;
+  points: number;
+  question: Question;
+};
+
+export type ExamPaperSubmission = {
+  id: number;
+  paper_id: number;
+  student_name: string;
+  student_email: string;
+  answers: Record<string, unknown>;
+  score: number;
+  total_score: number;
+  status: ExamSubmissionStatus;
+  started_at?: string | null;
+  submitted_at: string;
+};
+
+export type CompetitionRegistration = {
+  id: number;
+  paper_id: number;
+  student_name: string;
+  student_email: string;
+  phone?: string | null;
+  note?: string | null;
+  user_id?: number | null;
+  created_at: string;
+};
+
+export type ExamPaper = {
+  id: number;
+  institution_id: number;
+  slug: string;
+  title: string;
+  description: string;
+  cover_url: string;
+  instructions: string;
+  audience: string;
+  kind: ExamPaperKind;
+  source_type: ExamPaperSourceType;
+  past_year?: number | null;
+  duration_minutes: number;
+  status: ExamPaperStatus;
+  starts_at?: string | null;
+  ends_at?: string | null;
+  institution: Institution;
+  category?: CourseCategory | null;
+  questions_count: number;
+  registrations_count: number;
+  submissions_count?: number;
+  questions: ExamPaperQuestion[];
+  registrations?: CompetitionRegistration[];
+  submissions?: ExamPaperSubmission[];
+  created_at?: string;
+  updated_at?: string;
 };
 
 

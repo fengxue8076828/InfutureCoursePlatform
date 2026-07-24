@@ -3,7 +3,21 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
 
-from app.models import CourseStatus, LessonItemType, QuestionStatus, QuestionType, SubmissionStatus, UserRole
+from app.models import (
+    ActivityMode,
+    ActivityRegistrationStatus,
+    CourseStatus,
+    ExamPaperKind,
+    ExamPaperSourceType,
+    ExamPaperStatus,
+    ExamSubmissionStatus,
+    LessonItemType,
+    LearningPathStatus,
+    QuestionStatus,
+    QuestionType,
+    SubmissionStatus,
+    UserRole,
+)
 
 
 class OrmModel(BaseModel):
@@ -35,6 +49,96 @@ class InstitutionUpdate(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     contact_person: str | None = Field(default=None, max_length=120)
     description: str = Field(min_length=10)
+
+
+class ActivityRegistrationOut(OrmModel):
+    id: int
+    activity_id: int
+    student_name: str
+    student_email: EmailStr
+    phone: str | None = None
+    note: str | None = None
+    created_at: datetime
+
+
+class ActivityBase(BaseModel):
+    title: str = Field(min_length=1, max_length=220)
+    description: str = Field(min_length=1)
+    starts_at: datetime
+    ends_at: datetime | None = None
+    mode: ActivityMode = ActivityMode.online
+    meeting_url: str | None = Field(default=None, max_length=1000)
+    location: str | None = Field(default=None, max_length=500)
+    audience: str | None = Field(default=None, max_length=300)
+    registration_status: ActivityRegistrationStatus = ActivityRegistrationStatus.open
+    capacity: int | None = Field(default=None, ge=1)
+
+
+class ActivityCreate(ActivityBase):
+    pass
+
+
+class ActivityUpdate(ActivityBase):
+    pass
+
+
+class AdminActivityOut(OrmModel):
+    id: int
+    institution_id: int
+    institution_name: str
+    title: str
+    description: str
+    starts_at: datetime
+    ends_at: datetime | None = None
+    mode: ActivityMode
+    meeting_url: str | None = None
+    location: str | None = None
+    audience: str | None = None
+    registration_status: ActivityRegistrationStatus
+    capacity: int | None = None
+    registrations_count: int = 0
+    registrations: list[ActivityRegistrationOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PublicActivityOut(BaseModel):
+    id: int
+    institution_id: int
+    institution_name: str
+    institution_logo_url: str | None = None
+    title: str
+    description: str
+    starts_at: datetime
+    ends_at: datetime | None = None
+    mode: ActivityMode
+    meeting_url: str | None = None
+    location: str | None = None
+    audience: str | None = None
+    registration_status: ActivityRegistrationStatus
+    capacity: int | None = None
+    registrations_count: int = 0
+
+
+class PublicActivityHomeOut(BaseModel):
+    latest: list[PublicActivityOut]
+    popular: list[PublicActivityOut]
+    activities: list[PublicActivityOut]
+
+
+class PublicActivityRegistrationCreate(BaseModel):
+    student_name: str = Field(min_length=1, max_length=120)
+    student_email: EmailStr
+    phone: str | None = Field(default=None, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PublicActivityRegistrationOut(OrmModel):
+    id: int
+    activity_id: int
+    student_name: str
+    student_email: EmailStr
+    created_at: datetime
 
 
 class CourseCategoryOut(OrmModel):
@@ -85,6 +189,8 @@ class CourseCardOut(OrmModel):
     is_hot: bool
     students_count: int
     status: CourseStatus
+    rating_average: float = 0.0
+    rating_count: int = 0
     institution: InstitutionOut
     teacher: TeacherOut
 
@@ -115,6 +221,46 @@ class CourseDetailOut(CourseCardOut):
     chapters: list[ChapterOut] = []
 
 
+class LearningPathCourseOut(BaseModel):
+    id: int
+    position: int
+    course: CourseCardOut
+
+
+class LearningPathOut(BaseModel):
+    id: int
+    slug: str
+    title: str
+    subtitle: str
+    description: str
+    cover_url: str
+    intro_video_url: str
+    audience: str
+    level: str
+    status: LearningPathStatus
+    institution: InstitutionOut
+    course_count: int
+    courses: list[LearningPathCourseOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class LearningPathCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=220)
+    subtitle: str = Field(default="", max_length=320)
+    description: str = ""
+    cover_url: str = Field(default="", max_length=500)
+    intro_video_url: str = Field(default="", max_length=500)
+    audience: str = Field(default="", max_length=260)
+    level: str = Field(default="", max_length=80)
+    status: LearningPathStatus = LearningPathStatus.draft
+    course_ids: list[int] = Field(default_factory=list)
+
+
+class LearningPathUpdate(LearningPathCreate):
+    pass
+
+
 class BlogPostOut(OrmModel):
     id: int
     slug: str
@@ -142,6 +288,11 @@ class StudentLeaderboardEntry(BaseModel):
     avatar_url: str | None = None
     total_points: int
     weekly_points: int
+    course_points: int = 0
+    community_points: int = 0
+    competition_points: int = 0
+    follower_points: int = 0
+    followers_count: int = 0
     completed_courses: int
     active_courses: int
     average_progress: float
@@ -151,6 +302,10 @@ class StudentLeaderboardEntry(BaseModel):
 class StudentLeaderboardOut(BaseModel):
     total_points: list[StudentLeaderboardEntry]
     rising: list[StudentLeaderboardEntry]
+    course_points: list[StudentLeaderboardEntry] = Field(default_factory=list)
+    community_points: list[StudentLeaderboardEntry] = Field(default_factory=list)
+    competition_points: list[StudentLeaderboardEntry] = Field(default_factory=list)
+    followers: list[StudentLeaderboardEntry] = Field(default_factory=list)
 
 
 class StudentPointEvent(BaseModel):
@@ -171,6 +326,7 @@ class StudentCoursePointBreakdown(BaseModel):
     progress_points: int
     activity_points: int
     assessment_points: int
+    note_points: int = 0
     completion_bonus: int
     total_points: int
 
@@ -324,6 +480,23 @@ class DashboardOut(BaseModel):
     weekly_minutes: int
     next_lesson_title: str
 
+
+class CourseReviewIn(BaseModel):
+    enrollment_id: int | None = None
+    rating: int = Field(ge=1, le=5)
+    comment: str = Field(default="", max_length=2000)
+
+
+class CourseReviewOut(BaseModel):
+    id: int | None = None
+    course_id: int
+    enrollment_id: int | None = None
+    rating: int | None = None
+    comment: str = ""
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+
 class StudentProfileSummaryOut(BaseModel):
     id: int
     email: EmailStr | None = None
@@ -354,6 +527,20 @@ class StudentPostCreate(BaseModel):
     image_urls: list[str] = Field(default_factory=list, max_length=9)
 
 
+class StudentPostCommentCreate(BaseModel):
+    body: str = Field(min_length=1, max_length=800)
+
+
+class StudentPostCommentOut(BaseModel):
+    id: int
+    post_id: int
+    user_id: int
+    student_name: str
+    avatar_url: str | None = None
+    body: str
+    created_at: datetime
+
+
 class StudentPostOut(BaseModel):
     id: int
     user_id: int
@@ -363,6 +550,10 @@ class StudentPostOut(BaseModel):
     image_urls: list[str] = Field(default_factory=list)
     course_id: int | None = None
     course_title: str | None = None
+    likes_count: int = 0
+    liked_by_me: bool = False
+    comments_count: int = 0
+    comments: list[StudentPostCommentOut] = Field(default_factory=list)
     created_at: datetime
 
 
@@ -378,6 +569,13 @@ class StudentSocialHomeOut(BaseModel):
     posts: list[StudentPostOut]
     suggested_students: list[StudentProfileSummaryOut]
     following_ids: list[int]
+    following_students: list[StudentProfileSummaryOut] = []
+    follower_students: list[StudentProfileSummaryOut] = []
+    following_count: int = 0
+    followers_count: int = 0
+    questions: list["CommunityQuestionOut"] = []
+    answered_questions: list["CommunityQuestionOut"] = []
+    notes: list["CommunityNoteShareOut"] = []
 
 
 class StudentPublicProfileOut(BaseModel):
@@ -385,6 +583,13 @@ class StudentPublicProfileOut(BaseModel):
     active_courses: list[EnrollmentOut]
     completed_courses: list[EnrollmentOut]
     posts: list[StudentPostOut]
+    questions: list["CommunityQuestionOut"] = []
+    answered_questions: list["CommunityQuestionOut"] = []
+    notes: list["CommunityNoteShareOut"] = []
+    following_students: list[StudentProfileSummaryOut] = []
+    follower_students: list[StudentProfileSummaryOut] = []
+    following_count: int = 0
+    followers_count: int = 0
     is_following: bool
 
 
@@ -440,6 +645,7 @@ class CommunityAnswerOut(BaseModel):
     user_id: int
     student_name: str
     avatar_url: str | None = None
+    student_level: StudentPointLevelOut | None = None
     body: str
     likes_count: int
     liked_by_me: bool = False
@@ -462,6 +668,8 @@ class CommunityQuestionOut(BaseModel):
     linked_question_title: str | None = None
     tags: list[str] = []
     is_resolved: bool
+    likes_count: int = 0
+    liked_by_me: bool = False
     answers_count: int
     answers: list[CommunityAnswerOut] = []
     created_at: datetime
@@ -472,6 +680,7 @@ class CommunityNoteShareOut(BaseModel):
     user_id: int
     student_name: str
     avatar_url: str | None = None
+    chapter_note_id: int | None = None
     title: str
     content: str
     course_id: int | None = None
@@ -503,6 +712,12 @@ class CommunityHomeOut(BaseModel):
     reference_questions: list[CommunityReferenceQuestionOut]
     recent_messages: list[CommunityMessageOut]
     community_points: int
+
+
+StudentSocialHomeOut.model_rebuild()
+StudentPublicProfileOut.model_rebuild()
+
+
 class CompleteItemIn(BaseModel):
     notes: str | None = None
     score: float | None = None
@@ -607,6 +822,168 @@ class StudentQuestionOut(OrmModel):
     institution: InstitutionOut | None = None
     options: list[StudentQuestionOptionOut] = []
     media_assets: list[QuestionMediaOut] = []
+
+
+class ExamPaperQuestionInput(BaseModel):
+    question_id: int
+    points_override: int | None = Field(default=None, ge=0)
+
+
+class ExamPaperBase(BaseModel):
+    title: str = Field(min_length=1, max_length=220)
+    description: str = ""
+    cover_url: str = Field(default="", max_length=500)
+    instructions: str = ""
+    audience: str = Field(default="", max_length=260)
+    kind: ExamPaperKind
+    source_type: ExamPaperSourceType = ExamPaperSourceType.mock
+    past_year: int | None = Field(default=None, ge=1900, le=2200)
+    duration_minutes: int = Field(default=60, ge=1, le=600)
+    status: ExamPaperStatus = ExamPaperStatus.draft
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    category_id: int | None = None
+
+
+class ExamPaperCreate(ExamPaperBase):
+    questions: list[ExamPaperQuestionInput] = Field(default_factory=list)
+
+
+class ExamPaperUpdate(ExamPaperCreate):
+    pass
+
+
+class ExamPaperQuestionOut(BaseModel):
+    id: int
+    position: int
+    points: int
+    question: QuestionOut
+
+
+class PublicExamPaperQuestionOut(BaseModel):
+    id: int
+    position: int
+    points: int
+    question: StudentQuestionOut
+
+
+class CompetitionRegistrationOut(OrmModel):
+    id: int
+    paper_id: int
+    student_name: str
+    student_email: EmailStr
+    phone: str | None = None
+    note: str | None = None
+    user_id: int | None = None
+    created_at: datetime
+
+
+class ExamPaperSubmissionOut(OrmModel):
+    id: int
+    paper_id: int
+    student_name: str
+    student_email: EmailStr
+    answers: dict[str, Any]
+    score: float
+    total_score: float
+    status: ExamSubmissionStatus
+    started_at: datetime | None = None
+    submitted_at: datetime
+
+
+class ExamPaperOut(BaseModel):
+    id: int
+    institution_id: int
+    slug: str
+    title: str
+    description: str
+    cover_url: str
+    instructions: str
+    audience: str
+    kind: ExamPaperKind
+    source_type: ExamPaperSourceType
+    past_year: int | None = None
+    duration_minutes: int
+    status: ExamPaperStatus
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    institution: InstitutionOut
+    category: CourseCategoryOut | None = None
+    questions_count: int = 0
+    registrations_count: int = 0
+    submissions_count: int = 0
+    questions: list[ExamPaperQuestionOut] = Field(default_factory=list)
+    registrations: list[CompetitionRegistrationOut] = Field(default_factory=list)
+    submissions: list[ExamPaperSubmissionOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class PublicExamPaperOut(BaseModel):
+    id: int
+    institution_id: int
+    slug: str
+    title: str
+    description: str
+    cover_url: str
+    instructions: str
+    audience: str
+    kind: ExamPaperKind
+    source_type: ExamPaperSourceType
+    past_year: int | None = None
+    duration_minutes: int
+    status: ExamPaperStatus
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    institution: InstitutionOut
+    category: CourseCategoryOut | None = None
+    questions_count: int = 0
+    registrations_count: int = 0
+    questions: list[PublicExamPaperQuestionOut] = Field(default_factory=list)
+
+
+class PublicInstitutionCardOut(BaseModel):
+    institution: InstitutionOut
+    rating: float
+    students_count: int
+    courses_count: int
+    teachers_count: int
+    resources_count: int
+    created_at: datetime
+
+
+class PublicInstitutionDirectoryOut(BaseModel):
+    institutions: list[PublicInstitutionCardOut]
+    top_rated: list[PublicInstitutionCardOut]
+    newest: list[PublicInstitutionCardOut]
+    most_students: list[PublicInstitutionCardOut]
+    categories: list[str]
+
+
+class PublicInstitutionProfileOut(BaseModel):
+    summary: PublicInstitutionCardOut
+    categories: list[CourseCategoryOut]
+    teachers: list[TeacherOut]
+    courses: list[CourseCardOut]
+    learning_paths: list[LearningPathOut]
+    activities: list[PublicActivityOut]
+    mock_exams: list[PublicExamPaperOut]
+    competitions: list[PublicExamPaperOut]
+    question_count: int
+
+
+class PublicCompetitionRegistrationCreate(BaseModel):
+    student_name: str = Field(min_length=1, max_length=120)
+    student_email: EmailStr
+    phone: str | None = Field(default=None, max_length=80)
+    note: str | None = Field(default=None, max_length=500)
+
+
+class PublicExamSubmissionCreate(BaseModel):
+    student_name: str = Field(min_length=1, max_length=120)
+    student_email: EmailStr
+    answers: dict[str, Any] = Field(default_factory=dict)
+    started_at: datetime | None = None
 
 
 class SubmissionIn(BaseModel):

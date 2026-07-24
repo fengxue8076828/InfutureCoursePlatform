@@ -1,16 +1,19 @@
 "use client";
 
-import { ArrowRight, Award, BookOpenCheck, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
+import { ArrowRight, Award, BookOpenCheck, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, Share2, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
 import { Footer } from "@/components/Footer";
 import { Header } from "@/components/Header";
 import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
+import { StudentFollowNetworkPanel } from "@/components/StudentFollowNetworkPanel";
+import { StudentProfileActivityTabs } from "@/components/StudentProfileActivityTabs";
 import { getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
-import type { CommunityHome, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
+import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";
 
 type LearningTab = "home" | "classroom" | "questions" | "notes";
 type QuestionDraft = {
@@ -81,6 +84,10 @@ const ui = {
   notesSubtitle: "\u6309\u8bfe\u7a0b\u6c47\u603b\u6bcf\u4e00\u7ae0\u7684\u5b66\u4e60\u7b14\u8bb0\uff0c\u590d\u4e60\u65f6\u53ef\u4ee5\u5feb\u901f\u56de\u770b\u3002",
   noNotes: "\u8fd8\u6ca1\u6709\u7b14\u8bb0",
   noNotesText: "\u5728\u4e0a\u8bfe\u754c\u9762\u5199\u4e0b\u7ae0\u8282\u7b14\u8bb0\u540e\uff0c\u8fd9\u91cc\u4f1a\u6309\u8bfe\u7a0b\u6c47\u603b\u663e\u793a\u3002",
+  shareNote: "\u5206\u4eab\u5230\u793e\u533a",
+  sharingNote: "\u5206\u4eab\u4e2d...",
+  noteShared: "\u5df2\u5206\u4eab",
+  noteShareFailed: "\u7b14\u8bb0\u5206\u4eab\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002",
   chapter: "\u7ae0",
   updatedAt: "\u66f4\u65b0\u4e8e",
   notesLoadFailed: "\u7b14\u8bb0\u8bfb\u53d6\u5931\u8d25\u3002",
@@ -113,6 +120,16 @@ function initials(name?: string | null) {
 
 function splitTags(value: string) {
   return value.split(/[，,\s]+/).map((tag) => tag.trim()).filter(Boolean).slice(0, 6);
+}
+
+function htmlToPlainText(html: string) {
+  if (!html.trim()) return "";
+  if (typeof window === "undefined") {
+    return html.replace(/<[^>]*>/g, " ").replace(/\s+/g, " ").trim();
+  }
+  const container = window.document.createElement("div");
+  container.innerHTML = html;
+  return (container.textContent ?? container.innerText ?? "").replace(/\s+/g, " ").trim();
 }
 
 function shortQuestionTitle(prompt: string) {
@@ -148,6 +165,28 @@ function mergeStudentPosts(first: StudentPost[], second: StudentPost[]) {
     if (seen.has(post.id)) continue;
     seen.add(post.id);
     merged.push(post);
+  }
+  return merged.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
+function mergeCommunityQuestions(first: CommunityQuestion[], second: CommunityQuestion[]) {
+  const seen = new Set<number>();
+  const merged: CommunityQuestion[] = [];
+  for (const question of [...first, ...second]) {
+    if (seen.has(question.id)) continue;
+    seen.add(question.id);
+    merged.push(question);
+  }
+  return merged.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
+}
+
+function mergeCommunityNotes(first: CommunityNoteShare[], second: CommunityNoteShare[]) {
+  const seen = new Set<number>();
+  const merged: CommunityNoteShare[] = [];
+  for (const note of [...first, ...second]) {
+    if (seen.has(note.id)) continue;
+    seen.add(note.id);
+    merged.push(note);
   }
   return merged.sort((left, right) => new Date(right.created_at).getTime() - new Date(left.created_at).getTime());
 }
@@ -259,6 +298,33 @@ export function StudentLearnPage() {
     return () => { ignore = true; };
   }, [studentSession]);
 
+  useEffect(() => {
+    if (!studentSession) return;
+
+    async function reloadNotes() {
+      setNotesStatus(ui.notesSubtitle);
+      try {
+        const response = await fetch(`${API_BASE_URL}/learn/me/notes?ts=${Date.now()}`, {
+          headers: getStudentRequestHeaders(),
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          setNotesStatus(ui.notesLoadFailed);
+          return;
+        }
+        setNotes((await response.json()) as StudentLearningNote[]);
+      } catch {
+        setNotesStatus(ui.notesLoadFailed);
+      }
+    }
+
+    const handleNotesUpdated = () => {
+      void reloadNotes();
+    };
+    window.addEventListener(STUDENT_NOTES_UPDATED_EVENT, handleNotesUpdated);
+    return () => window.removeEventListener(STUDENT_NOTES_UPDATED_EVENT, handleNotesUpdated);
+  }, [studentSession]);
+
   const visibleEnrollments = studentSession ? enrollments : [];
   const visibleNotes = studentSession ? notes : [];
   const visibleSocialHome = studentSession ? socialHome : null;
@@ -267,6 +333,10 @@ export function StudentLearnPage() {
 
   function addPost(post: StudentPost) {
     setSocialHome((current) => current ? { ...current, posts: mergeStudentPosts([post], current.posts) } : current);
+  }
+
+  function addSharedNote(note: CommunityNoteShare) {
+    setSocialHome((current) => current ? { ...current, notes: mergeCommunityNotes([note], current.notes ?? []) } : current);
   }
 
   function updateFollowing(studentId: number, following: boolean) {
@@ -324,7 +394,7 @@ export function StudentLearnPage() {
           ) : activeTab === "questions" ? (
             <section className="panel rounded-lg p-5"><SectionHeader eyebrow={ui.questionBank} title={ui.questionBank} description="" /><SavedQuestionBankPanel studentSession={studentSession} /></section>
           ) : (
-            <NotesPanel notes={visibleNotes} status={notesStatus} isLoading={isLoading} />
+            <NotesPanel notes={visibleNotes} status={notesStatus} isLoading={isLoading} sharedNotes={visibleSocialHome?.notes ?? []} onNoteShared={addSharedNote} />
           )}
         </div>
       </main>
@@ -458,6 +528,27 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
   const activeCourses = socialHome?.active_courses ?? enrollments.filter((item) => item.status === "active");
   const completedCourses = socialHome?.completed_courses ?? enrollments.filter((item) => item.status === "completed");
   const visiblePosts = useMemo(() => mergeStudentPosts(localPosts, socialHome?.posts ?? []), [localPosts, socialHome?.posts]);
+  const profileQuestions = useMemo(
+    () => mergeCommunityQuestions(
+      (communityHome?.questions ?? []).filter((question) => question.user_id === studentSession.id),
+      socialHome?.questions ?? []
+    ),
+    [communityHome?.questions, socialHome?.questions, studentSession.id]
+  );
+  const answeredQuestions = useMemo(
+    () => mergeCommunityQuestions(
+      (communityHome?.questions ?? []).filter((question) => question.answers.some((answer) => answer.user_id === studentSession.id)),
+      socialHome?.answered_questions ?? []
+    ),
+    [communityHome?.questions, socialHome?.answered_questions, studentSession.id]
+  );
+  const sharedNotes = useMemo(
+    () => mergeCommunityNotes(
+      (communityHome?.notes ?? []).filter((note) => note.user_id === studentSession.id),
+      socialHome?.notes ?? []
+    ),
+    [communityHome?.notes, socialHome?.notes, studentSession.id]
+  );
   const referenceCourses = communityHome?.my_courses ?? coursesFromEnrollments(enrollments);
   const selectedQuestionCourse = referenceCourses.find((course) => course.id === Number(questionDraft.courseId));
 
@@ -579,23 +670,156 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
     if (response.ok) { onFollowChange(studentId, !following); setSelectedStudent((current) => current && current.profile.id === studentId ? { ...current, is_following: !following } : current); }
   }
 
+  const postComposer = (
+    <div className="rounded-lg border border-coral/10 bg-coral/5 p-4">
+      <div className="mb-4 flex items-center gap-2">
+        <PenLine size={18} className="text-coral" />
+        <h3 className="text-lg font-black text-ink">{ui.shareThought}</h3>
+      </div>
+      <textarea
+        value={postDraft}
+        onChange={(event) => { setPostDraft(event.target.value); if (postStatus) setPostStatus(""); }}
+        className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white p-3 text-sm leading-7 outline-none"
+        placeholder={ui.postPlaceholder}
+      />
+      {postImages.length > 0 ? (
+        <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
+          {postImages.map((url, index) => (
+            <div key={`${url}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
+              <img src={url} alt={`post image ${index + 1}`} className="h-full w-full object-cover" />
+              <button
+                type="button"
+                onClick={() => setPostImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}
+                className="focus-ring absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-white/90 text-slate-600 opacity-0 shadow-sm transition group-hover:opacity-100"
+                aria-label="remove image"
+              >
+                <X size={15} />
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : null}
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <select value={postCourseId} onChange={(event) => setPostCourseId(event.target.value)} className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600">
+            <option value="">{ui.noCourseLink}</option>
+            {enrollments.map((enrollment) => <option key={enrollment.course.id} value={enrollment.course.id}>{enrollment.course.title}</option>)}
+          </select>
+          <input
+            ref={postImageInputRef}
+            type="file"
+            accept="image/*"
+            multiple
+            className="hidden"
+            onChange={(event) => void uploadPostImages(event.target.files)}
+          />
+          <button
+            type="button"
+            onClick={() => postImageInputRef.current?.click()}
+            disabled={isUploadingPostImages || postImages.length >= 9}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            {isUploadingPostImages ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
+            {isUploadingPostImages ? ui.uploadingImages : ui.addPostImages}
+          </button>
+        </div>
+        <button type="button" onClick={() => void createPost()} disabled={isPosting || isUploadingPostImages || !postDraft.trim()} className="focus-ring rounded-lg bg-coral px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isPosting ? ui.publishing : ui.publishPost}</button>
+      </div>
+      {postStatus ? <p className="mt-3 rounded-lg bg-white/80 px-3 py-2 text-sm font-bold text-slate-500">{postStatus}</p> : null}
+    </div>
+  );
+
+  const questionComposer = (
+    <div className="rounded-lg border border-mint/20 bg-mint/5 p-4">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <HelpCircle size={18} className="text-coral" />
+          <h3 className="text-lg font-black text-ink">贴出问题</h3>
+        </div>
+        <Link href="/community" className="focus-ring rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-600 hover:text-mint">去社区看看</Link>
+      </div>
+      <div className="grid gap-3">
+        <input
+          value={questionDraft.title}
+          onChange={(event) => setQuestionDraft((current) => ({ ...current, title: event.target.value }))}
+          className="focus-ring w-full rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm font-bold outline-none"
+          placeholder="问题标题，例如：这道填空题为什么不能用过去式？"
+        />
+        <textarea
+          value={questionDraft.body}
+          onChange={(event) => setQuestionDraft((current) => ({ ...current, body: event.target.value }))}
+          className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white p-3 text-sm leading-7 outline-none"
+          placeholder="把你的问题、尝试过的思路、卡住的地方写清楚。"
+        />
+        <div className="grid gap-3 md:grid-cols-3">
+          <select
+            value={questionDraft.courseId}
+            onChange={(event) => setQuestionDraft((current) => ({ ...current, courseId: event.target.value, chapterId: "" }))}
+            className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600"
+          >
+            <option value="">不关联课程</option>
+            {referenceCourses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
+          </select>
+          <select
+            value={questionDraft.chapterId}
+            onChange={(event) => setQuestionDraft((current) => ({ ...current, chapterId: event.target.value }))}
+            disabled={!selectedQuestionCourse}
+            className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 disabled:bg-slate-100 disabled:text-slate-400"
+          >
+            <option value="">不关联章节</option>
+            {selectedQuestionCourse?.chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
+          </select>
+          <select
+            value={questionDraft.linkedQuestionId}
+            onChange={(event) => setQuestionDraft((current) => ({ ...current, linkedQuestionId: event.target.value }))}
+            className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600"
+          >
+            <option value="">不关联题目</option>
+            {(communityHome?.reference_questions ?? []).map((question) => <option key={question.id} value={question.id}>{shortQuestionTitle(question.prompt)}</option>)}
+          </select>
+        </div>
+        <input
+          value={questionDraft.tags}
+          onChange={(event) => setQuestionDraft((current) => ({ ...current, tags: event.target.value }))}
+          className="focus-ring w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none"
+          placeholder="标签，用逗号分隔，例如：A1, 写作, 语法"
+        />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="text-sm font-semibold text-slate-500">{questionStatus || "发布后会出现在学习社区的问题列表中。"}</p>
+          <button
+            type="button"
+            onClick={() => void createCommunityQuestion()}
+            disabled={isQuestionPosting || !questionDraft.title.trim() || !questionDraft.body.trim()}
+            className="focus-ring rounded-lg bg-ink px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+          >
+            {isQuestionPosting ? "发布中..." : "发布到社区"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+
   return (
     <section className="grid gap-6 lg:grid-cols-[1fr_22rem]">
       <div className="space-y-6">
         <div className="panel overflow-hidden rounded-lg">
-          <div className="h-32 bg-[radial-gradient(circle_at_20%_20%,rgba(123,201,174,0.45),transparent_28%),linear-gradient(135deg,#fff7ed,#e8f6f1)]" />
-          <div className="px-5 pb-5">
-            <div className="-mt-10 flex flex-wrap items-end justify-between gap-4">
-              <div className="flex items-end gap-4">
-                <Avatar name={displayName} url={avatarUrl} size="large" />
-                <div className="pb-1">
-                  <h2 className="text-2xl font-black text-ink">{displayName}</h2>
-                  <p className="mt-1 text-sm font-semibold text-slate-500">{profile?.region || ui.regionUnknown}</p>
+          <div className="h-36 bg-[radial-gradient(circle_at_15%_20%,rgba(113,197,170,0.35),transparent_28%),radial-gradient(circle_at_82%_10%,rgba(237,116,98,0.2),transparent_24%),linear-gradient(120deg,#effaf5,#fff8ee)]" />
+          <div className="px-6 pb-6">
+            <div className="-mt-12 flex flex-wrap items-end justify-between gap-4">
+              <div className="flex flex-wrap items-end gap-4">
+                <div className="-translate-y-5 md:-translate-y-6">
+                  <Avatar name={displayName} url={avatarUrl} size="large" />
+                </div>
+                <div className="-translate-y-5 md:-translate-y-6">
+                  <h2 className="text-3xl font-black leading-tight text-ink md:text-4xl">{displayName}</h2>
+                  <p className="mt-2 text-sm font-bold text-slate-500">{profile?.region || ui.regionUnknown}</p>
                 </div>
               </div>
-              <LevelPointsBadge level={socialHome?.level ?? null} totalPoints={socialHome?.total_points ?? 0} />
+              <div className="-translate-y-5 md:-translate-y-6">
+                <LevelPointsBadge level={socialHome?.level ?? null} totalPoints={socialHome?.total_points ?? 0} />
+              </div>
             </div>
-            <div className="mt-5 grid gap-2 text-center sm:grid-cols-3">
+            <div className="mt-6 grid gap-2 text-center sm:grid-cols-3">
               <ProfileMetric label={ui.activeCourses} value={activeCourses.length} />
               <ProfileMetric label={ui.completedCourses} value={completedCourses.length} />
               <ProfileMetric label={ui.weeklyPoints} value={`+${socialHome?.weekly_points ?? 0}`} />
@@ -603,135 +827,26 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
             <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile?.bio || ui.bioEmpty}</p>
           </div>
         </div>
-        <div className="panel rounded-lg p-5">
-          <div className="mb-4 flex items-center gap-2">
-            <PenLine size={18} className="text-coral" />
-            <h3 className="text-lg font-black text-ink">{ui.shareThought}</h3>
-          </div>
-          <textarea
-            value={postDraft}
-            onChange={(event) => { setPostDraft(event.target.value); if (postStatus) setPostStatus(""); }}
-            className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 outline-none"
-            placeholder={ui.postPlaceholder}
-          />
-          {postImages.length > 0 ? (
-            <div className="mt-3 grid grid-cols-3 gap-2 sm:grid-cols-4">
-              {postImages.map((url, index) => (
-                <div key={`${url}-${index}`} className="group relative aspect-square overflow-hidden rounded-lg border border-slate-200 bg-slate-50">
-                  <img src={url} alt={`post image ${index + 1}`} className="h-full w-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => setPostImages((current) => current.filter((_, imageIndex) => imageIndex !== index))}
-                    className="focus-ring absolute right-1.5 top-1.5 grid h-7 w-7 place-items-center rounded-full bg-white/90 text-slate-600 opacity-0 shadow-sm transition group-hover:opacity-100"
-                    aria-label="remove image"
-                  >
-                    <X size={15} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          ) : null}
-          <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex flex-wrap items-center gap-2">
-              <select value={postCourseId} onChange={(event) => setPostCourseId(event.target.value)} className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600">
-                <option value="">{ui.noCourseLink}</option>
-                {enrollments.map((enrollment) => <option key={enrollment.course.id} value={enrollment.course.id}>{enrollment.course.title}</option>)}
-              </select>
-              <input
-                ref={postImageInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(event) => void uploadPostImages(event.target.files)}
-              />
-              <button
-                type="button"
-                onClick={() => postImageInputRef.current?.click()}
-                disabled={isUploadingPostImages || postImages.length >= 9}
-                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-700 disabled:cursor-not-allowed disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                {isUploadingPostImages ? <Loader2 size={16} className="animate-spin" /> : <ImagePlus size={16} />}
-                {isUploadingPostImages ? ui.uploadingImages : ui.addPostImages}
-              </button>
-            </div>
-            <button type="button" onClick={() => void createPost()} disabled={isPosting || isUploadingPostImages || !postDraft.trim()} className="focus-ring rounded-lg bg-coral px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300">{isPosting ? ui.publishing : ui.publishPost}</button>
-          </div>
-          {postStatus ? <p className="mt-3 rounded-lg bg-slate-50 px-3 py-2 text-sm font-bold text-slate-500">{postStatus}</p> : null}
-        </div>
-        <PostFeed posts={visiblePosts} />
-        <div className="panel rounded-lg p-5">
-          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-center gap-2">
-              <HelpCircle size={18} className="text-coral" />
-              <h3 className="text-lg font-black text-ink">{"\u8d34\u51fa\u95ee\u9898"}</h3>
-            </div>
-            <Link href="/community" className="focus-ring rounded-lg bg-slate-50 px-3 py-2 text-xs font-black text-slate-600 hover:text-mint">{"\u53bb\u793e\u533a\u770b\u770b"}</Link>
-          </div>
-          <div className="grid gap-3">
-            <input
-              value={questionDraft.title}
-              onChange={(event) => setQuestionDraft((current) => ({ ...current, title: event.target.value }))}
-              className="focus-ring w-full rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm font-bold outline-none"
-              placeholder={"\u95ee\u9898\u6807\u9898\uff0c\u4f8b\u5982\uff1a\u8fd9\u9053\u586b\u7a7a\u9898\u4e3a\u4ec0\u4e48\u4e0d\u80fd\u7528\u8fc7\u53bb\u5f0f\uff1f"}
-            />
-            <textarea
-              value={questionDraft.body}
-              onChange={(event) => setQuestionDraft((current) => ({ ...current, body: event.target.value }))}
-              className="focus-ring min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm leading-7 outline-none"
-              placeholder={"\u628a\u4f60\u7684\u95ee\u9898\u3001\u5c1d\u8bd5\u8fc7\u7684\u601d\u8def\u3001\u5361\u4f4f\u7684\u5730\u65b9\u5199\u6e05\u695a\u3002"}
-            />
-            <div className="grid gap-3 md:grid-cols-3">
-              <select
-                value={questionDraft.courseId}
-                onChange={(event) => setQuestionDraft((current) => ({ ...current, courseId: event.target.value, chapterId: "" }))}
-                className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600"
-              >
-                <option value="">{"\u4e0d\u5173\u8054\u8bfe\u7a0b"}</option>
-                {referenceCourses.map((course) => <option key={course.id} value={course.id}>{course.title}</option>)}
-              </select>
-              <select
-                value={questionDraft.chapterId}
-                onChange={(event) => setQuestionDraft((current) => ({ ...current, chapterId: event.target.value }))}
-                disabled={!selectedQuestionCourse}
-                className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600 disabled:bg-slate-100 disabled:text-slate-400"
-              >
-                <option value="">{"\u4e0d\u5173\u8054\u7ae0\u8282"}</option>
-                {selectedQuestionCourse?.chapters.map((chapter) => <option key={chapter.id} value={chapter.id}>{chapter.title}</option>)}
-              </select>
-              <select
-                value={questionDraft.linkedQuestionId}
-                onChange={(event) => setQuestionDraft((current) => ({ ...current, linkedQuestionId: event.target.value }))}
-                className="focus-ring min-w-0 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-600"
-              >
-                <option value="">{"\u4e0d\u5173\u8054\u9898\u76ee"}</option>
-                {(communityHome?.reference_questions ?? []).map((question) => <option key={question.id} value={question.id}>{shortQuestionTitle(question.prompt)}</option>)}
-              </select>
-            </div>
-            <input
-              value={questionDraft.tags}
-              onChange={(event) => setQuestionDraft((current) => ({ ...current, tags: event.target.value }))}
-              className="focus-ring w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold outline-none"
-              placeholder={"\u6807\u7b7e\uff0c\u7528\u9017\u53f7\u5206\u9694\uff0c\u4f8b\u5982\uff1aA1, \u5199\u4f5c, \u8bed\u6cd5"}
-            />
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm font-semibold text-slate-500">{questionStatus || "\u53d1\u5e03\u540e\u4f1a\u51fa\u73b0\u5728\u5b66\u4e60\u793e\u533a\u7684\u95ee\u9898\u5217\u8868\u4e2d\u3002"}</p>
-              <button
-                type="button"
-                onClick={() => void createCommunityQuestion()}
-                disabled={isQuestionPosting || !questionDraft.title.trim() || !questionDraft.body.trim()}
-                className="focus-ring rounded-lg bg-ink px-5 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:bg-slate-300"
-              >
-                {isQuestionPosting ? "\u53d1\u5e03\u4e2d..." : "\u53d1\u5e03\u5230\u793e\u533a"}
-              </button>
-            </div>
-          </div>
-        </div>
+        <StudentProfileActivityTabs
+          studentId={studentSession.id}
+          posts={visiblePosts}
+          questions={profileQuestions}
+          answeredQuestions={answeredQuestions}
+          notes={sharedNotes}
+          postComposer={postComposer}
+          questionComposer={questionComposer}
+          showNotesTab={false}
+        />
         <CourseStrip title={ui.nowLearning} courses={activeCourses.map((item) => item.course)} emptyText={ui.noCourses} />
         <CourseStrip title={ui.recommendedCourses} courses={socialHome?.recommended_courses ?? []} emptyText={ui.emptyRecommended} />
         {selectedStudent || selectedStatus ? <PublicProfilePanel profile={selectedStudent} status={selectedStatus} onFollow={(id, following) => void toggleFollow(id, following)} /> : null}
       </div>
-      <aside className="space-y-6"><div className="panel rounded-lg p-5"><div className="flex items-center gap-2"><Award size={18} className="text-coral" /><h3 className="text-lg font-black text-ink">{ui.achievements}</h3></div><div className="mt-4 grid gap-2">{(socialHome?.achievements ?? []).map((achievement) => <div key={achievement} className="flex items-center gap-2 rounded-lg bg-mint/10 px-3 py-2 text-sm font-bold text-slate-700"><Star size={15} className="text-mint" />{achievement}</div>)}</div>{status ? <p className="mt-4 text-sm text-slate-500">{status}</p> : null}</div><div className="panel rounded-lg p-5"><div className="flex items-center gap-2"><Users size={18} className="text-coral" /><h3 className="text-lg font-black text-ink">{ui.learningCircle}</h3></div><div className="mt-4 grid gap-3">{(socialHome?.suggested_students ?? []).map((student) => { const following = Boolean(socialHome?.following_ids.includes(student.id)); return <div key={student.id} className="rounded-lg border border-slate-100 bg-slate-50 p-3"><div className="flex items-center gap-3"><Avatar name={student.full_name} url={student.avatar_url} /><div className="min-w-0 flex-1"><p className="truncate font-black text-ink">{student.full_name}</p><p className="truncate text-xs font-semibold text-slate-500">{student.region || ui.regionUnknown}</p></div></div><div className="mt-3 flex gap-2"><button type="button" onClick={() => void toggleFollow(student.id, following)} className="focus-ring inline-flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-white px-3 py-2 text-xs font-black text-slate-700 hover:text-mint"><UserPlus size={14} />{following ? ui.following : ui.follow}</button><button type="button" onClick={() => void loadPublicProfile(student.id)} className="focus-ring flex-1 rounded-lg bg-ink px-3 py-2 text-xs font-black text-white">{ui.viewProfile}</button></div></div>; })}</div></div></aside>
+      <StudentFollowNetworkPanel
+        followingStudents={socialHome?.following_students ?? []}
+        followerStudents={socialHome?.follower_students ?? []}
+        followingCount={socialHome?.following_count ?? socialHome?.following_ids.length ?? 0}
+        followersCount={socialHome?.followers_count ?? 0}
+      />
     </section>
   );
 }
@@ -749,7 +864,7 @@ function PostFeed({ posts }: { posts: StudentPost[] }) {
 }
 
 function PostCard({ post }: { post: StudentPost }) {
-  return <article className="rounded-lg border border-slate-100 bg-white p-4"><div className="flex items-center gap-3"><Avatar name={post.student_name} url={post.avatar_url} /><div><p className="font-black text-ink">{post.student_name}</p><p className="text-xs font-semibold text-slate-500">{formatDate(post.created_at)}{post.course_title ? ` 路 ${post.course_title}` : ""}</p></div></div><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{post.content}</p><div className="mt-3 flex gap-2 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><Heart size={14} />0</span><span className="inline-flex items-center gap-1"><MessageCircle size={14} />0</span></div></article>;
+  return <article className="rounded-lg border border-slate-100 bg-white p-4"><div className="flex items-center gap-3"><Avatar name={post.student_name} url={post.avatar_url} /><div><p className="font-black text-ink">{post.student_name}</p><p className="text-xs font-semibold text-slate-500">{formatDate(post.created_at)}{post.course_title ? ` · ${post.course_title}` : ""}</p></div></div><p className="mt-3 whitespace-pre-wrap text-sm leading-7 text-slate-700">{post.content}</p><div className="mt-3 flex gap-2 text-xs font-bold text-slate-500"><span className="inline-flex items-center gap-1"><Heart size={14} />0</span><span className="inline-flex items-center gap-1"><MessageCircle size={14} />0</span></div></article>;
 }
 
 function PostImageGrid({ images }: { images: string[] }) {
@@ -775,19 +890,178 @@ function PostImageGrid({ images }: { images: string[] }) {
 }
 
 function CourseStrip({ title, courses, emptyText }: { title: string; courses: Course[]; emptyText: string }) {
-  return <div className="panel rounded-lg p-5"><h3 className="text-lg font-black text-ink">{title}</h3>{courses.length === 0 ? <p className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">{emptyText}</p> : <div className="mt-4 grid gap-3 sm:grid-cols-2">{courses.slice(0, 4).map((course) => <Link key={course.id} href={`/courses/${course.slug}`} className="group flex gap-3 rounded-lg border border-slate-100 bg-white p-3 hover:border-mint/50">{course.hero_image_url ? <img src={course.hero_image_url} alt={course.title} className="h-16 w-20 rounded-lg object-cover" /> : <div className="h-16 w-20 rounded-lg bg-slate-100" />}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink group-hover:text-mint">{course.title}</p><p className="mt-1 truncate text-sm text-slate-500">{course.category} 路 {course.level}</p></div></Link>)}</div>}</div>;
+  return <div className="panel rounded-lg p-5"><h3 className="text-lg font-black text-ink">{title}</h3>{courses.length === 0 ? <p className="mt-3 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm text-slate-500">{emptyText}</p> : <div className="mt-4 grid gap-3 sm:grid-cols-2">{courses.slice(0, 4).map((course) => <Link key={course.id} href={`/courses/${course.slug}`} className="group flex gap-3 rounded-lg border border-slate-100 bg-white p-3 hover:border-mint/50">{course.hero_image_url ? <img src={course.hero_image_url} alt={course.title} className="h-16 w-20 rounded-lg object-cover" /> : <div className="h-16 w-20 rounded-lg bg-slate-100" />}<div className="min-w-0 flex-1"><p className="truncate font-black text-ink group-hover:text-mint">{course.title}</p><p className="mt-1 truncate text-sm text-slate-500">{course.category} · {course.level}</p></div></Link>)}</div>}</div>;
 }
 
 function PublicProfilePanel({ profile, status, onFollow }: { profile: StudentPublicProfile | null; status: string; onFollow: (id: number, following: boolean) => void }) {
   if (status) return <div className="panel rounded-lg p-5 text-sm font-bold text-slate-500">{status}</div>;
   if (!profile) return null;
-  return <div className="panel rounded-lg p-5"><div className="flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-3"><Avatar name={profile.profile.full_name} url={profile.profile.avatar_url} /><div><p className="text-sm font-black text-coral">{ui.publicProfile}</p><h3 className="text-xl font-black text-ink">{profile.profile.full_name}</h3></div></div><button type="button" onClick={() => onFollow(profile.profile.id, profile.is_following)} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-black text-white"><UserPlus size={16} />{profile.is_following ? ui.following : ui.follow}</button></div><p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile.profile.bio || ui.bioEmpty}</p><CourseStrip title={ui.nowLearning} courses={profile.active_courses.map((item) => item.course)} emptyText={ui.noCourses} /><PostFeed posts={profile.posts} /></div>;
+  return (
+    <div className="space-y-4">
+      <div className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <Avatar name={profile.profile.full_name} url={profile.profile.avatar_url} />
+            <div>
+              <p className="text-sm font-black text-coral">{ui.publicProfile}</p>
+              <h3 className="text-xl font-black text-ink">{profile.profile.full_name}</h3>
+            </div>
+          </div>
+          <button type="button" onClick={() => onFollow(profile.profile.id, profile.is_following)} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-black text-white">
+            <UserPlus size={16} />
+            {profile.is_following ? ui.following : ui.follow}
+          </button>
+        </div>
+        <p className="mt-4 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile.profile.bio || ui.bioEmpty}</p>
+      </div>
+      <CourseStrip title={ui.nowLearning} courses={profile.active_courses.map((item) => item.course)} emptyText={ui.noCourses} />
+      <StudentProfileActivityTabs
+        studentId={profile.profile.id}
+        posts={profile.posts}
+        questions={profile.questions ?? []}
+        answeredQuestions={profile.answered_questions ?? []}
+        notes={profile.notes ?? []}
+      />
+    </div>
+  );
 }
 
-function NotesPanel({ notes, status, isLoading }: { notes: StudentLearningNote[]; status: string; isLoading: boolean }) {
-  const groups = useMemo(() => groupNotesByCourse(notes), [notes]);
-  return <section className="panel rounded-lg p-5"><SectionHeader eyebrow={ui.notes} title={ui.notesTitle} description={status} />{isLoading ? <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500"><Loader2 size={16} className="animate-spin" />{ui.loading}</div> : groups.length === 0 ? <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center"><Feather className="mx-auto text-slate-300" size={34} /><p className="mt-3 font-black text-ink">{ui.noNotes}</p><p className="mt-2 text-sm leading-7 text-slate-500">{ui.noNotesText}</p></div> : <div className="grid gap-4">{groups.map((group) => <article key={group.course.course_id} className="overflow-hidden rounded-lg border border-slate-200 bg-white"><div className="flex flex-wrap items-center gap-4 bg-slate-50 p-4">{group.course.course_image_url ? <img src={group.course.course_image_url} alt={group.course.course_title} className="h-20 w-28 rounded-lg object-cover" /> : null}<div className="min-w-0 flex-1"><h3 className="truncate text-xl font-black text-ink">{group.course.course_title}</h3><p className="mt-1 text-sm font-semibold text-slate-500">{group.notes.length} {ui.noteCount}</p></div><Link href={`/learn/${group.course.course_slug}`} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-black text-white">{ui.viewCourse}<ArrowRight size={16} /></Link></div><div className="grid gap-3 p-4">{group.notes.map((note) => <details key={note.id} className="group rounded-lg border border-slate-100 bg-white p-4 open:bg-slate-50"><summary className="cursor-pointer list-none"><div className="flex items-center justify-between gap-3"><div><p className="text-sm font-black text-mint">{ui.chapter} {note.chapter_position}</p><h4 className="mt-1 text-lg font-black text-ink">{note.chapter_title}</h4></div><p className="text-xs font-bold text-slate-400">{ui.updatedAt} {formatDate(note.updated_at)}</p></div></summary><div className="mt-4 rounded-lg bg-white p-4 text-sm leading-7 text-slate-700" dangerouslySetInnerHTML={{ __html: note.content }} /></details>)}</div></article>)}</div>}</section>;
+function NotesPanel({
+  notes,
+  status,
+  isLoading,
+  sharedNotes,
+  onNoteShared
+}: {
+  notes: StudentLearningNote[];
+  status: string;
+  isLoading: boolean;
+  sharedNotes: CommunityNoteShare[];
+  onNoteShared: (note: CommunityNoteShare) => void;
+}) {
+  const orderedNotes = useMemo(
+    () => [...notes].sort((left, right) => new Date(right.updated_at ?? "").getTime() - new Date(left.updated_at ?? "").getTime()),
+    [notes]
+  );
+  const sharedNoteIds = useMemo(
+    () => new Set(sharedNotes.map((note) => note.chapter_note_id).filter((id): id is number => typeof id === "number")),
+    [sharedNotes]
+  );
+  const [recentlySharedNoteIds, setRecentlySharedNoteIds] = useState<Set<number>>(new Set());
+  const [sharingNoteIds, setSharingNoteIds] = useState<Set<number>>(new Set());
+  const [shareStatus, setShareStatus] = useState("");
+
+  async function shareNote(note: StudentLearningNote) {
+    if (sharingNoteIds.has(note.id)) return;
+    setSharingNoteIds((current) => new Set(current).add(note.id));
+    setShareStatus("");
+    try {
+      const content = htmlToPlainText(note.content) || note.chapter_title;
+      const response = await fetch(`${API_BASE_URL}/learn/community/notes`, {
+        method: "POST",
+        headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `${note.course_title} · ${ui.chapter}${note.chapter_position} ${note.chapter_title}`,
+          content,
+          course_id: note.course_id,
+          chapter_note_id: note.id
+        }),
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response, ui.noteShareFailed));
+      const created = (await response.json()) as CommunityNoteShare;
+      setRecentlySharedNoteIds((current) => new Set(current).add(note.id));
+      onNoteShared(created);
+      setShareStatus("");
+    } catch (error) {
+      setShareStatus(error instanceof Error && error.message ? error.message : ui.noteShareFailed);
+    } finally {
+      setSharingNoteIds((current) => {
+        const next = new Set(current);
+        next.delete(note.id);
+        return next;
+      });
+    }
+  }
+
+  return (
+    <section className="panel rounded-lg p-5">
+      <SectionHeader eyebrow={ui.notes} title={ui.notesTitle} description={status} />
+      {shareStatus ? <p className="mb-4 rounded-lg bg-coral/10 px-4 py-3 text-sm font-bold text-coral">{shareStatus}</p> : null}
+      {isLoading ? (
+        <div className="flex items-center gap-2 rounded-lg bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+          <Loader2 size={16} className="animate-spin" />
+          {ui.loading}
+        </div>
+      ) : orderedNotes.length === 0 ? (
+        <div className="rounded-lg border border-dashed border-slate-300 bg-slate-50 p-8 text-center">
+          <Feather className="mx-auto text-slate-300" size={34} />
+          <p className="mt-3 font-black text-ink">{ui.noNotes}</p>
+          <p className="mt-2 text-sm leading-7 text-slate-500">{ui.noNotesText}</p>
+        </div>
+      ) : (
+        <div className="grid gap-3">
+          {orderedNotes.map((note) => {
+            const isShared = sharedNoteIds.has(note.id) || recentlySharedNoteIds.has(note.id);
+            const isSharing = sharingNoteIds.has(note.id);
+            return (
+              <article key={note.id} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_17rem]">
+                  <details className="group min-w-0 rounded-lg bg-white open:bg-slate-50" open>
+                    <summary className="cursor-pointer list-none">
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0">
+                          <p className="text-xs font-black uppercase tracking-[0.14em] text-coral">Note</p>
+                          <h3 className="mt-1 text-xl font-black text-ink">{note.chapter_title}</h3>
+                        </div>
+                        <p className="rounded-full bg-slate-50 px-3 py-1 text-xs font-bold text-slate-400">{ui.updatedAt} {formatDate(note.updated_at)}</p>
+                      </div>
+                    </summary>
+                    <div
+                      className="mt-4 rounded-lg border border-slate-100 bg-white p-5 text-base leading-8 text-slate-800 shadow-inner"
+                      dangerouslySetInnerHTML={{ __html: note.content }}
+                    />
+                  </details>
+
+                  <aside className="rounded-lg border border-dashed border-slate-200 bg-slate-50/70 p-4 text-sm">
+                    <p className="text-xs font-black uppercase tracking-[0.14em] text-slate-400">关联信息</p>
+                    <div className="mt-3 grid gap-3 text-slate-500">
+                      <div>
+                        <p className="text-[11px] font-black text-slate-400">课程</p>
+                        <p className="mt-1 line-clamp-2 font-bold text-slate-600">{note.course_title}</p>
+                      </div>
+                      <div>
+                        <p className="text-[11px] font-black text-slate-400">章节</p>
+                        <p className="mt-1 font-bold text-slate-600">{ui.chapter} {note.chapter_position} · {note.chapter_title}</p>
+                      </div>
+                    </div>
+                    <div className="mt-4 grid gap-2">
+                      <button
+                        type="button"
+                        onClick={() => void shareNote(note)}
+                        disabled={isShared || isSharing}
+                        className={`focus-ring inline-flex items-center justify-center gap-2 rounded-lg px-3 py-2 text-sm font-black transition ${isShared ? "bg-mint/10 text-mint" : "bg-coral text-white hover:bg-coral/90"} disabled:cursor-not-allowed`}
+                      >
+                        {isSharing ? <Loader2 size={15} className="animate-spin" /> : <Share2 size={15} />}
+                        {isShared ? ui.noteShared : isSharing ? ui.sharingNote : ui.shareNote}
+                      </button>
+                      <Link href={`/learn/${note.course_slug}`} className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-slate-600 hover:text-ink">
+                        {ui.viewCourse}
+                        <ArrowRight size={15} />
+                      </Link>
+                    </div>
+                  </aside>
+                </div>
+            </article>
+            );
+          })}
+        </div>
+      )}
+    </section>
+  );
 }
+
+
 
 
 

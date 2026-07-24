@@ -20,6 +20,7 @@ from app.models import (
     CommunityReaction,
     Course,
     CourseChapter,
+    CourseReview,
     CourseStatus,
     Enrollment,
     LessonItemType,
@@ -32,6 +33,7 @@ from app.models import (
     Subscription,
     StudentFollow,
     StudentPost,
+    StudentPostComment,
     User,
     UserRole,
 )
@@ -57,6 +59,8 @@ from app.schemas import (
     CompleteItemIn,
     CourseCardOut,
     CourseDetailOut,
+    CourseReviewIn,
+    CourseReviewOut,
     DashboardOut,
     EnrollmentOut,
     LessonItemSubmissionStateOut,
@@ -67,6 +71,8 @@ from app.schemas import (
     SubmissionIn,
     SubmissionOut,
     StudentLearningNoteOut,
+    StudentPostCommentCreate,
+    StudentPostCommentOut,
     StudentPostCreate,
     StudentPostOut,
     StudentProfileSummaryOut,
@@ -301,7 +307,20 @@ def add_student_timeline_post(db: Session, user_id: int, content: str, course_id
     db.add(StudentPost(user_id=user_id, course_id=course_id, content=content.strip(), visibility="public"))
 
 
-def post_out(post: StudentPost) -> StudentPostOut:
+def student_post_comment_out(comment: StudentPostComment) -> StudentPostCommentOut:
+    return StudentPostCommentOut(
+        id=comment.id,
+        post_id=comment.post_id,
+        user_id=comment.user_id,
+        student_name=comment.user.full_name if comment.user else "Student",
+        avatar_url=comment.user.avatar_url if comment.user else None,
+        body=comment.body,
+        created_at=comment.created_at,
+    )
+
+
+def post_out(post: StudentPost, current_user_id: int = 0, db: Session | None = None) -> StudentPostOut:
+    comments = list(post.comments or [])
     return StudentPostOut(
         id=post.id,
         user_id=post.user_id,
@@ -311,6 +330,10 @@ def post_out(post: StudentPost) -> StudentPostOut:
         image_urls=list(post.image_urls or []),
         course_id=post.course_id,
         course_title=post.course.title if post.course else None,
+        likes_count=int(post.likes_count or 0),
+        liked_by_me=has_reaction(db, current_user_id, "post", post.id) if db is not None and current_user_id else False,
+        comments_count=len(comments),
+        comments=[student_post_comment_out(comment) for comment in comments],
         created_at=post.created_at,
     )
 
@@ -324,6 +347,52 @@ def load_enrollments_for_user(db: Session, user_id: int) -> list[Enrollment]:
             .order_by(Enrollment.updated_at.desc())
         )
     )
+
+
+def student_following_users(db: Session, user_id: int, limit: int = 12) -> list[User]:
+    return list(
+        db.scalars(
+            select(User)
+            .join(StudentFollow, StudentFollow.followee_id == User.id)
+            .where(StudentFollow.follower_id == user_id, User.role == UserRole.student, User.is_active.is_(True))
+            .order_by(StudentFollow.created_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+def student_follower_users(db: Session, user_id: int, limit: int = 12) -> list[User]:
+    return list(
+        db.scalars(
+            select(User)
+            .join(StudentFollow, StudentFollow.follower_id == User.id)
+            .where(StudentFollow.followee_id == user_id, User.role == UserRole.student, User.is_active.is_(True))
+            .order_by(StudentFollow.created_at.desc())
+            .limit(limit)
+        )
+    )
+
+
+def student_follow_counts(db: Session, user_id: int) -> tuple[int, int]:
+    following_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(StudentFollow)
+            .join(User, User.id == StudentFollow.followee_id)
+            .where(StudentFollow.follower_id == user_id, User.role == UserRole.student, User.is_active.is_(True))
+        )
+        or 0
+    )
+    followers_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(StudentFollow)
+            .join(User, User.id == StudentFollow.follower_id)
+            .where(StudentFollow.followee_id == user_id, User.role == UserRole.student, User.is_active.is_(True))
+        )
+        or 0
+    )
+    return int(following_count), int(followers_count)
 
 
 def student_points_summary(user: User, enrollments: list[Enrollment], db: Session) -> tuple[int, int, object, list[str]]:
@@ -389,8 +458,57 @@ def my_social_home(
         db.scalars(
             select(StudentPost)
             .where(StudentPost.user_id == current_user.id)
-            .options(joinedload(StudentPost.user), joinedload(StudentPost.course))
+            .options(
+                joinedload(StudentPost.user),
+                joinedload(StudentPost.course),
+                selectinload(StudentPost.comments).joinedload(StudentPostComment.user),
+            )
             .order_by(StudentPost.created_at.desc())
+            .limit(12)
+        )
+    )
+    current_user_id = current_user.id
+    question_load_options = (
+        joinedload(CommunityQuestion.user),
+        joinedload(CommunityQuestion.course),
+        joinedload(CommunityQuestion.chapter),
+        joinedload(CommunityQuestion.linked_question),
+        selectinload(CommunityQuestion.answers).joinedload(CommunityAnswer.user),
+    )
+    questions = list(
+        db.scalars(
+            select(CommunityQuestion)
+            .where(CommunityQuestion.user_id == current_user.id)
+            .options(*question_load_options)
+            .order_by(CommunityQuestion.created_at.desc())
+            .limit(12)
+        )
+    )
+    answer_activity = (
+        select(
+            CommunityAnswer.community_question_id.label("question_id"),
+            func.max(CommunityAnswer.created_at).label("last_answered_at"),
+        )
+        .where(CommunityAnswer.user_id == current_user.id)
+        .group_by(CommunityAnswer.community_question_id)
+        .order_by(func.max(CommunityAnswer.created_at).desc())
+        .limit(12)
+        .subquery()
+    )
+    answered_questions = list(
+        db.scalars(
+            select(CommunityQuestion)
+            .join(answer_activity, CommunityQuestion.id == answer_activity.c.question_id)
+            .options(*question_load_options)
+            .order_by(answer_activity.c.last_answered_at.desc())
+        )
+    )
+    notes = list(
+        db.scalars(
+            select(CommunityNoteShare)
+            .where(CommunityNoteShare.user_id == current_user.id, CommunityNoteShare.visibility == "public")
+            .options(joinedload(CommunityNoteShare.user), joinedload(CommunityNoteShare.course))
+            .order_by(CommunityNoteShare.created_at.desc())
             .limit(12)
         )
     )
@@ -405,6 +523,9 @@ def my_social_home(
     following_ids = list(
         db.scalars(select(StudentFollow.followee_id).where(StudentFollow.follower_id == current_user.id))
     )
+    following_students = student_following_users(db, current_user.id)
+    follower_students = student_follower_users(db, current_user.id)
+    following_count, followers_count = student_follow_counts(db, current_user.id)
     total_points, weekly_points, level, achievements = student_points_summary(current_user, enrollments, db)
     return StudentSocialHomeOut(
         profile=user_profile_summary(current_user, include_email=True),
@@ -415,9 +536,16 @@ def my_social_home(
         weekly_points=weekly_points,
         level=level,
         achievements=achievements,
-        posts=[post_out(post) for post in posts],
+        posts=[post_out(post, current_user_id, db) for post in posts],
         suggested_students=[user_profile_summary(student) for student in suggested_students],
         following_ids=following_ids,
+        following_students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in following_students],
+        follower_students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in follower_students],
+        following_count=following_count,
+        followers_count=followers_count,
+        questions=[community_question_out(question, current_user_id, db) for question in questions],
+        answered_questions=[community_question_out(question, current_user_id, db) for question in answered_questions],
+        notes=[community_note_out(note, current_user_id, db) for note in notes],
     )
 
 
@@ -445,11 +573,15 @@ def create_learning_post(
     post = db.scalar(
         select(StudentPost)
         .where(StudentPost.id == post.id)
-        .options(joinedload(StudentPost.user), joinedload(StudentPost.course))
+        .options(
+            joinedload(StudentPost.user),
+            joinedload(StudentPost.course),
+            selectinload(StudentPost.comments).joinedload(StudentPostComment.user),
+        )
     )
     if not post:
         raise HTTPException(status_code=500, detail="Post was not created")
-    return post_out(post)
+    return post_out(post, current_user.id, db)
 
 
 @router.get("/students/{student_id}/profile", response_model=StudentPublicProfileOut)
@@ -467,11 +599,63 @@ def student_public_profile(
         db.scalars(
             select(StudentPost)
             .where(StudentPost.user_id == student.id, StudentPost.visibility == "public")
-            .options(joinedload(StudentPost.user), joinedload(StudentPost.course))
+            .options(
+                joinedload(StudentPost.user),
+                joinedload(StudentPost.course),
+                selectinload(StudentPost.comments).joinedload(StudentPostComment.user),
+            )
             .order_by(StudentPost.created_at.desc())
             .limit(12)
         )
     )
+    current_user_id = current_user.id if current_user else 0
+    question_load_options = (
+        joinedload(CommunityQuestion.user),
+        joinedload(CommunityQuestion.course),
+        joinedload(CommunityQuestion.chapter),
+        joinedload(CommunityQuestion.linked_question),
+        selectinload(CommunityQuestion.answers).joinedload(CommunityAnswer.user),
+    )
+    questions = list(
+        db.scalars(
+            select(CommunityQuestion)
+            .where(CommunityQuestion.user_id == student.id)
+            .options(*question_load_options)
+            .order_by(CommunityQuestion.created_at.desc())
+            .limit(12)
+        )
+    )
+    answer_activity = (
+        select(
+            CommunityAnswer.community_question_id.label("question_id"),
+            func.max(CommunityAnswer.created_at).label("last_answered_at"),
+        )
+        .where(CommunityAnswer.user_id == student.id)
+        .group_by(CommunityAnswer.community_question_id)
+        .order_by(func.max(CommunityAnswer.created_at).desc())
+        .limit(12)
+        .subquery()
+    )
+    answered_questions = list(
+        db.scalars(
+            select(CommunityQuestion)
+            .join(answer_activity, CommunityQuestion.id == answer_activity.c.question_id)
+            .options(*question_load_options)
+            .order_by(answer_activity.c.last_answered_at.desc())
+        )
+    )
+    notes = list(
+        db.scalars(
+            select(CommunityNoteShare)
+            .where(CommunityNoteShare.user_id == student.id, CommunityNoteShare.visibility == "public")
+            .options(joinedload(CommunityNoteShare.user), joinedload(CommunityNoteShare.course))
+            .order_by(CommunityNoteShare.created_at.desc())
+            .limit(12)
+        )
+    )
+    following_students = student_following_users(db, student.id)
+    follower_students = student_follower_users(db, student.id)
+    following_count, followers_count = student_follow_counts(db, student.id)
     is_following = (
         db.scalar(
             select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == student.id)
@@ -484,7 +668,14 @@ def student_public_profile(
         profile=user_profile_summary(student),
         active_courses=active_courses,
         completed_courses=completed_courses,
-        posts=[post_out(post) for post in posts],
+        posts=[post_out(post, current_user_id, db) for post in posts],
+        questions=[community_question_out(question, current_user_id, db) for question in questions],
+        answered_questions=[community_question_out(question, current_user_id, db) for question in answered_questions],
+        notes=[community_note_out(note, current_user_id, db) for note in notes],
+        following_students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in following_students],
+        follower_students=[user_profile_summary(student, community_points=community_points_for_user(db, student.id)) for student in follower_students],
+        following_count=following_count,
+        followers_count=followers_count,
         is_following=is_following,
     )
 
@@ -548,13 +739,31 @@ def has_reaction(db: Session, user_id: int, target_type: str, target_id: int) ->
     ) is not None
 
 
+def community_reaction_count(db: Session, target_type: str, target_id: int) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(CommunityReaction)
+            .where(
+                CommunityReaction.target_type == target_type,
+                CommunityReaction.target_id == target_id,
+            )
+        )
+        or 0
+    )
+
+
 def community_answer_out(answer: CommunityAnswer, current_user_id: int, db: Session) -> CommunityAnswerOut:
+    student_level = None
+    if answer.user:
+        student_level = student_points_summary(answer.user, load_enrollments_for_user(db, answer.user_id), db)[2]
     return CommunityAnswerOut(
         id=answer.id,
         question_id=answer.community_question_id,
         user_id=answer.user_id,
         student_name=answer.user.full_name if answer.user else "Student",
         avatar_url=answer.user.avatar_url if answer.user else None,
+        student_level=student_level,
         body=answer.body,
         likes_count=answer.likes_count,
         liked_by_me=has_reaction(db, current_user_id, "answer", answer.id),
@@ -587,6 +796,8 @@ def community_question_out(item: CommunityQuestion, current_user_id: int, db: Se
         linked_question_title=linked_question_title(item.linked_question),
         tags=community_tags(item.tags),
         is_resolved=item.is_resolved,
+        likes_count=community_reaction_count(db, "question", item.id),
+        liked_by_me=has_reaction(db, current_user_id, "question", item.id),
         answers_count=len(answers),
         answers=[community_answer_out(answer, current_user_id, db) for answer in answers],
         created_at=item.created_at,
@@ -599,6 +810,7 @@ def community_note_out(note: CommunityNoteShare, current_user_id: int, db: Sessi
         user_id=note.user_id,
         student_name=note.user.full_name if note.user else "Student",
         avatar_url=note.user.avatar_url if note.user else None,
+        chapter_note_id=note.chapter_note_id,
         title=note.title,
         content=note.content,
         course_id=note.course_id,
@@ -975,10 +1187,14 @@ def create_community_note(
 
 def toggle_community_like(target_type: str, target_id: int, current_user: User, db: Session) -> dict[str, int | bool]:
     ensure_student_user(current_user)
-    if target_type == "answer":
+    if target_type == "question":
+        target = db.get(CommunityQuestion, target_id)
+    elif target_type == "answer":
         target = db.get(CommunityAnswer, target_id)
     elif target_type == "note":
         target = db.get(CommunityNoteShare, target_id)
+    elif target_type == "post":
+        target = db.get(StudentPost, target_id)
     else:
         raise HTTPException(status_code=422, detail="Unsupported target type")
     if not target:
@@ -992,16 +1208,28 @@ def toggle_community_like(target_type: str, target_id: int, current_user: User, 
     )
     if existing:
         db.delete(existing)
-        target.likes_count = max(0, int(target.likes_count or 0) - 1)
+        if target_type != "question":
+            target.likes_count = max(0, int(target.likes_count or 0) - 1)
         liked = False
     else:
         db.add(CommunityReaction(user_id=current_user.id, target_type=target_type, target_id=target_id))
-        target.likes_count = int(target.likes_count or 0) + 1
+        if target_type != "question":
+            target.likes_count = int(target.likes_count or 0) + 1
         liked = True
         if target_type == "note":
             add_student_timeline_post(db, current_user.id, f"\u6211\u5173\u6ce8\u4e86\u4e00\u7bc7\u793e\u533a\u7b14\u8bb0\uff1a{target.title}", target.course_id)
     db.commit()
-    return {"liked": liked, "likes_count": int(target.likes_count or 0)}
+    likes_count = community_reaction_count(db, "question", target_id) if target_type == "question" else int(target.likes_count or 0)
+    return {"liked": liked, "likes_count": likes_count}
+
+
+@router.post("/community/questions/{question_id}/like")
+def like_community_question(
+    question_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    return toggle_community_like("question", question_id, current_user, db)
 
 
 @router.post("/community/answers/{answer_id}/like")
@@ -1020,6 +1248,39 @@ def like_community_note(
     db: Session = Depends(get_db),
 ) -> dict[str, int | bool]:
     return toggle_community_like("note", note_id, current_user, db)
+
+
+@router.post("/posts/{post_id}/like")
+def like_student_post(
+    post_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    return toggle_community_like("post", post_id, current_user, db)
+
+
+@router.post("/posts/{post_id}/comments", response_model=StudentPostCommentOut, status_code=201)
+def create_student_post_comment(
+    post_id: int,
+    payload: StudentPostCommentCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StudentPostCommentOut:
+    ensure_student_user(current_user)
+    post = db.scalar(select(StudentPost).where(StudentPost.id == post_id, StudentPost.visibility == "public"))
+    if not post:
+        raise HTTPException(status_code=404, detail="Post not found")
+    comment = StudentPostComment(post_id=post_id, user_id=current_user.id, body=payload.body.strip())
+    db.add(comment)
+    db.commit()
+    created = db.scalar(
+        select(StudentPostComment)
+        .where(StudentPostComment.id == comment.id)
+        .options(joinedload(StudentPostComment.user))
+    )
+    if not created:
+        raise HTTPException(status_code=500, detail="Comment was not created")
+    return student_post_comment_out(created)
 
 
 @router.post("/community/messages", response_model=CommunityMessageOut, status_code=201)
@@ -1186,6 +1447,78 @@ def learning_course(
     if not enrollment:
         raise HTTPException(status_code=403, detail="You are not enrolled in this course")
     return course
+
+
+def course_and_enrollment_for_review(
+    slug: str,
+    current_user: User,
+    db: Session,
+    enrollment_id: int | None = None,
+) -> tuple[Course, Enrollment]:
+    course = db.scalar(select(Course).where(Course.slug == slug))
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    stmt = select(Enrollment).where(Enrollment.user_id == current_user.id, Enrollment.course_id == course.id)
+    if enrollment_id is not None:
+        stmt = stmt.where(Enrollment.id == enrollment_id)
+    enrollment = db.scalar(stmt)
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+    return course, enrollment
+
+
+@router.get("/courses/{slug}/review", response_model=CourseReviewOut)
+def get_course_review(
+    slug: str,
+    enrollment_id: int | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CourseReviewOut:
+    course, enrollment = course_and_enrollment_for_review(slug, current_user, db, enrollment_id)
+    review = db.scalar(
+        select(CourseReview).where(CourseReview.user_id == current_user.id, CourseReview.course_id == course.id)
+    )
+    if not review:
+        return CourseReviewOut(course_id=course.id, enrollment_id=enrollment.id)
+    return CourseReviewOut(
+        id=review.id,
+        course_id=review.course_id,
+        enrollment_id=review.enrollment_id,
+        rating=review.rating,
+        comment=review.comment or "",
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+    )
+
+
+@router.put("/courses/{slug}/review", response_model=CourseReviewOut)
+def upsert_course_review(
+    slug: str,
+    payload: CourseReviewIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CourseReviewOut:
+    course, enrollment = course_and_enrollment_for_review(slug, current_user, db, payload.enrollment_id)
+    review = db.scalar(
+        select(CourseReview).where(CourseReview.user_id == current_user.id, CourseReview.course_id == course.id)
+    )
+    if not review:
+        review = CourseReview(user_id=current_user.id, course_id=course.id, enrollment_id=enrollment.id)
+        db.add(review)
+    review.enrollment_id = enrollment.id
+    review.rating = payload.rating
+    review.comment = payload.comment.strip()
+    db.commit()
+    db.refresh(review)
+    return CourseReviewOut(
+        id=review.id,
+        course_id=review.course_id,
+        enrollment_id=review.enrollment_id,
+        rating=review.rating,
+        comment=review.comment or "",
+        created_at=review.created_at,
+        updated_at=review.updated_at,
+    )
 
 
 def get_student_chapter(

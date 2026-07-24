@@ -7,14 +7,19 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.models import (
+    ChapterNote,
     CommunityAnswer,
     CommunityNoteShare,
     CommunityQuestion,
+    CommunityReaction,
     Course,
     CourseChapter,
     Enrollment,
+    ExamPaperKind,
+    ExamPaperSubmission,
     LessonItemType,
     ProgressRecord,
+    StudentFollow,
     Submission,
     User,
     UserRole,
@@ -40,6 +45,11 @@ POINT_LEVELS: tuple[PointLevel, ...] = (
     PointLevel(7, "\u667a\u6167\u5b88\u62a4\u8005", "\u2726", 6500),
     PointLevel(8, "\u661f\u8fb0\u5bfc\u5e08", "\u2727", 10000),
 )
+
+PASSING_RATIO = 0.8
+NOTE_POINTS = 6
+NOTE_LIKE_POINTS = 3
+FOLLOWER_POINTS = 10
 
 
 def aware_now() -> datetime:
@@ -122,13 +132,48 @@ def latest_submissions(submissions: list[Submission]) -> list[Submission]:
     return list(latest_by_key.values())
 
 
-def submission_points(submission: Submission) -> int:
+def question_max_points(submission: Submission) -> int:
+    return max(int(submission.question.points or 0), 1) if submission.question else 1
+
+
+def submission_score_ratio(submission: Submission) -> float:
     if submission.score is None:
-        return 0
-    question_points = max(int(submission.question.points or 0), 1) if submission.question else 1
+        return 0.0
+    question_points = question_max_points(submission)
     score = max(float(submission.score or 0), 0)
-    ratio = min(score / question_points, 1)
-    return 2 + round(score * 3) + (8 if ratio >= 0.8 else 0) + (5 if ratio >= 0.999 else 0)
+    return min(score / question_points, 1)
+
+
+def assessment_points_from_attempts(submissions: list[Submission]) -> tuple[int, Submission | None, int, float]:
+    graded_submissions = sorted(
+        [submission for submission in submissions if submission.score is not None],
+        key=lambda submission: as_aware(submission.created_at) or datetime.min.replace(tzinfo=timezone.utc),
+    )
+    for attempt_number, submission in enumerate(graded_submissions, start=1):
+        ratio = submission_score_ratio(submission)
+        if ratio < PASSING_RATIO:
+            continue
+        if attempt_number >= 3:
+            return 0, submission, attempt_number, ratio
+        multiplier = 1.0 if attempt_number == 1 else 0.5
+        points = round(question_max_points(submission) * 5 * ratio * multiplier)
+        return max(points, 1), submission, attempt_number, ratio
+    latest_submission = graded_submissions[-1] if graded_submissions else None
+    latest_ratio = submission_score_ratio(latest_submission) if latest_submission else 0.0
+    return 0, latest_submission, len(graded_submissions), latest_ratio
+
+
+def grouped_submissions(submissions: list[Submission]) -> dict[tuple[int | None, int | None, int], list[Submission]]:
+    groups: dict[tuple[int | None, int | None, int], list[Submission]] = {}
+    for submission in submissions:
+        key = (submission.enrollment_id, submission.lesson_item_id, submission.question_id)
+        groups.setdefault(key, []).append(submission)
+    return groups
+
+
+def submission_points(submission: Submission) -> int:
+    points, _, _, _ = assessment_points_from_attempts([submission])
+    return points
 
 
 def build_point_event(
@@ -150,16 +195,29 @@ def build_point_event(
     )
 
 
+def reaction_count(db: Session, target_type: str, target_id: int, since: datetime | None = None) -> int:
+    stmt = select(CommunityReaction).where(
+        CommunityReaction.target_type == target_type,
+        CommunityReaction.target_id == target_id,
+    )
+    if since is not None:
+        stmt = stmt.where(CommunityReaction.created_at >= since)
+    return len(list(db.scalars(stmt)))
+
+
 def community_point_events(db: Session, user_id: int, week_start: datetime) -> tuple[int, int, list[StudentPointEvent]]:
     total_points = 0
     weekly_points = 0
     events: list[StudentPointEvent] = []
 
     for question in db.scalars(select(CommunityQuestion).where(CommunityQuestion.user_id == user_id)):
-        points = 5
+        likes = reaction_count(db, "question", question.id)
+        weekly_likes = reaction_count(db, "question", question.id, week_start)
+        points = 6 + likes * 3
         total_points += points
         if is_this_week(question.created_at, week_start):
-            weekly_points += points
+            weekly_points += 6
+        weekly_points += weekly_likes * 3
         events.append(
             build_point_event(
                 label="\u53d1\u5e03\u5b66\u4e60\u95ee\u9898",
@@ -167,16 +225,18 @@ def community_point_events(db: Session, user_id: int, week_start: datetime) -> t
                 points=points,
                 occurred_at=question.created_at,
                 course_title=question.course.title if question.course else None,
-                detail=question.title,
+                detail=f"{question.title} · 被点赞 {likes} 次",
             )
         )
 
     for answer in db.scalars(select(CommunityAnswer).where(CommunityAnswer.user_id == user_id)):
         likes = int(answer.likes_count or 0)
+        weekly_likes = reaction_count(db, "answer", answer.id, week_start)
         points = 10 + likes * 4 + (20 if answer.is_best else 0)
         total_points += points
         if is_this_week(answer.created_at, week_start):
-            weekly_points += points
+            weekly_points += 10 + (20 if answer.is_best else 0)
+        weekly_points += weekly_likes * 4
         best_text = "\uff0c\u88ab\u91c7\u7eb3\u4e3a\u6700\u4f73\u7b54\u6848" if answer.is_best else ""
         events.append(
             build_point_event(
@@ -190,10 +250,12 @@ def community_point_events(db: Session, user_id: int, week_start: datetime) -> t
 
     for note in db.scalars(select(CommunityNoteShare).where(CommunityNoteShare.user_id == user_id)):
         likes = int(note.likes_count or 0)
-        points = 8 + likes * 4
+        weekly_likes = reaction_count(db, "note", note.id, week_start)
+        points = 8 + likes * 3
         total_points += points
         if is_this_week(note.created_at, week_start):
-            weekly_points += points
+            weekly_points += 8
+        weekly_points += weekly_likes * 3
         events.append(
             build_point_event(
                 label="\u5206\u4eab\u5b66\u4e60\u7b14\u8bb0",
@@ -236,16 +298,153 @@ def student_achievements(
     return achievements
 
 
-def calculate_student_point_detail(db: Session, student: User, week_start: datetime | None = None) -> dict:
-    week_start = as_aware(week_start) or aware_now() - timedelta(days=7)
-    enrollments = list(student.enrollments)
-    submissions = latest_submissions(list(student.submissions))
-    submissions_by_enrollment: dict[int | None, list[Submission]] = {}
-    for submission in submissions:
-        submissions_by_enrollment.setdefault(submission.enrollment_id, []).append(submission)
+def course_note_point_events(
+    db: Session,
+    *,
+    user_id: int,
+    enrollment: Enrollment,
+    course_title: str | None,
+    week_start: datetime,
+) -> tuple[int, int, list[StudentPointEvent]]:
+    notes = [
+        note
+        for note in db.scalars(
+            select(ChapterNote).where(
+                ChapterNote.user_id == user_id,
+                ChapterNote.enrollment_id == enrollment.id,
+            )
+        )
+        if (note.content or "").strip()
+    ]
+    if not notes:
+        return 0, 0, []
 
     total_points = 0
     weekly_points = 0
+    events: list[StudentPointEvent] = []
+    note_ids = [note.id for note in notes]
+
+    for note in notes:
+        total_points += NOTE_POINTS
+        if is_this_week(note.updated_at or note.created_at, week_start):
+            weekly_points += NOTE_POINTS
+
+    note_shares = list(
+        db.scalars(
+            select(CommunityNoteShare).where(
+                CommunityNoteShare.chapter_note_id.in_(note_ids),
+                CommunityNoteShare.user_id == user_id,
+            )
+        )
+    )
+    likes = sum(int(share.likes_count or 0) for share in note_shares)
+    like_points = likes * NOTE_LIKE_POINTS
+    total_points += like_points
+    for share in note_shares:
+        if is_this_week(share.updated_at or share.created_at, week_start):
+            weekly_points += int(share.likes_count or 0) * NOTE_LIKE_POINTS
+
+    latest_time = max((as_aware(note.updated_at or note.created_at) for note in notes), default=None)
+    events.append(
+        build_point_event(
+            label="整理课程笔记",
+            source="course_note",
+            points=total_points,
+            occurred_at=latest_time,
+            course_title=course_title,
+            detail=f"{len(notes)} 篇笔记 · 获得 {likes} 个赞",
+        )
+    )
+    return total_points, weekly_points, events
+
+
+def exam_submission_point_events(
+    submissions: list[ExamPaperSubmission],
+    week_start: datetime,
+) -> tuple[int, int, list[StudentPointEvent]]:
+    best_by_paper: dict[int, ExamPaperSubmission] = {}
+    for submission in submissions:
+        if not submission.paper:
+            continue
+        total_score = max(float(submission.total_score or 0), 0)
+        if total_score <= 0:
+            continue
+        ratio = min(max(float(submission.score or 0), 0) / total_score, 1)
+        current = best_by_paper.get(submission.paper_id)
+        current_total = max(float(current.total_score or 0), 0) if current else 0
+        current_ratio = (
+            min(max(float(current.score or 0), 0) / current_total, 1)
+            if current and current_total > 0
+            else -1
+        )
+        if current is None or ratio > current_ratio:
+            best_by_paper[submission.paper_id] = submission
+
+    total_points = 0
+    weekly_points = 0
+    events: list[StudentPointEvent] = []
+    for submission in best_by_paper.values():
+        paper = submission.paper
+        total_score = max(float(submission.total_score or 0), 1)
+        ratio = min(max(float(submission.score or 0), 0) / total_score, 1)
+        is_competition = paper.kind == ExamPaperKind.competition
+        base_points = 30 if is_competition else 15
+        score_points = round((100 if is_competition else 60) * ratio)
+        pass_bonus = 30 if is_competition and ratio >= PASSING_RATIO else 15 if ratio >= PASSING_RATIO else 0
+        excellence_bonus = 20 if is_competition and ratio >= 0.95 else 0
+        points = base_points + score_points + pass_bonus + excellence_bonus
+        total_points += points
+        if is_this_week(submission.submitted_at, week_start):
+            weekly_points += points
+        events.append(
+            build_point_event(
+                label="完成竞赛试卷" if is_competition else "完成模拟考试",
+                source="competition" if is_competition else "mock_exam",
+                points=points,
+                occurred_at=submission.submitted_at,
+                detail=f"{paper.title} · 得分率 {round(ratio * 100, 1)}%",
+            )
+        )
+    return total_points, weekly_points, events
+
+
+def follower_point_events(db: Session, user_id: int, week_start: datetime) -> tuple[int, int, int, list[StudentPointEvent]]:
+    follows = list(
+        db.scalars(
+            select(StudentFollow)
+            .join(User, User.id == StudentFollow.follower_id)
+            .where(
+                StudentFollow.followee_id == user_id,
+                User.role == UserRole.student,
+                User.is_active.is_(True),
+            )
+        )
+    )
+    followers_count = len(follows)
+    total_points = followers_count * FOLLOWER_POINTS
+    weekly_points = len([follow for follow in follows if is_this_week(follow.created_at, week_start)]) * FOLLOWER_POINTS
+    latest_time = max((as_aware(follow.created_at) for follow in follows), default=None)
+    events = [
+        build_point_event(
+            label="被同学关注",
+            source="followers",
+            points=total_points,
+            occurred_at=latest_time,
+            detail=f"{followers_count} 位同学关注了你",
+        )
+    ] if followers_count else []
+    return followers_count, total_points, weekly_points, events
+
+
+def calculate_student_point_detail(db: Session, student: User, week_start: datetime | None = None) -> dict:
+    week_start = as_aware(week_start) or aware_now() - timedelta(days=7)
+    enrollments = list(student.enrollments)
+    submissions = list(student.submissions)
+    submission_groups = grouped_submissions(submissions)
+
+    total_points = 0
+    weekly_points = 0
+    course_points_total = 0
     course_breakdown: list[StudentCoursePointBreakdown] = []
     recent_events: list[StudentPointEvent] = []
     handled_submission_ids: set[int] = set()
@@ -253,24 +452,14 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
 
     for enrollment in enrollments:
         course = enrollment.course
-        progress_points = round(float(enrollment.progress_percent or 0) * 0.6)
+        progress_points = 0
         activity_points = 0
         assessment_points = 0
         completion_bonus = 180 + speed_bonus(enrollment.started_at, enrollment.updated_at, 120) if enrollment.status == "completed" else 0
 
-        if progress_points:
-            recent_events.append(
-                build_point_event(
-                    label="\u8bfe\u7a0b\u8fdb\u5ea6\u6210\u957f",
-                    source="progress",
-                    points=progress_points,
-                    occurred_at=enrollment.updated_at,
-                    course_title=course.title if course else None,
-                    detail=f"\u5f53\u524d\u8fdb\u5ea6 {round(float(enrollment.progress_percent or 0), 1)}%",
-                )
-            )
-
         if completion_bonus:
+            if is_this_week(enrollment.updated_at, week_start):
+                weekly_points += completion_bonus
             recent_events.append(
                 build_point_event(
                     label="\u5b8c\u6210\u6574\u95e8\u8bfe\u7a0b",
@@ -282,50 +471,41 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
                 )
             )
 
-        for record in enrollment.progress_records:
-            if not record.completed_at:
+        for key, group in submission_groups.items():
+            if key[0] != enrollment.id:
                 continue
-            points = lesson_activity_points(record)
-            activity_points += points
-            if is_this_week(record.completed_at, week_start):
-                weekly_points += points
-            item = record.lesson_item
-            item_title = item.title if item else "\u5b66\u4e60\u9879\u76ee"
-            recent_events.append(
-                build_point_event(
-                    label=f"\u5b8c\u6210{item_title}",
-                    source=item.item_type.value if item else "lesson",
-                    points=points,
-                    occurred_at=record.completed_at,
-                    course_title=course.title if course else None,
-                    detail="\u5305\u542b\u57fa\u7840\u5b66\u4e60\u5206\u548c\u901f\u5ea6\u5956\u52b1",
-                )
-            )
-
-        for submission in submissions_by_enrollment.get(enrollment.id, []):
-            handled_submission_ids.add(submission.id)
-            points = submission_points(submission)
+            handled_submission_ids.update(submission.id for submission in group)
+            points, passing_submission, attempt_number, ratio = assessment_points_from_attempts(group)
             if not points:
                 continue
             assessment_points += points
             latest_assessment_points += points
-            if is_this_week(submission.created_at, week_start):
+            if passing_submission and is_this_week(passing_submission.created_at, week_start):
                 weekly_points += points
-            question_title = submission.question.prompt if submission.question else "\u9898\u76ee\u7ec3\u4e60"
-            score = round(float(submission.score or 0), 1)
-            max_score = int(submission.question.points or 0) if submission.question else 0
+            question_title = passing_submission.question.prompt if passing_submission and passing_submission.question else "\u9898\u76ee\u7ec3\u4e60"
             recent_events.append(
                 build_point_event(
                     label="\u5b8c\u6210\u7ec3\u4e60/\u6d4b\u9a8c\u9898",
                     source="assessment",
                     points=points,
-                    occurred_at=submission.created_at,
+                    occurred_at=passing_submission.created_at if passing_submission else None,
                     course_title=course.title if course else None,
-                    detail=f"{question_title[:80]} · \u5f97\u5206 {score}/{max_score}",
+                    detail=f"{question_title[:80]} · 第 {attempt_number} 次通过 · 得分率 {round(ratio * 100, 1)}%",
                 )
             )
 
-        course_total = progress_points + activity_points + assessment_points + completion_bonus
+        note_points, note_weekly_points, note_events = course_note_point_events(
+            db,
+            user_id=student.id,
+            enrollment=enrollment,
+            course_title=course.title if course else None,
+            week_start=week_start,
+        )
+        weekly_points += note_weekly_points
+        recent_events.extend(note_events)
+
+        course_total = assessment_points + completion_bonus + note_points
+        course_points_total += course_total
         total_points += course_total
         if course:
             course_breakdown.append(
@@ -338,29 +518,30 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
                     progress_points=progress_points,
                     activity_points=activity_points,
                     assessment_points=assessment_points,
+                    note_points=note_points,
                     completion_bonus=completion_bonus,
                     total_points=course_total,
                 )
             )
 
-    for submission in submissions:
-        if submission.id in handled_submission_ids:
+    for key, group in submission_groups.items():
+        if any(submission.id in handled_submission_ids for submission in group):
             continue
-        points = submission_points(submission)
+        points, passing_submission, attempt_number, ratio = assessment_points_from_attempts(group)
         if not points:
             continue
         total_points += points
         latest_assessment_points += points
-        if is_this_week(submission.created_at, week_start):
+        if passing_submission and is_this_week(passing_submission.created_at, week_start):
             weekly_points += points
-        question_title = submission.question.prompt if submission.question else "\u9898\u5e93\u7ec3\u4e60"
+        question_title = passing_submission.question.prompt if passing_submission and passing_submission.question else "\u9898\u5e93\u7ec3\u4e60"
         recent_events.append(
             build_point_event(
                 label="\u5b8c\u6210\u9898\u5e93\u7ec3\u4e60",
                 source="assessment",
                 points=points,
-                occurred_at=submission.created_at,
-                detail=question_title[:80],
+                occurred_at=passing_submission.created_at if passing_submission else None,
+                detail=f"{question_title[:80]} · 第 {attempt_number} 次通过 · 得分率 {round(ratio * 100, 1)}%",
             )
         )
 
@@ -369,12 +550,29 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
     weekly_points += community_weekly_points
     recent_events.extend(community_events)
 
+    competition_points, competition_weekly_points, competition_events = exam_submission_point_events(
+        list(student.exam_submissions),
+        week_start,
+    )
+    total_points += competition_points
+    weekly_points += competition_weekly_points
+    recent_events.extend(competition_events)
+
+    followers_count, follower_points, follower_weekly_points, follower_events = follower_point_events(db, student.id, week_start)
+    total_points += follower_points
+    weekly_points += follower_weekly_points
+    recent_events.extend(follower_events)
+
     recent_events.sort(key=lambda event: as_aware(event.occurred_at).timestamp() if as_aware(event.occurred_at) else 0, reverse=True)
     course_breakdown.sort(key=lambda item: item.total_points, reverse=True)
     return {
         "total_points": int(total_points),
         "weekly_points": int(weekly_points),
+        "course_points": int(course_points_total),
         "community_points": int(community_points),
+        "competition_points": int(competition_points),
+        "follower_points": int(follower_points),
+        "followers_count": int(followers_count),
         "level": point_level_for_points(int(total_points)),
         "achievements": student_achievements(
             total_points=int(total_points),
@@ -399,6 +597,11 @@ def build_leaderboard_entry(*, rank: int, user: User, detail: dict, enrollments:
         avatar_url=user.avatar_url,
         total_points=int(detail["total_points"]),
         weekly_points=int(detail["weekly_points"]),
+        course_points=int(detail.get("course_points", 0)),
+        community_points=int(detail.get("community_points", 0)),
+        competition_points=int(detail.get("competition_points", 0)),
+        follower_points=int(detail.get("follower_points", 0)),
+        followers_count=int(detail.get("followers_count", 0)),
         completed_courses=completed_courses,
         active_courses=active_courses,
         average_progress=average_progress,
@@ -416,6 +619,7 @@ def student_point_load_options():
         .selectinload(Enrollment.progress_records)
         .joinedload(ProgressRecord.lesson_item),
         selectinload(User.submissions).joinedload(Submission.question),
+        selectinload(User.exam_submissions).joinedload(ExamPaperSubmission.paper),
     )
 
 

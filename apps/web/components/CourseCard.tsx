@@ -1,22 +1,18 @@
-﻿import { ArrowRight, Euro, Users } from "lucide-react";
+import { ArrowRight, Euro, Star, Users } from "lucide-react";
 import Link from "next/link";
 
 import type { Course } from "@/lib/types";
 
-export function CourseCard({ course }: { course: Course }) {
+export function CourseCard({ course, className = "w-[20rem]" }: { course: Course; className?: string }) {
   const heroImageUrl = course.hero_image_url?.trim();
 
   return (
     <Link
       href={`/courses/${course.slug}`}
-      className="panel block w-[20rem] overflow-hidden rounded-lg transition hover:-translate-y-1 hover:border-mint"
+      className={`panel block overflow-hidden rounded-lg transition hover:-translate-y-1 hover:border-mint ${className}`}
     >
       {heroImageUrl ? (
-        <img
-          src={heroImageUrl}
-          alt={course.title}
-          className="h-40 w-full object-cover"
-        />
+        <img src={heroImageUrl} alt={course.title} className="h-40 w-full object-cover" />
       ) : (
         <div className="grid h-40 w-full place-items-center bg-slate-100 text-sm font-semibold text-slate-500">
           尚未上传图片
@@ -36,6 +32,11 @@ export function CourseCard({ course }: { course: Course }) {
           <span className="flex items-center gap-1.5">
             <Users size={15} /> {course.students_count}
           </span>
+        </div>
+        <div className="mt-3 flex items-center gap-1.5 text-sm font-bold text-amber-600">
+          <Star size={15} fill="currentColor" />
+          <span>{(course.rating_average ?? 0).toFixed(1)}</span>
+          <span className="font-semibold text-slate-400">({course.rating_count ?? 0})</span>
         </div>
         <div className="mt-4 flex items-center justify-between text-sm font-semibold text-coral">
           <span>{course.institution.name}</span>

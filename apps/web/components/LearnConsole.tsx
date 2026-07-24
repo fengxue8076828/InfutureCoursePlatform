@@ -13,8 +13,11 @@ import {
   List,
   ListVideo,
   Lock,
+  MessageSquareText,
   NotebookPen,
   Palette,
+  Send,
+  Star,
   Type,
   Upload
 } from "lucide-react";
@@ -24,11 +27,13 @@ import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode, Synth
 import { CommunityQuestionBox } from "@/components/CommunityQuestionBox";
 import { MathText } from "@/components/MathText";
 import { getStudentRequestHeaders } from "@/lib/student-session";
-import type { Chapter, Enrollment, LessonItem, Question, QuestionMedia, QuestionOption } from "@/lib/types";
+import type { Chapter, CourseReview, Enrollment, LessonItem, Question, QuestionMedia, QuestionOption } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
 const LEARN_LAYOUT_STORAGE_KEY = "infuture-learn-console-layout";
+const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";
+const COURSE_REVIEW_ITEM_ID = -9001;
 const DEFAULT_SIDEBAR_WIDTH = 304;
 const DEFAULT_NOTES_WIDTH = 352;
 const DEFAULT_NOTE_EDITOR_HEIGHT = 420;
@@ -78,7 +83,8 @@ const iconMap = {
   video: ListVideo,
   handout: FileText,
   exercise: Code2,
-  quiz: CheckCircle2
+  quiz: CheckCircle2,
+  review: Star
 };
 
 type QuestionAnswer = string | string[] | boolean | { fileName: string; fileType: string };
@@ -164,7 +170,23 @@ export function LearnConsole({
     enrollments.find((item) => item.course.slug === initialCourseSlug) ?? enrollments[0];
   const isCourseCompleted = selectedEnrollment?.status === "completed";
   const course = selectedEnrollment?.course;
-  const items = useMemo(() => course?.chapters?.flatMap((chapter) => chapter.items) ?? [], [course]);
+  const courseReviewItem = useMemo<LessonItem | undefined>(
+    () =>
+      course
+        ? {
+            id: COURSE_REVIEW_ITEM_ID,
+            title: "\u8bfe\u7a0b\u8bc4\u5206\u4e0e\u8bc4\u8bed",
+            item_type: "review",
+            content_url: null,
+            body: {},
+            required_minutes: 0,
+            position: Number.MAX_SAFE_INTEGER
+          }
+        : undefined,
+    [course]
+  );
+  const courseItems = useMemo(() => course?.chapters?.flatMap((chapter) => chapter.items) ?? [], [course]);
+  const items = useMemo(() => (courseReviewItem ? [...courseItems, courseReviewItem] : courseItems), [courseItems, courseReviewItem]);
   const itemIdsKey = useMemo(() => items.map((item) => item.id).join(","), [items]);
   const firstItemId = items[0]?.id;
   const [itemId, setItemId] = useState<number | undefined>(items[0]?.id);
@@ -197,6 +219,9 @@ export function LearnConsole({
   const [completionBusyIds, setCompletionBusyIds] = useState<Set<number>>(() => new Set());
   const completionBusyIdsRef = useRef(completionBusyIds);
   const [collapsedChapterIds, setCollapsedChapterIds] = useState<Set<number>>(() => new Set());
+  const [courseReview, setCourseReview] = useState<CourseReview | null>(null);
+  const [courseReviewStatus, setCourseReviewStatus] = useState("");
+  const [courseReviewLoading, setCourseReviewLoading] = useState(false);
   const activeItem = items.find((item) => item.id === itemId) ?? items[0];
   const activeItemId = activeItem?.id;
   const activeItemType = activeItem?.item_type;
@@ -394,6 +419,44 @@ export function LearnConsole({
   }, [activeChapterId, selectedEnrollment.id]);
 
   useEffect(() => {
+    if (!course?.slug || !selectedEnrollment?.id) {
+      return;
+    }
+    let ignore = false;
+    async function loadCourseReview() {
+      setCourseReviewLoading(true);
+      setCourseReviewStatus("\u6b63\u5728\u8bfb\u53d6\u8bfe\u7a0b\u8bc4\u4ef7...");
+      try {
+        const response = await fetch(
+          `${API_BASE_URL}/learn/courses/${course.slug}/review?enrollment_id=${selectedEnrollment.id}`,
+          { headers: getStudentRequestHeaders(), cache: "no-store" }
+        );
+        if (!response.ok) {
+          throw new Error("load course review failed");
+        }
+        const payload = (await response.json()) as CourseReview;
+        if (!ignore) {
+          setCourseReview(payload);
+          setCourseReviewStatus("");
+        }
+      } catch {
+        if (!ignore) {
+          setCourseReview(null);
+          setCourseReviewStatus("\u8bfe\u7a0b\u8bc4\u4ef7\u8bfb\u53d6\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
+        }
+      } finally {
+        if (!ignore) {
+          setCourseReviewLoading(false);
+        }
+      }
+    }
+    void loadCourseReview();
+    return () => {
+      ignore = true;
+    };
+  }, [course?.slug, selectedEnrollment?.id]);
+
+  useEffect(() => {
     if (!activeItemId || (activeItemType !== "exercise" && activeItemType !== "quiz")) {
       return;
     }
@@ -509,6 +572,16 @@ export function LearnConsole({
     return chapter.items.every((item) => completedItemIds.has(item.id));
   }
 
+  function isCourseWorkCompleted() {
+    if (isCourseCompleted) {
+      return true;
+    }
+    if (courseItems.length === 0) {
+      return true;
+    }
+    return courseItems.every((item) => completedItemIds.has(item.id));
+  }
+
   function isChapterUnlocked(chapter: Chapter) {
     if (isCourseCompleted) {
       return true;
@@ -555,6 +628,7 @@ export function LearnConsole({
         throw new Error("save note failed");
       }
       setNotesStatus("\u672c\u7ae0\u5b66\u4e60\u7b14\u8bb0\u5df2\u4fdd\u5b58\u3002");
+      window.dispatchEvent(new Event(STUDENT_NOTES_UPDATED_EVENT));
     } catch {
       setNotesStatus("\u7b14\u8bb0\u4fdd\u5b58\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
     }
@@ -637,6 +711,26 @@ export function LearnConsole({
               </section>
             );
           })}
+          {courseReviewItem ? (
+            <section className="rounded-lg border border-amber-100 bg-amber-50/50 p-2">
+              <button
+                type="button"
+                onClick={() => isCourseWorkCompleted() && setItemId(COURSE_REVIEW_ITEM_ID)}
+                disabled={!isCourseWorkCompleted()}
+                className={`focus-ring flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm disabled:cursor-not-allowed ${
+                  activeItem.id === COURSE_REVIEW_ITEM_ID
+                    ? "bg-ink text-white"
+                    : isCourseWorkCompleted()
+                      ? "bg-white text-slate-700 hover:bg-amber-50"
+                      : "bg-white/70 text-slate-400"
+                }`}
+              >
+                {isCourseWorkCompleted() ? <Star size={16} className="shrink-0" /> : <Lock size={16} className="shrink-0" />}
+                <span className="min-w-0 flex-1 truncate">{courseReviewItem.title}</span>
+                {courseReview?.rating ? <CheckCircle2 size={16} className="shrink-0 text-mint" /> : null}
+              </button>
+            </section>
+          ) : null}
         </div>
       </aside>
 
@@ -656,7 +750,14 @@ export function LearnConsole({
               <h1 className="mt-1 text-2xl font-bold text-ink">{activeItem.title || "\u672a\u547d\u540d\u9879\u76ee"}</h1>
             </div>
             <div className="flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm font-semibold text-slate-500">
-              {isCourseCompleted ? (
+              {activeItem.item_type === "review" && courseReview?.rating ? (
+                <>
+                  <CheckCircle2 size={16} className="text-mint" />
+                  <span>{"\u5df2\u63d0\u4ea4\u8bc4\u4ef7"}</span>
+                </>
+              ) : activeItem.item_type === "review" ? (
+                <span>{"\u5f85\u8bc4\u4ef7"}</span>
+              ) : isCourseCompleted ? (
                 <>
                   <CheckCircle2 size={16} className="text-mint" />
                   <span>{"\u590d\u4e60\u6a21\u5f0f"}</span>
@@ -701,6 +802,30 @@ export function LearnConsole({
           ) : null}
 
           {activeItem.item_type === "handout" ? <LessonHandout item={activeItem} /> : null}
+
+          {activeItem.item_type === "review" ? (
+            <CourseReviewPanel
+              courseTitle={course.title}
+              review={courseReview}
+              status={courseReviewStatus}
+              isLoading={courseReviewLoading}
+              readOnly={false}
+              onSubmit={async ({ rating, comment }) => {
+                setCourseReviewStatus("\u6b63\u5728\u4fdd\u5b58\u8bfe\u7a0b\u8bc4\u4ef7...");
+                const response = await fetch(`${API_BASE_URL}/learn/courses/${course.slug}/review`, {
+                  method: "PUT",
+                  headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+                  body: JSON.stringify({ enrollment_id: selectedEnrollment.id, rating, comment })
+                });
+                if (!response.ok) {
+                  throw new Error("save course review failed");
+                }
+                const payload = (await response.json()) as CourseReview;
+                setCourseReview(payload);
+                setCourseReviewStatus("\u8bfe\u7a0b\u8bc4\u4ef7\u5df2\u4fdd\u5b58\uff0c\u611f\u8c22\u4f60\u7684\u53cd\u9988\u3002");
+              }}
+            />
+          ) : null}
 
           {activeItem.item_type === "exercise" || activeItem.item_type === "quiz" ? (
             <QuestionSet
@@ -815,6 +940,115 @@ export function LearnConsole({
           ) : null}
         </aside>
       </main>
+    </div>
+  );
+}
+
+function CourseReviewPanel({
+  courseTitle,
+  review,
+  status,
+  isLoading,
+  readOnly,
+  onSubmit
+}: {
+  courseTitle: string;
+  review: CourseReview | null;
+  status: string;
+  isLoading: boolean;
+  readOnly: boolean;
+  onSubmit: (payload: { rating: number; comment: string }) => Promise<void>;
+}) {
+  const [rating, setRating] = useState(review?.rating ?? 0);
+  const [comment, setComment] = useState(review?.comment ?? "");
+  const [submitStatus, setSubmitStatus] = useState("");
+
+  useEffect(() => {
+    setRating(review?.rating ?? 0);
+    setComment(review?.comment ?? "");
+  }, [review?.comment, review?.rating]);
+
+  async function handleSubmit() {
+    if (readOnly || rating < 1) {
+      return;
+    }
+    setSubmitStatus("");
+    try {
+      await onSubmit({ rating, comment });
+    } catch {
+      setSubmitStatus("\u8bc4\u4ef7\u4fdd\u5b58\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002");
+    }
+  }
+
+  return (
+    <div className="mt-5 rounded-lg border border-amber-100 bg-[linear-gradient(135deg,#fffaf0_0%,#ffffff_52%,#f4fbf7_100%)] p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <p className="inline-flex items-center gap-2 rounded-full bg-amber-100 px-3 py-1 text-xs font-black text-amber-700">
+            <MessageSquareText size={14} />
+            {"\u8bfe\u7a0b\u53cd\u9988"}
+          </p>
+          <h2 className="mt-3 text-2xl font-black text-ink">{"\u7ed9\u8fd9\u95e8\u8bfe\u7559\u4e0b\u8bc4\u5206\u548c\u8bc4\u8bed"}</h2>
+          <p className="mt-2 text-sm leading-6 text-slate-600">
+            {"\u4f60\u7684\u8bc4\u4ef7\u4f1a\u5e2e\u52a9\u5176\u4ed6\u540c\u5b66\u66f4\u597d\u5730\u9009\u8bfe\uff0c\u4e5f\u4f1a\u5e2e\u52a9\u673a\u6784\u6301\u7eed\u4f18\u5316\u300a"}
+            {courseTitle}
+            {"\u300b\u3002"}
+          </p>
+        </div>
+        {review?.rating ? (
+          <span className="rounded-full bg-mint/10 px-3 py-1 text-xs font-black text-mint">{"\u5df2\u63d0\u4ea4"}</span>
+        ) : null}
+      </div>
+
+      <div className="mt-6 rounded-lg border border-white bg-white/80 p-4 shadow-sm">
+        <p className="text-sm font-black text-slate-600">{"\u8bfe\u7a0b\u8bc4\u5206"}</p>
+        <div className="mt-3 flex flex-wrap items-center gap-2">
+          {[1, 2, 3, 4, 5].map((value) => (
+            <button
+              key={value}
+              type="button"
+              onClick={() => !readOnly && setRating(value)}
+              disabled={readOnly}
+              className={`focus-ring grid h-11 w-11 place-items-center rounded-lg border text-lg transition ${
+                value <= rating
+                  ? "border-amber-200 bg-amber-100 text-amber-600"
+                  : "border-slate-200 bg-white text-slate-300 hover:border-amber-200 hover:text-amber-500"
+              }`}
+              aria-label={`${value} \u661f`}
+            >
+              <Star size={22} fill={value <= rating ? "currentColor" : "none"} />
+            </button>
+          ))}
+          <span className="ml-1 text-sm font-bold text-slate-500">
+            {rating > 0 ? `${rating} / 5` : "\u8bf7\u9009\u62e9\u8bc4\u5206"}
+          </span>
+        </div>
+      </div>
+
+      <label className="mt-4 block">
+        <span className="text-sm font-black text-slate-600">{"\u8bc4\u8bed"}</span>
+        <textarea
+          value={comment}
+          onChange={(event) => setComment(event.target.value)}
+          disabled={readOnly}
+          className="focus-ring mt-2 min-h-36 w-full rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm leading-7 text-ink disabled:bg-slate-50"
+          placeholder={"\u53ef\u4ee5\u5199\u5199\u4f60\u6700\u559c\u6b22\u7684\u90e8\u5206\u3001\u8bfe\u7a0b\u96be\u5ea6\u6216\u5efa\u8bae\u3002"}
+          maxLength={2000}
+        />
+      </label>
+
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-slate-500">{submitStatus || status}</p>
+        <button
+          type="button"
+          onClick={() => void handleSubmit()}
+          disabled={readOnly || rating < 1 || isLoading}
+          className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-5 py-3 text-sm font-bold text-white disabled:cursor-not-allowed disabled:bg-slate-300"
+        >
+          <Send size={16} />
+          {review?.rating ? "\u66f4\u65b0\u8bc4\u4ef7" : "\u63d0\u4ea4\u8bc4\u4ef7"}
+        </button>
+      </div>
     </div>
   );
 }

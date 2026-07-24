@@ -165,7 +165,10 @@ function InstitutionLogo({ institution }: { institution: Institution }) {
   const logoUrl = institution.logo_url?.trim();
 
   return (
-    <div className="flex min-w-0 items-center gap-3">
+    <Link
+      href={`/institutions/${institution.slug}`}
+      className="flex min-w-0 items-center gap-3 rounded-lg px-2 py-1 transition hover:bg-white/70 hover:text-coral"
+    >
       {logoUrl ? (
         <img src={logoUrl} alt={institution.name} className="h-12 w-12 rounded-lg object-contain" />
       ) : (
@@ -174,7 +177,7 @@ function InstitutionLogo({ institution }: { institution: Institution }) {
         </span>
       )}
       <p className="truncate text-sm font-bold text-ink">{institution.name}</p>
-    </div>
+    </Link>
   );
 }
 
@@ -188,8 +191,14 @@ export default async function HomePage() {
     getPublishedQuestions()
   ]);
 
-  const hotCourses = courses.filter((course) => course.is_hot);
-  const featuredCourses = (hotCourses.length > 0 ? hotCourses : courses).slice(0, 8);
+  const featuredCourses = [...courses]
+    .sort(
+      (a, b) =>
+        (b.rating_average ?? 0) - (a.rating_average ?? 0) ||
+        (b.rating_count ?? 0) - (a.rating_count ?? 0) ||
+        (b.students_count || 0) - (a.students_count || 0)
+    )
+    .slice(0, 10);
   const heroCourse = featuredCourses[0];
   const visibleTeachers = teachers.slice(0, 8);
   const totalStudents = courses.reduce((total, course) => total + (course.students_count || 0), 0);
@@ -337,7 +346,9 @@ export default async function HomePage() {
           <div className="mt-7">
             {featuredCourses.length > 0 ? (
               <ScrollRow>
-                {featuredCourses.map((course) => <CourseCard key={course.id} course={course} />)}
+                {featuredCourses.map((course) => (
+                  <CourseCard key={course.id} course={course} className="w-[calc((100%-3rem)/4)] min-w-[17rem] shrink-0" />
+                ))}
               </ScrollRow>
             ) : (
               <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-8 text-sm text-slate-500">暂无已发布课程。</div>

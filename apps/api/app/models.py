@@ -35,6 +35,44 @@ class CourseStatus(str, enum.Enum):
     archived = "archived"
 
 
+class ActivityMode(str, enum.Enum):
+    online = "online"
+    offline = "offline"
+
+
+class ActivityRegistrationStatus(str, enum.Enum):
+    open = "open"
+    closed = "closed"
+
+
+class LearningPathStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
+    archived = "archived"
+
+
+class ExamPaperKind(str, enum.Enum):
+    mock_exam = "mock_exam"
+    competition = "competition"
+
+
+class ExamPaperSourceType(str, enum.Enum):
+    mock = "mock"
+    past_paper = "past_paper"
+
+
+class ExamPaperStatus(str, enum.Enum):
+    draft = "draft"
+    published = "published"
+    archived = "archived"
+
+
+class ExamSubmissionStatus(str, enum.Enum):
+    submitted = "submitted"
+    pending_manual = "pending_manual"
+    graded = "graded"
+
+
 class LessonItemType(str, enum.Enum):
     video = "video"
     handout = "handout"
@@ -95,6 +133,15 @@ class Institution(Base, TimestampMixin):
     course_categories: Mapped[list["CourseCategory"]] = relationship(back_populates="institution")
     teachers: Mapped[list["Teacher"]] = relationship(back_populates="institution")
     admins: Mapped[list["User"]] = relationship(back_populates="institution")
+    activities: Mapped[list["InstitutionActivity"]] = relationship(
+        back_populates="institution", cascade="all, delete-orphan"
+    )
+    learning_paths: Mapped[list["LearningPath"]] = relationship(
+        back_populates="institution", cascade="all, delete-orphan"
+    )
+    exam_papers: Mapped[list["ExamPaper"]] = relationship(
+        back_populates="institution", cascade="all, delete-orphan"
+    )
 
 
 class User(Base, TimestampMixin):
@@ -120,6 +167,7 @@ class User(Base, TimestampMixin):
     submissions: Mapped[list["Submission"]] = relationship(
         back_populates="user", foreign_keys="Submission.user_id"
     )
+    exam_submissions: Mapped[list["ExamPaperSubmission"]] = relationship(back_populates="user")
 
 
 class AdminLoginVerificationCode(Base, TimestampMixin):
@@ -169,6 +217,7 @@ class CourseCategory(Base, TimestampMixin):
         back_populates="parent", cascade="all, delete-orphan", order_by="CourseCategory.position"
     )
     institution: Mapped[Institution] = relationship(back_populates="course_categories")
+    exam_papers: Mapped[list["ExamPaper"]] = relationship(back_populates="category")
 
 
 class Course(Base, TimestampMixin):
@@ -203,6 +252,152 @@ class Course(Base, TimestampMixin):
     questions: Mapped[list["Question"]] = relationship(back_populates="course")
     enrollments: Mapped[list["Enrollment"]] = relationship(back_populates="course")
     subscriptions: Mapped[list["Subscription"]] = relationship(back_populates="course")
+    reviews: Mapped[list["CourseReview"]] = relationship(back_populates="course", cascade="all, delete-orphan")
+    learning_path_links: Mapped[list["LearningPathCourse"]] = relationship(
+        back_populates="course", cascade="all, delete-orphan"
+    )
+
+
+class LearningPath(Base, TimestampMixin):
+    __tablename__ = "learning_paths"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
+    slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(220), index=True)
+    subtitle: Mapped[str] = mapped_column(String(320), default="")
+    description: Mapped[str] = mapped_column(Text, default="")
+    cover_url: Mapped[str] = mapped_column(String(500), default="")
+    intro_video_url: Mapped[str] = mapped_column(String(500), default="")
+    audience: Mapped[str] = mapped_column(String(260), default="")
+    level: Mapped[str] = mapped_column(String(80), default="")
+    status: Mapped[LearningPathStatus] = mapped_column(
+        Enum(LearningPathStatus),
+        default=LearningPathStatus.draft,
+        server_default=LearningPathStatus.draft.value,
+        index=True,
+    )
+
+    institution: Mapped[Institution] = relationship(back_populates="learning_paths")
+    course_links: Mapped[list["LearningPathCourse"]] = relationship(
+        back_populates="learning_path", cascade="all, delete-orphan", order_by="LearningPathCourse.position"
+    )
+
+
+class LearningPathCourse(Base, TimestampMixin):
+    __tablename__ = "learning_path_courses"
+    __table_args__ = (
+        UniqueConstraint("learning_path_id", "course_id", name="uq_learning_path_course"),
+        UniqueConstraint("learning_path_id", "position", name="uq_learning_path_course_position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    learning_path_id: Mapped[int] = mapped_column(ForeignKey("learning_paths.id", ondelete="CASCADE"), index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=1)
+
+    learning_path: Mapped[LearningPath] = relationship(back_populates="course_links")
+    course: Mapped[Course] = relationship(back_populates="learning_path_links")
+
+
+class ExamPaper(Base, TimestampMixin):
+    __tablename__ = "exam_papers"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
+    category_id: Mapped[int | None] = mapped_column(ForeignKey("course_categories.id"), index=True)
+    slug: Mapped[str] = mapped_column(String(180), unique=True, index=True)
+    title: Mapped[str] = mapped_column(String(220), index=True)
+    description: Mapped[str] = mapped_column(Text, default="")
+    cover_url: Mapped[str] = mapped_column(String(500), default="")
+    instructions: Mapped[str] = mapped_column(Text, default="")
+    audience: Mapped[str] = mapped_column(String(260), default="")
+    kind: Mapped[ExamPaperKind] = mapped_column(Enum(ExamPaperKind), index=True)
+    source_type: Mapped[ExamPaperSourceType] = mapped_column(
+        Enum(ExamPaperSourceType),
+        default=ExamPaperSourceType.mock,
+        server_default=ExamPaperSourceType.mock.value,
+        index=True,
+    )
+    past_year: Mapped[int | None] = mapped_column(Integer)
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    status: Mapped[ExamPaperStatus] = mapped_column(
+        Enum(ExamPaperStatus),
+        default=ExamPaperStatus.draft,
+        server_default=ExamPaperStatus.draft.value,
+        index=True,
+    )
+    starts_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+
+    institution: Mapped[Institution] = relationship(back_populates="exam_papers")
+    category: Mapped[CourseCategory | None] = relationship(back_populates="exam_papers")
+    question_links: Mapped[list["ExamPaperQuestion"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="ExamPaperQuestion.position"
+    )
+    registrations: Mapped[list["CompetitionRegistration"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="CompetitionRegistration.created_at.desc()"
+    )
+    submissions: Mapped[list["ExamPaperSubmission"]] = relationship(
+        back_populates="paper", cascade="all, delete-orphan", order_by="ExamPaperSubmission.submitted_at.desc()"
+    )
+
+
+class ExamPaperQuestion(Base, TimestampMixin):
+    __tablename__ = "exam_paper_questions"
+    __table_args__ = (
+        UniqueConstraint("paper_id", "question_id", name="uq_exam_paper_question"),
+        UniqueConstraint("paper_id", "position", name="uq_exam_paper_question_position"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey("exam_papers.id", ondelete="CASCADE"), index=True)
+    question_id: Mapped[int] = mapped_column(ForeignKey("questions.id", ondelete="CASCADE"), index=True)
+    position: Mapped[int] = mapped_column(Integer, default=1)
+    points_override: Mapped[int | None] = mapped_column(Integer)
+
+    paper: Mapped[ExamPaper] = relationship(back_populates="question_links")
+    question: Mapped["Question"] = relationship()
+
+
+class CompetitionRegistration(Base, TimestampMixin):
+    __tablename__ = "competition_registrations"
+    __table_args__ = (UniqueConstraint("paper_id", "student_email", name="uq_competition_registration_email"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey("exam_papers.id", ondelete="CASCADE"), index=True)
+    student_name: Mapped[str] = mapped_column(String(120))
+    student_email: Mapped[str] = mapped_column(String(255), index=True)
+    phone: Mapped[str | None] = mapped_column(String(80))
+    note: Mapped[str | None] = mapped_column(Text)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+
+    paper: Mapped[ExamPaper] = relationship(back_populates="registrations")
+    user: Mapped[User | None] = relationship()
+
+
+class ExamPaperSubmission(Base, TimestampMixin):
+    __tablename__ = "exam_paper_submissions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    paper_id: Mapped[int] = mapped_column(ForeignKey("exam_papers.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    student_name: Mapped[str] = mapped_column(String(120))
+    student_email: Mapped[str] = mapped_column(String(255), index=True)
+    answers: Mapped[dict] = mapped_column(JSONB, default=dict)
+    score: Mapped[float] = mapped_column(Float, default=0)
+    total_score: Mapped[float] = mapped_column(Float, default=0)
+    status: Mapped[ExamSubmissionStatus] = mapped_column(
+        Enum(ExamSubmissionStatus),
+        default=ExamSubmissionStatus.submitted,
+        server_default=ExamSubmissionStatus.submitted.value,
+        index=True,
+    )
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+
+    paper: Mapped[ExamPaper] = relationship(back_populates="submissions")
+    user: Mapped[User | None] = relationship(back_populates="exam_submissions")
 
 
 class CourseChapter(Base, TimestampMixin):
@@ -257,6 +452,22 @@ class Enrollment(Base, TimestampMixin):
     progress_records: Mapped[list["ProgressRecord"]] = relationship(
         back_populates="enrollment", cascade="all, delete-orphan"
     )
+
+
+class CourseReview(Base, TimestampMixin):
+    __tablename__ = "course_reviews"
+    __table_args__ = (UniqueConstraint("user_id", "course_id", name="uq_user_course_review"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id", ondelete="CASCADE"), index=True)
+    enrollment_id: Mapped[int | None] = mapped_column(ForeignKey("enrollments.id", ondelete="SET NULL"), index=True)
+    rating: Mapped[int] = mapped_column(Integer)
+    comment: Mapped[str] = mapped_column(Text, default="")
+
+    user: Mapped[User] = relationship()
+    course: Mapped[Course] = relationship(back_populates="reviews")
+    enrollment: Mapped[Enrollment | None] = relationship()
 
 
 class ProgressRecord(Base, TimestampMixin):
@@ -410,10 +621,28 @@ class StudentPost(Base, TimestampMixin):
     course_id: Mapped[int | None] = mapped_column(ForeignKey("courses.id", ondelete="SET NULL"), index=True)
     content: Mapped[str] = mapped_column(Text)
     image_urls: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    likes_count: Mapped[int] = mapped_column(Integer, default=0)
     visibility: Mapped[str] = mapped_column(String(40), default="public", index=True)
 
     user: Mapped[User] = relationship()
     course: Mapped[Course | None] = relationship()
+    comments: Mapped[list["StudentPostComment"]] = relationship(
+        back_populates="post",
+        cascade="all, delete-orphan",
+        order_by="StudentPostComment.created_at",
+    )
+
+
+class StudentPostComment(Base, TimestampMixin):
+    __tablename__ = "student_post_comments"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    post_id: Mapped[int] = mapped_column(ForeignKey("student_posts.id", ondelete="CASCADE"), index=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
+    body: Mapped[str] = mapped_column(Text)
+
+    post: Mapped[StudentPost] = relationship(back_populates="comments")
+    user: Mapped[User] = relationship()
 
 
 class StudentFollow(Base, TimestampMixin):
@@ -506,6 +735,48 @@ class CommunityMessage(Base, TimestampMixin):
 
     sender: Mapped[User] = relationship(foreign_keys=[sender_id])
     receiver: Mapped[User] = relationship(foreign_keys=[receiver_id])
+
+
+class InstitutionActivity(Base, TimestampMixin):
+    __tablename__ = "institution_activities"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
+    title: Mapped[str] = mapped_column(String(220), index=True)
+    description: Mapped[str] = mapped_column(Text)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mode: Mapped[ActivityMode] = mapped_column(Enum(ActivityMode), default=ActivityMode.online, index=True)
+    meeting_url: Mapped[str | None] = mapped_column(Text)
+    location: Mapped[str | None] = mapped_column(String(500))
+    audience: Mapped[str | None] = mapped_column(String(300))
+    registration_status: Mapped[ActivityRegistrationStatus] = mapped_column(
+        Enum(ActivityRegistrationStatus),
+        default=ActivityRegistrationStatus.open,
+        server_default=ActivityRegistrationStatus.open.value,
+        index=True,
+    )
+    capacity: Mapped[int | None] = mapped_column(Integer)
+
+    institution: Mapped[Institution] = relationship(back_populates="activities")
+    registrations: Mapped[list["ActivityRegistration"]] = relationship(
+        back_populates="activity", cascade="all, delete-orphan", order_by="ActivityRegistration.created_at.desc()"
+    )
+
+
+class ActivityRegistration(Base, TimestampMixin):
+    __tablename__ = "activity_registrations"
+    __table_args__ = (UniqueConstraint("activity_id", "student_email", name="uq_activity_registration_email"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    activity_id: Mapped[int] = mapped_column(ForeignKey("institution_activities.id", ondelete="CASCADE"), index=True)
+    student_name: Mapped[str] = mapped_column(String(120))
+    student_email: Mapped[str] = mapped_column(String(255), index=True)
+    phone: Mapped[str | None] = mapped_column(String(80))
+    note: Mapped[str | None] = mapped_column(Text)
+
+    activity: Mapped[InstitutionActivity] = relationship(back_populates="registrations")
+
 
 class BlogPost(Base, TimestampMixin):
     __tablename__ = "blog_posts"
