@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   ArrowRight,
@@ -70,7 +70,7 @@ export function CommunityPage() {
   const hotQuestions = home?.questions ?? [];
   const recommendedQuestions = home?.recommended_questions?.length ? home.recommended_questions : hotQuestions.filter((question) => question.user_id !== studentSession?.id).slice(0, 6);
   const hotNotes = home?.notes ?? [];
-  const hotStudents = home?.hot_students?.length ? home.hot_students : home?.students ?? [];
+  const hotStudents = home?.hot_students ?? [];
   const questionStats = hotQuestions.length;
   const noteStats = hotNotes.length;
   const answerStats = hotQuestions.reduce((sum, question) => sum + question.answers_count, 0);

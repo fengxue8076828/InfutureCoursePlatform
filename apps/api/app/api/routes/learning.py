@@ -953,7 +953,22 @@ def community_home(
     if search:
         student_stmt = student_stmt.where(or_(User.full_name.ilike(pattern), User.bio.ilike(pattern), User.region.ilike(pattern)))
     students = list(db.scalars(student_stmt))
-    hot_students = sorted(students, key=lambda student: community_points_for_user(db, student.id), reverse=True)[:8]
+
+    def student_activity_score(student: User) -> int:
+        community_points = community_points_for_user(db, student.id)
+        follower_count = db.scalar(select(func.count(StudentFollow.id)).where(StudentFollow.followee_id == student.id)) or 0
+        question_count = db.scalar(select(func.count(CommunityQuestion.id)).where(CommunityQuestion.user_id == student.id)) or 0
+        answer_count = db.scalar(select(func.count(CommunityAnswer.id)).where(CommunityAnswer.user_id == student.id)) or 0
+        note_count = db.scalar(select(func.count(CommunityNoteShare.id)).where(CommunityNoteShare.user_id == student.id)) or 0
+        post_count = db.scalar(select(func.count(StudentPost.id)).where(StudentPost.user_id == student.id)) or 0
+        return int(community_points + follower_count + question_count + answer_count + note_count + post_count)
+
+    scored_students = [(student, student_activity_score(student)) for student in students]
+    hot_students = [
+        student
+        for student, score in sorted(scored_students, key=lambda item: item[1], reverse=True)
+        if score > 0
+    ][:8]
 
     following_ids = list(db.scalars(select(StudentFollow.followee_id).where(StudentFollow.follower_id == current_user.id))) if current_user else []
     reference_questions = list(
