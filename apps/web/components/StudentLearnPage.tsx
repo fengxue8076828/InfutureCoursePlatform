@@ -9,7 +9,7 @@ import { Header } from "@/components/Header";
 import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
 import { StudentFollowNetworkPanel } from "@/components/StudentFollowNetworkPanel";
 import { StudentProfileActivityTabs } from "@/components/StudentProfileActivityTabs";
-import { getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
+import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
 import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
@@ -226,6 +226,17 @@ export function StudentLearnPage() {
 
       const requestHeaders = getStudentRequestHeaders();
 
+      function clearInvalidStudentSession(response: Response) {
+        if (response.status === 401 || response.status === 403 || response.status === 404) {
+          setEnrollments([]);
+          setNotes([]);
+          setSocialHome(null);
+          clearStudentSession();
+          return true;
+        }
+        return false;
+      }
+
       async function loadCourses() {
         try {
           const coursesResponse = await fetch(`${API_BASE_URL}/learn/me/courses?ts=${Date.now()}`, {
@@ -234,6 +245,7 @@ export function StudentLearnPage() {
           });
           if (ignore) return;
           if (!coursesResponse.ok) {
+            if (clearInvalidStudentSession(coursesResponse)) return;
             setStatus(ui.courseLoadFailed);
             return;
           }
@@ -254,6 +266,7 @@ export function StudentLearnPage() {
           });
           if (ignore) return;
           if (!notesResponse.ok) {
+            if (clearInvalidStudentSession(notesResponse)) return;
             setNotesStatus(ui.notesLoadFailed);
             return;
           }
@@ -274,6 +287,7 @@ export function StudentLearnPage() {
           });
           if (ignore) return;
           if (!homeResponse.ok) {
+            if (clearInvalidStudentSession(homeResponse)) return;
             setHomeStatus(ui.homeLoadFailed);
             return;
           }
@@ -309,6 +323,11 @@ export function StudentLearnPage() {
           cache: "no-store"
         });
         if (!response.ok) {
+          if (response.status === 401 || response.status === 403 || response.status === 404) {
+            setNotes([]);
+            clearStudentSession();
+            return;
+          }
           setNotesStatus(ui.notesLoadFailed);
           return;
         }
@@ -844,8 +863,8 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
       <StudentFollowNetworkPanel
         followingStudents={socialHome?.following_students ?? []}
         followerStudents={socialHome?.follower_students ?? []}
-        followingCount={socialHome?.following_count ?? socialHome?.following_ids.length ?? 0}
-        followersCount={socialHome?.followers_count ?? 0}
+        followingCount={socialHome?.following_count ?? socialHome?.following_students?.length ?? 0}
+        followersCount={socialHome?.followers_count ?? socialHome?.follower_students?.length ?? 0}
       />
     </section>
   );

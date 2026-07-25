@@ -858,82 +858,6 @@ def community_points_for_user(db: Session, user_id: int) -> int:
 
 
 
-def ensure_community_demo_data(db: Session, current_user: User | None) -> None:
-    question_count = db.scalar(select(func.count()).select_from(CommunityQuestion)) or 0
-    note_count = db.scalar(select(func.count()).select_from(CommunityNoteShare)) or 0
-    if question_count and note_count:
-        return
-
-    demo_profiles = [
-        ("community.anna@example.com", "\u5b89\u5a1c", "Europe", "\u559c\u6b22\u8bed\u8a00\u5b66\u4e60\u548c\u5199\u4f5c\u5206\u4eab\u3002"),
-        ("community.ming@example.com", "\u660e\u660e", "Asia", "\u6b63\u5728\u5237\u9898\u548c\u6574\u7406\u7b14\u8bb0\u3002"),
-        ("community.sofia@example.com", "Sofia", "Europe", "\u559c\u6b22\u628a\u590d\u6742\u95ee\u9898\u8bb2\u6e05\u695a\u3002"),
-    ]
-    demo_users: list[User] = []
-    for email, name, region, bio in demo_profiles:
-        user = db.scalar(select(User).where(User.email == email))
-        if user is None:
-            user = User(
-                email=email,
-                full_name=name,
-                role=UserRole.student,
-                hashed_password=None,
-                auth_provider="community_demo",
-                region=region,
-                bio=bio,
-                is_active=True,
-            )
-            db.add(user)
-            db.flush()
-        demo_users.append(user)
-
-    enrollments = load_enrollments_for_user(db, current_user.id) if current_user else []
-    first_course = enrollments[0].course if enrollments else None
-    first_chapter = (first_course.chapters or [None])[0] if first_course and first_course.chapters else None
-    demo_question_owner_id = current_user.id if current_user and current_user.role == UserRole.student else demo_users[2].id
-
-    if not question_count:
-        questions = [
-            CommunityQuestion(
-                user_id=demo_users[0].id,
-                title="\u5199\u4f5c\u91cc\u600e\u4e48\u8ba9\u53e5\u5b50\u66f4\u81ea\u7136\uff1f",
-                body="\u6211\u5199\u82f1\u6587\u6bb5\u843d\u65f6\uff0c\u603b\u611f\u89c9\u53e5\u5b50\u50cf\u662f\u76f4\u8bd1\u3002\u5927\u5bb6\u6709\u6ca1\u6709\u68c0\u67e5\u53e5\u5b50\u81ea\u7136\u5ea6\u7684\u65b9\u6cd5\uff1f",
-                tags={"items": ["\u5199\u4f5c", "A1", "\u8bed\u8a00"]},
-            ),
-            CommunityQuestion(
-                user_id=demo_users[1].id,
-                title="\u505a\u591a\u9009\u9898\u65f6\u5e94\u8be5\u5148\u6392\u9664\u8fd8\u662f\u5148\u627e\u5173\u952e\u8bcd\uff1f",
-                body="\u6709\u4e9b\u9009\u9879\u770b\u8d77\u6765\u90fd\u5bf9\uff0c\u60f3\u542c\u542c\u5927\u5bb6\u7684\u505a\u9898\u987a\u5e8f\u3002",
-                tags={"items": ["\u7b54\u9898\u6280\u5de7", "\u591a\u9009\u9898"]},
-            ),
-            CommunityQuestion(
-                user_id=demo_question_owner_id,
-                title="\u8fd9\u4e00\u7ae0\u7684\u91cd\u70b9\u5e94\u8be5\u600e\u4e48\u590d\u4e60\uff1f",
-                body="\u6211\u60f3\u628a\u7ae0\u8282\u7b14\u8bb0\u6574\u7406\u6210\u590d\u4e60\u6e05\u5355\uff0c\u4f46\u4e0d\u77e5\u9053\u5148\u6293\u54ea\u4e9b\u70b9\u3002",
-                course_id=first_course.id if first_course else None,
-                chapter_id=first_chapter.id if first_chapter else None,
-                tags={"items": ["\u590d\u4e60", "\u7ae0\u8282\u7b14\u8bb0"]},
-            ),
-        ]
-        db.add_all(questions)
-        db.flush()
-        db.add_all([
-            CommunityAnswer(community_question_id=questions[0].id, user_id=demo_users[2].id, body="\u53ef\u4ee5\u5148\u628a\u4e2d\u6587\u610f\u601d\u6539\u6210\u82f1\u6587\u5e38\u89c1\u642d\u914d\uff0c\u518d\u8bfb\u4e00\u904d\u770b\u8fde\u8d2f\u6027\u3002", likes_count=4),
-            CommunityAnswer(community_question_id=questions[1].id, user_id=demo_users[0].id, body="\u6211\u4f1a\u5148\u6807\u51fa\u9898\u5e72\u7684\u9650\u5b9a\u8bcd\uff0c\u518d\u6392\u9664\u7edd\u5bf9\u5316\u7684\u9009\u9879\u3002", likes_count=3),
-            CommunityAnswer(community_question_id=questions[2].id, user_id=demo_users[1].id, body="\u5148\u5217\u51fa\u672c\u7ae0\u4e09\u4e2a\u6838\u5fc3\u95ee\u9898\uff0c\u518d\u7528\u7ec3\u4e60\u9898\u53bb\u68c0\u67e5\u3002", likes_count=5),
-        ])
-
-    if not note_count:
-        db.add_all([
-            CommunityNoteShare(user_id=demo_users[0].id, title="A1 \u5199\u4f5c\u590d\u4e60\u6e05\u5355", content="1. \u5148\u770b\u9898\u76ee\u8981\u6c42\n2. \u5199\u51fa\u4e3b\u8c13\u5bbe\n3. \u52a0\u4e00\u4e2a\u539f\u56e0\u6216\u4f8b\u5b50", likes_count=8),
-            CommunityNoteShare(user_id=demo_users[1].id, title="\u591a\u9009\u9898\u6392\u9664\u6cd5", content="\u4e0d\u786e\u5b9a\u65f6\u5148\u770b\u9650\u5b9a\u8bcd\uff0c\u518d\u6bd4\u8f83\u9009\u9879\u95f4\u7684\u8303\u56f4\u5dee\u5f02\u3002", likes_count=6),
-            CommunityNoteShare(user_id=demo_users[2].id, title="\u542c\u8bfe\u7b14\u8bb0\u600e\u4e48\u8bb0", content="\u7528\u95ee\u9898\u5f0f\u7b14\u8bb0\uff1a\u8fd9\u8282\u8bfe\u89e3\u51b3\u4ec0\u4e48\uff1f\u6211\u8fd8\u5361\u5728\u54ea\u91cc\uff1f", likes_count=5),
-        ])
-
-    if current_user and demo_users and not db.scalar(select(StudentFollow).where(StudentFollow.follower_id == current_user.id, StudentFollow.followee_id == demo_users[0].id)):
-        db.add(StudentFollow(follower_id=current_user.id, followee_id=demo_users[0].id))
-    db.commit()
-
 def validate_community_course_reference(
     db: Session,
     current_user: User,
@@ -963,7 +887,6 @@ def community_home(
 ) -> CommunityHomeOut:
     if current_user:
         ensure_student_user(current_user)
-    ensure_community_demo_data(db, current_user)
     current_user_id = current_user.id if current_user else 0
     search = (q or "").strip()
     pattern = f"%{search}%"

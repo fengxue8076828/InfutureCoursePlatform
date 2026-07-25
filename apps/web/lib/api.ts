@@ -1,4 +1,3 @@
-﻿import { blogPosts, courses, teachers } from "./mock-data";
 import type {
   BlogPost,
   Course,
@@ -17,8 +16,7 @@ const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8
 async function fetchJson<T>(path: string, fallback: T): Promise<T> {
   try {
     const response = await fetch(`${API_BASE_URL}${path}`, {
-      cache: "no-store",
-      headers: { "x-demo-user-id": "1" }
+      cache: "no-store"
     });
     if (!response.ok) {
       return fallback;
@@ -56,12 +54,11 @@ export function getCourseCategories(): Promise<CourseCategory[]> {
 }
 
 export async function getCourse(slug: string): Promise<Course | undefined> {
-  const fallback = courses.find((course) => course.slug === slug);
-  return fetchJson(`/courses/${slug}`, fallback);
+  return fetchJson(`/courses/${slug}`, undefined);
 }
 
 export function getTeachers(): Promise<Teacher[]> {
-  return fetchJson("/teachers", teachers);
+  return fetchJson("/teachers", []);
 }
 
 export function getStudentLeaderboard(): Promise<StudentLeaderboard> {
@@ -88,17 +85,15 @@ export function getPublishedQuestions(): Promise<Question[]> {
 }
 
 export async function getTeacher(slug: string): Promise<Teacher | undefined> {
-  const fallback = teachers.find((teacher) => teacher.slug === slug);
-  return fetchJson(`/teachers/${slug}`, fallback);
+  return fetchJson(`/teachers/${slug}`, undefined);
 }
 
 export function getBlogPosts(): Promise<BlogPost[]> {
-  return fetchJson("/blog", blogPosts);
+  return fetchJson("/blog", []);
 }
 
 export async function getBlogPost(slug: string): Promise<BlogPost | undefined> {
-  const fallback = blogPosts.find((post) => post.slug === slug);
-  return fetchJson(`/blog/${slug}`, fallback);
+  return fetchJson(`/blog/${slug}`, undefined);
 }
 
 export function getEnrollments(): Promise<Enrollment[]> {

@@ -238,7 +238,7 @@ export const gradingQueue = [
   },
   {
     id: 2,
-    student: "Anna Zhang",
+    student: "",
     course: "IB 中文阅读与写作冲刺",
     question: "写作题：我如何理解文本中的人物变化",
     type: "开放写作",
