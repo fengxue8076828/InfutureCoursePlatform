@@ -7,6 +7,8 @@ from email.message import EmailMessage
 from hashlib import sha256
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from google.auth.transport import requests as google_requests
+from google.oauth2 import id_token as google_id_token
 from passlib.context import CryptContext
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -53,6 +55,25 @@ def unique_institution_slug(db: Session, name: str) -> str:
 
 def normalize_email(email: object) -> str:
     return str(email).strip().lower()
+
+
+def verify_google_id_token(token: str) -> dict[str, object]:
+    settings = get_settings()
+    if not settings.google_client_id:
+        raise HTTPException(status_code=503, detail="Google login is not configured")
+    try:
+        claims = google_id_token.verify_oauth2_token(
+            token,
+            google_requests.Request(),
+            settings.google_client_id,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=401, detail="Invalid Google token") from exc
+
+    email = claims.get("email")
+    if not email or not claims.get("email_verified"):
+        raise HTTPException(status_code=401, detail="Google email is not verified")
+    return claims
 
 
 def global_email_exists(email: str, db: Session) -> bool:
@@ -246,8 +267,18 @@ def admin_login(payload: AdminLoginIn, db: Session = Depends(get_db)) -> AuthOut
 @router.post("/social-login", response_model=AuthOut)
 def social_login(payload: SocialLoginIn, db: Session = Depends(get_db)) -> AuthOut:
     provider = payload.provider
-    email = normalize_email(payload.email) if payload.email else f"{provider}.student@example.com"
-    full_name = payload.full_name or SOCIAL_PROVIDER_NAMES[provider]
+    if provider == "google":
+        if not payload.id_token:
+            raise HTTPException(status_code=422, detail="Google id token is required")
+        claims = verify_google_id_token(payload.id_token)
+        email = normalize_email(claims["email"])
+        full_name = str(claims.get("name") or payload.full_name or email.split("@")[0])
+        avatar_url = str(claims.get("picture") or payload.avatar_url or "")
+    else:
+        email = normalize_email(payload.email) if payload.email else f"{provider}.student@example.com"
+        full_name = payload.full_name or SOCIAL_PROVIDER_NAMES[provider]
+        avatar_url = payload.avatar_url or ""
+
     user = db.scalar(select(User).where(func.lower(User.email) == email))
     if user and user.role != UserRole.student:
         raise HTTPException(status_code=409, detail="Email belongs to a non-student account")
@@ -261,14 +292,14 @@ def social_login(payload: SocialLoginIn, db: Session = Depends(get_db)) -> AuthO
             role=UserRole.student,
             hashed_password=None,
             auth_provider=provider,
-            avatar_url=payload.avatar_url,
+            avatar_url=avatar_url or None,
         )
         db.add(user)
     else:
         user.full_name = full_name
         user.auth_provider = provider
-        if payload.avatar_url:
-            user.avatar_url = payload.avatar_url
+        if avatar_url:
+            user.avatar_url = avatar_url
     db.commit()
     db.refresh(user)
     return AuthOut(access_token=f"demo-token-{user.id}", user=user)

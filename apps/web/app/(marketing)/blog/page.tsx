@@ -3,6 +3,9 @@ import Link from "next/link";
 import { SectionTitle } from "@/components/SectionTitle";
 import { getBlogPosts } from "@/lib/api";
 
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
+
 export default async function BlogPage() {
   const posts = await getBlogPosts();
 

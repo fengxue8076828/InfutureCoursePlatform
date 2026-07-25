@@ -87,6 +87,10 @@ export function Header({
   const initials = student?.full_name?.trim()?.slice(0, 1).toUpperCase() || "\u5b66";
 
   async function continueWithSocial(provider: "google" | "facebook") {
+    if (provider === "google") {
+      router.push("/login");
+      return;
+    }
     setSocialProvider(provider);
     try {
       const response = await fetch(`${API_BASE_URL}/auth/social-login`, {

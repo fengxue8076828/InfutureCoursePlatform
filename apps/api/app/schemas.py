@@ -385,6 +385,7 @@ class SocialLoginIn(BaseModel):
     email: EmailStr | None = None
     full_name: str | None = Field(default=None, max_length=120)
     avatar_url: str | None = None
+    id_token: str | None = None
 
 
 class UserOut(OrmModel):

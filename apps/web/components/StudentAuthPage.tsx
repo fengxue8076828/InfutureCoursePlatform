@@ -3,11 +3,68 @@
 import { Facebook, GraduationCap, Loader2, LogIn, Mail, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { persistStudentSession, type StudentAuthResponse } from "@/lib/student-session";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
+const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+const GOOGLE_SCRIPT_ID = "google-identity-services-script";
+
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        id?: {
+          initialize: (config: {
+            client_id: string;
+            callback: (response: { credential?: string }) => void;
+          }) => void;
+          renderButton: (
+            parent: HTMLElement,
+            options: {
+              theme?: string;
+              size?: string;
+              text?: string;
+              shape?: string;
+              width?: number;
+              locale?: string;
+            }
+          ) => void;
+        };
+      };
+    };
+  }
+}
+
+function loadGoogleIdentityScript() {
+  return new Promise<void>((resolve, reject) => {
+    if (typeof window === "undefined") {
+      resolve();
+      return;
+    }
+    if (window.google?.accounts?.id) {
+      resolve();
+      return;
+    }
+    const existingScript = document.getElementById(GOOGLE_SCRIPT_ID) as HTMLScriptElement | null;
+    if (existingScript) {
+      existingScript.addEventListener("load", () => resolve(), { once: true });
+      existingScript.addEventListener("error", () => reject(new Error("Google script failed")), {
+        once: true
+      });
+      return;
+    }
+    const script = document.createElement("script");
+    script.id = GOOGLE_SCRIPT_ID;
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error("Google script failed"));
+    document.head.appendChild(script);
+  });
+}
 
 type StudentAuthMode = "login" | "register";
 type SocialProvider = "google" | "facebook";
@@ -20,11 +77,13 @@ const socialProviderLabels: Record<SocialProvider, string> = {
 export function StudentAuthPage({ mode }: { mode: StudentAuthMode }) {
   const router = useRouter();
   const isRegister = mode === "register";
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [status, setStatus] = useState(isRegister ? "创建学生账号后即可订阅课程。" : "请输入学生账号登录。");
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isGoogleReady, setIsGoogleReady] = useState(false);
 
   async function handleAuthResponse(response: Response) {
     if (!response.ok) {
@@ -85,6 +144,41 @@ export function StudentAuthPage({ mode }: { mode: StudentAuthMode }) {
     }
   }
 
+  async function submitGoogleCredential(credential?: string) {
+    if (!credential) {
+      setStatus("\u672a\u83b7\u53d6\u5230 Google \u767b\u5f55\u51ed\u8bc1\uff0c\u8bf7\u91cd\u8bd5\u3002");
+      return;
+    }
+    setIsSubmitting(true);
+    setStatus("\u6b63\u5728\u9a8c\u8bc1 Google \u8d26\u53f7...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/auth/social-login`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "google", id_token: credential })
+      });
+      await handleAuthResponse(response);
+      setStatus("Google \u767b\u5f55\u6210\u529f\uff0c\u6b63\u5728\u8fdb\u5165\u6211\u7684\u5b66\u4e60...");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      setStatus(
+        message === "Google login is not configured"
+          ? "\u540e\u7aef\u8fd8\u672a\u914d\u7f6e Google Client ID\u3002"
+          : message === "Invalid Google token"
+            ? "Google \u767b\u5f55\u51ed\u8bc1\u65e0\u6548\uff0c\u8bf7\u91cd\u65b0\u767b\u5f55\u3002"
+            : message === "Google email is not verified"
+              ? "Google \u90ae\u7bb1\u8fd8\u672a\u5b8c\u6210\u9a8c\u8bc1\u3002"
+              : message === "Email belongs to a non-student account"
+                ? "\u8fd9\u4e2a\u90ae\u7bb1\u5df2\u7528\u4e8e\u673a\u6784\u6216\u8001\u5e08\u8d26\u53f7\uff0c\u4e0d\u80fd\u4f5c\u4e3a\u5b66\u751f\u8d26\u53f7\u767b\u5f55\u3002"
+                : message === "Email already registered"
+                  ? "\u8fd9\u4e2a\u90ae\u7bb1\u5df2\u7ecf\u6ce8\u518c\u8fc7\u3002"
+                  : message || "Google \u767b\u5f55\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002"
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
   async function continueWithSocial(provider: SocialProvider) {
     setIsSubmitting(true);
     setStatus(`正在连接 ${socialProviderLabels[provider]} 账号...`);
@@ -103,6 +197,43 @@ export function StudentAuthPage({ mode }: { mode: StudentAuthMode }) {
       setIsSubmitting(false);
     }
   }
+
+  useEffect(() => {
+    if (!GOOGLE_CLIENT_ID || !googleButtonRef.current) {
+      return;
+    }
+    let isCancelled = false;
+    setIsGoogleReady(false);
+    loadGoogleIdentityScript()
+      .then(() => {
+        if (isCancelled || !googleButtonRef.current || !window.google?.accounts?.id) {
+          return;
+        }
+        googleButtonRef.current.innerHTML = "";
+        window.google.accounts.id.initialize({
+          client_id: GOOGLE_CLIENT_ID,
+          callback: (response) => void submitGoogleCredential(response.credential)
+        });
+        window.google.accounts.id.renderButton(googleButtonRef.current, {
+          theme: "outline",
+          size: "large",
+          text: isRegister ? "signup_with" : "signin_with",
+          shape: "rectangular",
+          width: 320,
+          locale: "zh_CN"
+        });
+        setIsGoogleReady(true);
+      })
+      .catch(() => {
+        if (!isCancelled) {
+          setStatus("Google \u767b\u5f55\u7ec4\u4ef6\u52a0\u8f7d\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u91cd\u8bd5\u3002");
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+    };
+  }, [isRegister]);
 
   return (
     <main className="bg-mist py-10">
@@ -138,15 +269,26 @@ export function StudentAuthPage({ mode }: { mode: StudentAuthMode }) {
           </div>
 
           <div className="mt-6 grid gap-3">
-            <button
-              type="button"
-              onClick={() => continueWithSocial("google")}
-              disabled={isSubmitting}
-              className="focus-ring flex items-center justify-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:border-mint disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-100 text-sm">G</span>
-              使用 Google 继续
-            </button>
+            {GOOGLE_CLIENT_ID ? (
+              <div className="grid min-h-12 place-items-center rounded-lg border border-slate-200 bg-white px-4 py-2">
+                <div ref={googleButtonRef} className={isGoogleReady ? "" : "hidden"} />
+                {!isGoogleReady ? (
+                  <span className="text-sm font-bold text-slate-500">
+                    Google 登录初始化中...
+                  </span>
+                ) : null}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setStatus("请先配置 NEXT_PUBLIC_GOOGLE_CLIENT_ID。")}
+                disabled={isSubmitting}
+                className="focus-ring flex items-center justify-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-bold text-slate-700 hover:border-mint disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <span className="grid h-6 w-6 place-items-center rounded-full bg-slate-100 text-sm">G</span>
+                Google 登录
+              </button>
+            )}
             <button
               type="button"
               onClick={() => continueWithSocial("facebook")}
