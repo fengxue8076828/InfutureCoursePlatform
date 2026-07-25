@@ -1,11 +1,9 @@
 import { notFound } from "next/navigation";
 
-import { getBlogPost, getBlogPosts } from "@/lib/api";
+import { getBlogPost } from "@/lib/api";
 
-export async function generateStaticParams() {
-  const posts = await getBlogPosts();
-  return posts.map((post) => ({ slug: post.slug }));
-}
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function BlogDetailPage({ params }: { params: { slug: string } }) {
   const post = await getBlogPost(params.slug);

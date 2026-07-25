@@ -14,13 +14,11 @@ import {
 import Link from "next/link";
 import { notFound } from "next/navigation";
 
-import { getCourse, getCourses } from "@/lib/api";
+import { getCourse } from "@/lib/api";
 import type { Course } from "@/lib/types";
 
-export async function generateStaticParams() {
-  const courses = await getCourses();
-  return courses.map((course) => ({ slug: course.slug }));
-}
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 function sumCourseMinutes(course: Course) {
   return (

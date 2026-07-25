@@ -2,12 +2,10 @@ import { BookOpenCheck, MapPin } from "lucide-react";
 import { notFound } from "next/navigation";
 
 import { CourseCard } from "@/components/CourseCard";
-import { getCourses, getTeacher, getTeachers } from "@/lib/api";
+import { getCourses, getTeacher } from "@/lib/api";
 
-export async function generateStaticParams() {
-  const teachers = await getTeachers();
-  return teachers.map((teacher) => ({ slug: teacher.slug }));
-}
+export const dynamic = "force-dynamic";
+export const revalidate = 0;
 
 export default async function TeacherDetailPage({ params }: { params: { slug: string } }) {
   const [teacher, courses] = await Promise.all([getTeacher(params.slug), getCourses()]);
