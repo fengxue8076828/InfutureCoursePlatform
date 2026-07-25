@@ -77,15 +77,6 @@ const questionTypeLabels: Record<string, string> = {
   media_upload: "\u7d20\u6750\u4e0a\u4f20\u9898"
 };
 
-const fallbackInstitutionCategories = ["IT\u6559\u80b2\u7c7b", "\u8bed\u8a00\u6559\u80b2\u7c7b", "\u8bfe\u5916\u8865\u4e60\u7c7b", "\u827a\u672f\u6559\u80b2\u7c7b"];
-
-const fallbackHotQuestions = [
-  { title: "\u5173\u952e\u8bcd\u8bed\u586b\u586b\u7a7a", type: "\u586b\u7a7a\u9898", meta: "A2 \u00b7 \u4e2d\u6587\u9605\u8bfb", points: 2 },
-  { title: "\u9009\u51fa\u6b63\u786e\u7684\u8868\u8fbe\u65b9\u5f0f", type: "\u5355\u9009\u9898", meta: "B1 \u00b7 \u8bed\u6cd5", points: 3 },
-  { title: "Python \u6761\u4ef6\u5224\u65ad\u7ec3\u4e60", type: "\u4ee3\u7801\u7f16\u5199\u9898", meta: "\u5165\u95e8 \u00b7 IT", points: 5 },
-  { title: "\u9605\u8bfb\u6750\u6599\u4fe1\u606f\u63d0\u53d6", type: "\u591a\u9009\u9898", meta: "B2 \u00b7 \u9605\u8bfb", points: 4 }
-];
-
 function getQuestionDisplayTitle(question: Question) {
   const title = question.content?.title;
   if (typeof title === "string" && title.trim()) {
@@ -209,15 +200,13 @@ export default async function HomePage() {
   const institutionCategoryFilters = Array.from(
     new Set(institutions.map((institution) => institution.category?.trim()).filter(Boolean))
   );
-  const questionCategoryFilters = institutionCategoryFilters.length > 0 ? institutionCategoryFilters : fallbackInstitutionCategories;
-  const hotQuestionItems = publishedQuestions.length > 0
-    ? publishedQuestions.slice(0, 4).map((question) => ({
-        title: getQuestionDisplayTitle(question),
-        type: questionTypeLabels[question.type] ?? question.type,
-        meta: [question.difficulty, question.skill_area].filter(Boolean).join(" \u00b7 ") || "\u7efc\u5408\u7ec3\u4e60",
-        points: question.points
-      }))
-    : fallbackHotQuestions;
+  const questionCategoryFilters = institutionCategoryFilters;
+  const hotQuestionItems = publishedQuestions.slice(0, 4).map((question) => ({
+    title: getQuestionDisplayTitle(question),
+    type: questionTypeLabels[question.type] ?? question.type,
+    meta: [question.difficulty, question.skill_area].filter(Boolean).join(" · ") || "综合练习",
+    points: question.points
+  }));
 
 
   return (
@@ -564,7 +553,7 @@ export default async function HomePage() {
             <div className="mt-6">
               <p className="text-sm font-black text-ink">{"\u673a\u6784\u7c7b\u522b"}</p>
               <div className="mt-3 flex flex-wrap gap-2">
-                {questionCategoryFilters.map((category) => (
+                {questionCategoryFilters.length > 0 ? questionCategoryFilters.map((category) => (
                   <Link
                     key={category}
                     href={`/question-bank?category=${encodeURIComponent(category)}`}
@@ -572,7 +561,9 @@ export default async function HomePage() {
                   >
                     {category}
                   </Link>
-                ))}
+                )) : (
+                  <span className="rounded-lg border border-dashed border-slate-200 bg-white/70 px-3 py-2 text-sm font-bold text-slate-500">暂无机构类别</span>
+                )}
               </div>
             </div>
           </div>
@@ -588,7 +579,7 @@ export default async function HomePage() {
               </Link>
             </div>
             <div className="mt-5 grid gap-3">
-              {hotQuestionItems.map((question, index) => (
+              {hotQuestionItems.length > 0 ? hotQuestionItems.map((question, index) => (
                 <Link
                   key={`${question.title}-${index}`}
                   href="/question-bank"
@@ -607,7 +598,11 @@ export default async function HomePage() {
                   </div>
                   <ChevronRight size={18} className="shrink-0 text-slate-300 group-hover:text-coral" />
                 </Link>
-              ))}
+              )) : (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-white/70 p-5 text-sm font-semibold leading-6 text-slate-500">
+                  暂无已发布题目，机构发布题目后会自动显示在这里。
+                </div>
+              )}
             </div>
           </div>
         </div>
