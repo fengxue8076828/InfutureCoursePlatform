@@ -53,12 +53,54 @@ def ensure_schema_extensions(db: Session) -> None:
         "email": "ALTER TABLE institutions ADD COLUMN email VARCHAR(255)",
         "address": "ALTER TABLE institutions ADD COLUMN address VARCHAR(500)",
         "contact_person": "ALTER TABLE institutions ADD COLUMN contact_person VARCHAR(120)",
+        "institution_type": "ALTER TABLE institutions ADD COLUMN institution_type VARCHAR(32) NOT NULL DEFAULT 'individual'",
+        "service_agreement_accepted": "ALTER TABLE institutions ADD COLUMN service_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
+        "gdpr_agreement_accepted": "ALTER TABLE institutions ADD COLUMN gdpr_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
+        "fee_agreement_accepted": "ALTER TABLE institutions ADD COLUMN fee_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
+        "agreements_accepted_at": "ALTER TABLE institutions ADD COLUMN agreements_accepted_at TIMESTAMP WITH TIME ZONE",
+        "verification_status": "ALTER TABLE institutions ADD COLUMN verification_status VARCHAR(32) NOT NULL DEFAULT 'not_required'",
+        "stripe_account_id": "ALTER TABLE institutions ADD COLUMN stripe_account_id VARCHAR(120)",
+        "stripe_charges_enabled": "ALTER TABLE institutions ADD COLUMN stripe_charges_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+        "stripe_payouts_enabled": "ALTER TABLE institutions ADD COLUMN stripe_payouts_enabled BOOLEAN NOT NULL DEFAULT FALSE",
+        "stripe_details_submitted": "ALTER TABLE institutions ADD COLUMN stripe_details_submitted BOOLEAN NOT NULL DEFAULT FALSE",
+        "stripe_onboarding_completed_at": "ALTER TABLE institutions ADD COLUMN stripe_onboarding_completed_at TIMESTAMP WITH TIME ZONE",
+        "legal_company_name": "ALTER TABLE institutions ADD COLUMN legal_company_name VARCHAR(200)",
+        "registration_country": "ALTER TABLE institutions ADD COLUMN registration_country VARCHAR(120)",
+        "registered_address": "ALTER TABLE institutions ADD COLUMN registered_address VARCHAR(500)",
+        "legal_representative": "ALTER TABLE institutions ADD COLUMN legal_representative VARCHAR(120)",
+        "founded_on": "ALTER TABLE institutions ADD COLUMN founded_on DATE",
     }
     for column_name, statement in column_sql.items():
         if column_name not in columns:
             db.execute(text(statement))
 
     db.execute(text("ALTER TABLE institutions ALTER COLUMN logo_url TYPE TEXT"))
+    db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_institutions_stripe_account_id ON institutions(stripe_account_id) WHERE stripe_account_id IS NOT NULL"))
+    db.execute(
+        text(
+            """
+            UPDATE institutions
+            SET service_agreement_accepted = TRUE,
+                gdpr_agreement_accepted = TRUE,
+                fee_agreement_accepted = TRUE,
+                agreements_accepted_at = COALESCE(agreements_accepted_at, created_at)
+            WHERE agreements_accepted_at IS NULL
+              AND (service_agreement_accepted = FALSE OR gdpr_agreement_accepted = FALSE OR fee_agreement_accepted = FALSE)
+            """
+        )
+    )
+    db.execute(
+        text(
+            """
+            UPDATE institutions
+            SET verification_status = CASE
+                WHEN institution_type = 'organization' THEN COALESCE(NULLIF(verification_status, ''), 'unsubmitted')
+                ELSE 'not_required'
+            END
+            WHERE verification_status IS NULL OR verification_status = '' OR institution_type <> 'organization'
+            """
+        )
+    )
     db.execute(text("ALTER TABLE question_media ALTER COLUMN url TYPE TEXT"))
     if "questions" in inspector.get_table_names():
         question_columns = {column["name"] for column in inspector.get_columns("questions")}
@@ -165,6 +207,21 @@ def ensure_schema_extensions(db: Session) -> None:
         learning_path_columns = {column["name"] for column in inspector.get_columns("learning_paths")}
         if "intro_video_url" not in learning_path_columns:
             db.execute(text("ALTER TABLE learning_paths ADD COLUMN intro_video_url VARCHAR(500) NOT NULL DEFAULT ''"))
+
+    if "subscriptions" in inspector.get_table_names():
+        subscription_columns = {column["name"] for column in inspector.get_columns("subscriptions")}
+        subscription_column_sql = {
+            "stripe_checkout_session_id": "ALTER TABLE subscriptions ADD COLUMN stripe_checkout_session_id VARCHAR(255)",
+            "stripe_subscription_id": "ALTER TABLE subscriptions ADD COLUMN stripe_subscription_id VARCHAR(255)",
+            "stripe_customer_id": "ALTER TABLE subscriptions ADD COLUMN stripe_customer_id VARCHAR(255)",
+            "platform_fee_percent": "ALTER TABLE subscriptions ADD COLUMN platform_fee_percent NUMERIC(5, 2) NOT NULL DEFAULT 15.00",
+        }
+        for column_name, statement in subscription_column_sql.items():
+            if column_name not in subscription_columns:
+                db.execute(text(statement))
+        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_subscriptions_stripe_checkout_session_id ON subscriptions(stripe_checkout_session_id) WHERE stripe_checkout_session_id IS NOT NULL"))
+        db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_subscriptions_stripe_subscription_id ON subscriptions(stripe_subscription_id) WHERE stripe_subscription_id IS NOT NULL"))
+        db.execute(text("CREATE INDEX IF NOT EXISTS ix_subscriptions_stripe_customer_id ON subscriptions(stripe_customer_id)"))
 
     if "submissions" in inspector.get_table_names():
         submission_columns = {column["name"] for column in inspector.get_columns("submissions")}

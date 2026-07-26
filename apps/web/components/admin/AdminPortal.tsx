@@ -638,6 +638,7 @@ type InstitutionDraft = {
   name: string;
   logoUrl: string;
   category: string;
+  institutionType: "individual" | "organization";
   region: string;
   website: string;
   phone: string;
@@ -645,6 +646,14 @@ type InstitutionDraft = {
   address: string;
   contactPerson: string;
   description: string;
+  serviceAgreementAccepted: boolean;
+  gdprAgreementAccepted: boolean;
+  feeAgreementAccepted: boolean;
+  verificationStatus: string;
+  stripeAccountId: string;
+  stripeChargesEnabled: boolean;
+  stripePayoutsEnabled: boolean;
+  stripeDetailsSubmitted: boolean;
 };
 
 type ApiInstitution = {
@@ -653,6 +662,7 @@ type ApiInstitution = {
   slug: string;
   logo_url: string;
   category: string;
+  institution_type?: "individual" | "organization";
   region: string;
   website: string | null;
   phone: string | null;
@@ -660,6 +670,19 @@ type ApiInstitution = {
   address: string | null;
   contact_person: string | null;
   description: string;
+  service_agreement_accepted?: boolean;
+  gdpr_agreement_accepted?: boolean;
+  fee_agreement_accepted?: boolean;
+  verification_status?: string;
+  stripe_account_id?: string | null;
+  stripe_charges_enabled?: boolean;
+  stripe_payouts_enabled?: boolean;
+  stripe_details_submitted?: boolean;
+};
+
+type StripeConnectOnboardingResponse = {
+  url: string;
+  institution: ApiInstitution;
 };
 
 const defaultAdminProfile: AdminProfile = {
@@ -679,13 +702,22 @@ const defaultInstitutionDraft: InstitutionDraft = {
   name: adminInstitution.name,
   logoUrl: adminInstitution.logo_url,
   category: adminInstitution.category,
+  institutionType: "individual",
   region: adminInstitution.region,
   website: adminInstitution.website ?? "",
   phone: adminInstitution.phone ?? "",
   email: adminInstitution.email ?? "",
   address: adminInstitution.address ?? "",
   contactPerson: adminInstitution.contactPerson ?? "",
-  description: adminInstitution.description
+  description: adminInstitution.description,
+  serviceAgreementAccepted: true,
+  gdprAgreementAccepted: true,
+  feeAgreementAccepted: true,
+  verificationStatus: "not_required",
+  stripeAccountId: "",
+  stripeChargesEnabled: false,
+  stripePayoutsEnabled: false,
+  stripeDetailsSubmitted: false
 };
 
 function roleLabel(role: string) {
@@ -754,13 +786,22 @@ function institutionFromApi(institution: ApiInstitution): InstitutionDraft {
     name: institution.name,
     logoUrl: institution.logo_url || adminInstitution.logo_url,
     category: institution.category,
+    institutionType: institution.institution_type === "organization" ? "organization" : "individual",
     region: institution.region,
     website: institution.website ?? "",
     phone: institution.phone ?? "",
     email: institution.email ?? "",
     address: institution.address ?? "",
     contactPerson: institution.contact_person ?? "",
-    description: institution.description
+    description: institution.description,
+    serviceAgreementAccepted: Boolean(institution.service_agreement_accepted),
+    gdprAgreementAccepted: Boolean(institution.gdpr_agreement_accepted),
+    feeAgreementAccepted: Boolean(institution.fee_agreement_accepted),
+    verificationStatus: institution.verification_status ?? "not_required",
+    stripeAccountId: institution.stripe_account_id ?? "",
+    stripeChargesEnabled: Boolean(institution.stripe_charges_enabled),
+    stripePayoutsEnabled: Boolean(institution.stripe_payouts_enabled),
+    stripeDetailsSubmitted: Boolean(institution.stripe_details_submitted)
   };
 }
 
@@ -1021,6 +1062,37 @@ async function saveAdminInstitution(draft: InstitutionDraft): Promise<Institutio
     return institutionFromApi((await response.json()) as ApiInstitution);
   } catch {
     return null;
+  }
+}
+
+async function startStripeConnectOnboarding(): Promise<{ draft?: InstitutionDraft; url?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/connect`, {
+      method: "POST",
+      headers: getAdminRequestHeaders()
+    });
+    if (!response.ok) {
+      return { error: await readApiErrorMessage(response, "Stripe \u8ba4\u8bc1\u5165\u53e3\u521b\u5efa\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u914d\u7f6e Stripe\u3002") };
+    }
+    const payload = (await response.json()) as StripeConnectOnboardingResponse;
+    return { draft: institutionFromApi(payload.institution), url: payload.url };
+  } catch {
+    return { error: "Stripe \u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002" };
+  }
+}
+
+async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/sync`, {
+      method: "POST",
+      headers: getAdminRequestHeaders()
+    });
+    if (!response.ok) {
+      return { error: await readApiErrorMessage(response, "Stripe \u8ba4\u8bc1\u72b6\u6001\u5237\u65b0\u5931\u8d25\u3002") };
+    }
+    return { draft: institutionFromApi((await response.json()) as ApiInstitution) };
+  } catch {
+    return { error: "Stripe \u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002" };
   }
 }
 
@@ -3052,8 +3124,21 @@ function InstitutionPanel() {
   const [status, setStatus] = useState("修改机构信息后点击更新。");
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [stripeBusy, setStripeBusy] = useState(false);
   const categoryLabel =
     institutionCategoryOptions.find((option) => option.value === draft.category)?.label ?? draft.category;
+  const agreementReady = draft.serviceAgreementAccepted && draft.gdprAgreementAccepted && draft.feeAgreementAccepted;
+  const verificationReady =
+    draft.institutionType === "individual" ||
+    (draft.verificationStatus === "approved" && draft.stripeChargesEnabled && draft.stripePayoutsEnabled);
+  const institutionTypeLabel = draft.institutionType === "organization" ? "\u7ec4\u7ec7\u673a\u6784" : "\u4e2a\u4eba\u673a\u6784";
+  const verificationLabel = draft.institutionType === "individual"
+    ? "\u4e2a\u4eba\u673a\u6784\u65e0\u9700\u4f01\u4e1a\u8ba4\u8bc1"
+    : verificationReady
+      ? "\u8ba4\u8bc1\u5df2\u5b8c\u6210"
+      : draft.stripeDetailsSubmitted
+        ? "Stripe \u5ba1\u6838\u4e2d"
+        : "\u7b49\u5f85 Stripe \u8ba4\u8bc1";
 
   useEffect(() => {
     let isMounted = true;
@@ -3110,6 +3195,35 @@ function InstitutionPanel() {
     setSaving(false);
   }
 
+  async function handleStripeOnboarding() {
+    setStripeBusy(true);
+    setStatus("\u6b63\u5728\u521b\u5efa Stripe \u8ba4\u8bc1\u5165\u53e3...");
+    const result = await startStripeConnectOnboarding();
+    if (result.draft) {
+      setDraft(result.draft);
+    }
+    if (result.url) {
+      setStatus("\u6b63\u5728\u6253\u5f00 Stripe \u8ba4\u8bc1\u9875\u9762...");
+      window.location.assign(result.url);
+    } else {
+      setStatus(result.error ?? "Stripe \u8ba4\u8bc1\u5165\u53e3\u521b\u5efa\u5931\u8d25\u3002");
+    }
+    setStripeBusy(false);
+  }
+
+  async function handleStripeSync() {
+    setStripeBusy(true);
+    setStatus("\u6b63\u5728\u521b\u5efa Stripe \u8ba4\u8bc1\u5165\u53e3...");
+    const result = await syncStripeConnectStatus();
+    if (result.draft) {
+      setDraft(result.draft);
+      setStatus("Stripe \u8ba4\u8bc1\u72b6\u6001\u5df2\u5237\u65b0\u3002");
+    } else {
+      setStatus(result.error ?? "Stripe \u8ba4\u8bc1\u72b6\u6001\u5237\u65b0\u5931\u8d25\u3002");
+    }
+    setStripeBusy(false);
+  }
+
   return (
     <section className="panel rounded-lg p-5">
       <div className="grid gap-5 xl:grid-cols-[1fr_18rem]">
@@ -3142,6 +3256,24 @@ function InstitutionPanel() {
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              {"\u673a\u6784\u7c7b\u578b"}
+              <input
+                className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                value={institutionTypeLabel}
+                disabled
+                readOnly
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              {"\u53d1\u5e03\u8d44\u683c"}
+              <input
+                className={`rounded-lg border px-3 py-2 ${verificationReady ? "border-mint/40 bg-mint/10 text-mint" : "border-amber-200 bg-amber-50 text-amber-700"}`}
+                value={verificationLabel}
+                disabled
+                readOnly
+              />
             </label>
             <label className="grid gap-2 text-sm font-semibold text-slate-700">
               机构名称
@@ -3232,6 +3364,49 @@ function InstitutionPanel() {
               }}
             />
           </label>
+          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <p className="text-sm font-bold text-ink">{"\u5e73\u53f0\u534f\u8bae\u4e0e\u6536\u6b3e\u8ba4\u8bc1"}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">
+                  {"\u5e73\u53f0\u6309\u8bfe\u7a0b\u8ba2\u9605\u91d1\u989d\u62bd\u53d6 15% \u670d\u52a1\u8d39\u3002"}
+                </p>
+              </div>
+              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${verificationReady ? "bg-mint/10 text-mint" : "bg-amber-100 text-amber-700"}`}>
+                {verificationLabel}
+              </span>
+            </div>
+            <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600">
+              <div className="flex items-center justify-between"><span>{"\u670d\u52a1\u534f\u8bae"}</span><span>{draft.serviceAgreementAccepted ? "OK" : "Pending"}</span></div>
+              <div className="flex items-center justify-between"><span>{"GDPR \u534f\u8bae"}</span><span>{draft.gdprAgreementAccepted ? "OK" : "Pending"}</span></div>
+              <div className="flex items-center justify-between"><span>{"\u6536\u8d39\u534f\u8bae"}</span><span>{draft.feeAgreementAccepted ? "OK" : "Pending"}</span></div>
+              <div className="flex items-center justify-between"><span>{"Stripe \u6536\u6b3e"}</span><span>{draft.stripeChargesEnabled ? "OK" : "Pending"}</span></div>
+              <div className="flex items-center justify-between"><span>{"Stripe \u63d0\u73b0"}</span><span>{draft.stripePayoutsEnabled ? "OK" : "Pending"}</span></div>
+            </div>
+            <div className="mt-4 grid gap-2">
+              <button
+                type="button"
+                onClick={handleStripeOnboarding}
+                disabled={!agreementReady || stripeBusy}
+                className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {stripeBusy ? "Stripe..." : "Stripe Connect"}
+              </button>
+              <button
+                type="button"
+                onClick={handleStripeSync}
+                disabled={stripeBusy || !draft.stripeAccountId}
+                className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <RefreshCw size={15} /> {"\u5237\u65b0\u8ba4\u8bc1\u72b6\u6001"}
+              </button>
+            </div>
+            {draft.institutionType === "organization" && !verificationReady ? (
+              <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                {"\u7ec4\u7ec7\u673a\u6784\u9700\u5b8c\u6210 Stripe \u8ba4\u8bc1\u540e\u624d\u80fd\u6b63\u5f0f\u53d1\u5e03\u8bfe\u7a0b\u3001\u9898\u76ee\u3001\u6d3b\u52a8\u3001\u5b66\u4e60\u8def\u5f84\u3001\u6a21\u62df\u8003\u548c\u7ade\u8d5b\u3002"}
+              </p>
+            ) : null}
+          </div>
         </aside>
       </div>
     </section>

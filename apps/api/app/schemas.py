@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field
@@ -30,6 +30,22 @@ class InstitutionOut(OrmModel):
     slug: str
     logo_url: str
     category: str
+    institution_type: str = "individual"
+    service_agreement_accepted: bool = False
+    gdpr_agreement_accepted: bool = False
+    fee_agreement_accepted: bool = False
+    agreements_accepted_at: datetime | None = None
+    verification_status: str = "not_required"
+    stripe_account_id: str | None = None
+    stripe_charges_enabled: bool = False
+    stripe_payouts_enabled: bool = False
+    stripe_details_submitted: bool = False
+    stripe_onboarding_completed_at: datetime | None = None
+    legal_company_name: str | None = None
+    registration_country: str | None = None
+    registered_address: str | None = None
+    legal_representative: str | None = None
+    founded_on: date | None = None
     region: str
     website: str | None = None
     phone: str | None = None
@@ -49,6 +65,11 @@ class InstitutionUpdate(BaseModel):
     address: str | None = Field(default=None, max_length=500)
     contact_person: str | None = Field(default=None, max_length=120)
     description: str = Field(min_length=10)
+
+
+class StripeConnectOnboardingOut(BaseModel):
+    url: str
+    institution: InstitutionOut
 
 
 class ActivityRegistrationOut(OrmModel):
@@ -349,6 +370,10 @@ class UserCreate(BaseModel):
 class InstitutionRegisterIn(BaseModel):
     institution_name: str = Field(min_length=2, max_length=160)
     category: str = Field(pattern="^(it|language|tutoring|art|other)$")
+    institution_type: str = Field(default="individual", pattern="^(individual|organization)$")
+    service_agreement_accepted: bool = False
+    gdpr_agreement_accepted: bool = False
+    fee_agreement_accepted: bool = False
     logo_url: str | None = None
     contact_name: str = Field(min_length=2, max_length=120)
     phone: str = Field(min_length=3, max_length=80)
@@ -746,8 +771,10 @@ class SubscribeCourseIn(BaseModel):
 
 class SubscribeCourseOut(BaseModel):
     auth: AuthOut
-    enrollment: EnrollmentOut
+    enrollment: EnrollmentOut | None = None
     subscription_status: str
+    checkout_url: str | None = None
+    checkout_session_id: str | None = None
 
 
 class QuestionOptionBase(BaseModel):

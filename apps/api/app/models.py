@@ -1,10 +1,11 @@
 ﻿from __future__ import annotations
 
 import enum
-from datetime import datetime
+from datetime import date, datetime
 
 from sqlalchemy import (
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -121,6 +122,26 @@ class Institution(Base, TimestampMixin):
     slug: Mapped[str] = mapped_column(String(120), unique=True, index=True)
     logo_url: Mapped[str] = mapped_column(Text)
     category: Mapped[str] = mapped_column(String(40), default="language", server_default="language", index=True)
+    institution_type: Mapped[str] = mapped_column(
+        String(32), default="individual", server_default="individual", index=True
+    )
+    service_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    gdpr_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    fee_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    agreements_accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    verification_status: Mapped[str] = mapped_column(
+        String(32), default="not_required", server_default="not_required", index=True
+    )
+    stripe_account_id: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
+    stripe_charges_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    stripe_payouts_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    stripe_details_submitted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    stripe_onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    legal_company_name: Mapped[str | None] = mapped_column(String(200))
+    registration_country: Mapped[str | None] = mapped_column(String(120))
+    registered_address: Mapped[str | None] = mapped_column(String(500))
+    legal_representative: Mapped[str | None] = mapped_column(String(120))
+    founded_on: Mapped[date | None] = mapped_column(Date)
     region: Mapped[str] = mapped_column(String(80), default="Europe")
     website: Mapped[str | None] = mapped_column(String(500))
     phone: Mapped[str | None] = mapped_column(String(80))
@@ -609,6 +630,10 @@ class Subscription(Base, TimestampMixin):
     )
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     payment_provider: Mapped[str] = mapped_column(String(80), default="stripe")
+    stripe_checkout_session_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    stripe_subscription_id: Mapped[str | None] = mapped_column(String(255), unique=True, index=True)
+    stripe_customer_id: Mapped[str | None] = mapped_column(String(255), index=True)
+    platform_fee_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=15.00)
 
     course: Mapped[Course] = relationship(back_populates="subscriptions")
 

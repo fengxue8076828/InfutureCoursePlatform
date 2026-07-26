@@ -32,7 +32,7 @@ import type { Institution, Question, StudentLeaderboardEntry } from "@/lib/types
 const platformHighlights = [
   {
     title: "面向海外中文家庭",
-    text: "围绕欧洲和全球华人家庭的学习节奏，连接优质机构、专业老师和可追踪的在线课堂。",
+    text: "用亲民的价格为华人提供顶级的全球优质教育资源，让学生在家就可以跟着世界级名师进行学习",
     icon: Globe2
   },
   {
@@ -228,10 +228,10 @@ export default async function HomePage() {
               <Sparkles size={16} /> Infuture Course Platform
             </p>
             <h1 className="mt-5 text-4xl font-black leading-tight sm:text-5xl lg:text-6xl">
-              把中文教育做得更系统、更有动力
+              整合全球优质教育资源，为华人学习者搭建学习中心！
             </h1>
             <p className="mt-5 max-w-xl text-base leading-8 text-slate-700 sm:text-lg">
-              连接优质教育机构、专业老师和可追踪的学习平台，让海外学生在清晰路径、即时练习和积分激励中持续成长。
+              连接优质教育机构、专业老师和互动式的学习平台，让海内外学生在清晰路径、即时练习和积分激励中持续成长。
             </p>
             <div className="mt-7 flex max-w-xl items-center gap-2 rounded-lg border border-white/70 bg-white/95 p-2 text-ink shadow-soft">
               <Search size={20} className="ml-3 text-slate-400" />

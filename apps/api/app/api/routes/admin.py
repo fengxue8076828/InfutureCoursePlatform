@@ -89,6 +89,7 @@ from app.schemas import (
     QuestionOut,
     QuestionUpdate,
     SubmissionOut,
+    StripeConnectOnboardingOut,
     TeacherCreate,
     TeacherOut,
 )
@@ -155,6 +156,68 @@ def get_current_institution_id_or_403(current_user: User) -> int:
     if current_user.institution_id:
         return current_user.institution_id
     raise HTTPException(status_code=403, detail="Institution context required")
+
+
+PUBLISH_AGREEMENT_DETAIL = "Platform agreements must be accepted before publishing"
+PUBLISH_VERIFICATION_DETAIL = "Organization Stripe verification required before publishing"
+
+
+def institution_agreements_completed(institution: Institution) -> bool:
+    return bool(
+        institution.service_agreement_accepted
+        and institution.gdpr_agreement_accepted
+        and institution.fee_agreement_accepted
+    )
+
+
+def institution_verification_completed(institution: Institution) -> bool:
+    if institution.institution_type != "organization":
+        return True
+    return institution.verification_status == "approved"
+
+
+def ensure_institution_can_publish(current_user: User, db: Session) -> Institution:
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=403, detail="Institution context required")
+    if not institution_agreements_completed(institution):
+        raise HTTPException(status_code=403, detail=PUBLISH_AGREEMENT_DETAIL)
+    if not institution_verification_completed(institution):
+        raise HTTPException(status_code=403, detail=PUBLISH_VERIFICATION_DETAIL)
+    return institution
+
+
+def stripe_value(obj: object, key: str, default: object = None) -> object:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
+def get_stripe_client():
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        raise HTTPException(status_code=503, detail="Stripe is not configured")
+    try:
+        import stripe
+    except ImportError as exc:
+        raise HTTPException(status_code=503, detail="Stripe SDK is not installed") from exc
+    stripe.api_key = settings.stripe_secret_key
+    return stripe
+
+
+def update_institution_stripe_state(institution: Institution, account: object) -> None:
+    charges_enabled = bool(stripe_value(account, "charges_enabled", False))
+    payouts_enabled = bool(stripe_value(account, "payouts_enabled", False))
+    details_submitted = bool(stripe_value(account, "details_submitted", False))
+    institution.stripe_charges_enabled = charges_enabled
+    institution.stripe_payouts_enabled = payouts_enabled
+    institution.stripe_details_submitted = details_submitted
+    if details_submitted and institution.stripe_onboarding_completed_at is None:
+        institution.stripe_onboarding_completed_at = datetime.now(timezone.utc)
+    if institution.institution_type == "organization":
+        institution.verification_status = "approved" if charges_enabled and payouts_enabled and details_submitted else "pending"
+    else:
+        institution.verification_status = "not_required"
 
 
 def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
@@ -1210,6 +1273,66 @@ def update_admin_institution(
     return institution
 
 
+@router.post("/institution/stripe/connect", response_model=StripeConnectOnboardingOut)
+def start_stripe_connect_onboarding(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StripeConnectOnboardingOut:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    if not institution_agreements_completed(institution):
+        raise HTTPException(status_code=403, detail=PUBLISH_AGREEMENT_DETAIL)
+
+    stripe = get_stripe_client()
+    settings = get_settings()
+    if institution.stripe_account_id:
+        account = stripe.Account.retrieve(institution.stripe_account_id)
+    else:
+        account = stripe.Account.create(
+            type="express",
+            country=settings.stripe_default_country,
+            email=institution.email,
+            business_type="company" if institution.institution_type == "organization" else "individual",
+            capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
+            metadata={"institution_id": str(institution.id)},
+        )
+        institution.stripe_account_id = stripe_value(account, "id")
+
+    update_institution_stripe_state(institution, account)
+    db.commit()
+    db.refresh(institution)
+
+    frontend_url = settings.frontend_base_url.rstrip("/")
+    account_link = stripe.AccountLink.create(
+        account=institution.stripe_account_id,
+        refresh_url=f"{frontend_url}/admin?module=institution&stripe=refresh",
+        return_url=f"{frontend_url}/admin?module=institution&stripe=return",
+        type="account_onboarding",
+    )
+    return StripeConnectOnboardingOut(url=stripe_value(account_link, "url", ""), institution=institution)
+
+
+@router.post("/institution/stripe/sync", response_model=InstitutionOut)
+def sync_stripe_connect_status(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> Institution:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    if not institution.stripe_account_id:
+        return institution
+    stripe = get_stripe_client()
+    account = stripe.Account.retrieve(institution.stripe_account_id)
+    update_institution_stripe_state(institution, account)
+    db.commit()
+    db.refresh(institution)
+    return institution
+
+
 @router.get("/activities", response_model=list[AdminActivityOut])
 def admin_activities(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
@@ -1232,6 +1355,7 @@ def create_activity(
     db: Session = Depends(get_db),
 ) -> AdminActivityOut:
     ensure_admin(current_user)
+    ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
     data = normalize_activity_payload(payload.model_dump())
     activity = InstitutionActivity(institution_id=institution_id, **data)
@@ -1248,6 +1372,7 @@ def update_activity(
     db: Session = Depends(get_db),
 ) -> AdminActivityOut:
     ensure_admin(current_user)
+    ensure_institution_can_publish(current_user, db)
     activity = get_activity_or_404(activity_id, current_user, db)
     data = normalize_activity_payload(payload.model_dump())
     for field, value in data.items():
@@ -1390,6 +1515,8 @@ def create_learning_path(
     db: Session = Depends(get_db),
 ) -> LearningPathOut:
     ensure_course_staff(current_user)
+    if payload.status == LearningPathStatus.published:
+        ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
     course_ids = validate_learning_path_courses(payload.course_ids, current_user, db)
     path = LearningPath(
@@ -1418,6 +1545,8 @@ def update_learning_path(
     db: Session = Depends(get_db),
 ) -> LearningPathOut:
     ensure_course_staff(current_user)
+    if payload.status == LearningPathStatus.published:
+        ensure_institution_can_publish(current_user, db)
     path = get_learning_path_or_404(path_id, current_user, db)
     course_ids = validate_learning_path_courses(payload.course_ids, current_user, db)
     path.title = payload.title.strip()
@@ -1472,6 +1601,8 @@ def create_exam_paper(
     db: Session = Depends(get_db),
 ) -> ExamPaperOut:
     ensure_course_staff(current_user)
+    if payload.status == ExamPaperStatus.published:
+        ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
     data = normalize_exam_paper_payload(payload, institution_id, db)
     question_inputs = validate_exam_questions(payload.questions, institution_id, db)
@@ -1494,6 +1625,8 @@ def update_exam_paper(
     db: Session = Depends(get_db),
 ) -> ExamPaperOut:
     ensure_course_staff(current_user)
+    if payload.status == ExamPaperStatus.published:
+        ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
     paper = get_exam_paper_or_404(paper_id, current_user, db)
     data = normalize_exam_paper_payload(payload, institution_id, db)
@@ -1583,6 +1716,8 @@ def update_course(
     ensure_course_staff(current_user)
     course = get_course_or_404(course_id, current_user, db)
     data = payload.model_dump(exclude_unset=True, exclude={"chapters"})
+    if data.get("status") == CourseStatus.published:
+        ensure_institution_can_publish(current_user, db)
     ensure_current_teacher_owns_course(course, current_user, db)
     if current_user.role in {UserRole.teacher, UserRole.super_admin}:
         data.pop("teacher_id", None)
@@ -1759,6 +1894,8 @@ def create_question(
     db: Session = Depends(get_db),
 ) -> Question:
     ensure_question_staff(current_user)
+    if payload.status == QuestionStatus.published:
+        ensure_institution_can_publish(current_user, db)
     data = payload.model_dump(exclude={"options", "media_assets"})
     if current_user.institution_id:
         data["institution_id"] = current_user.institution_id
@@ -1789,6 +1926,8 @@ def update_question(
     final_institution_id = data.get("institution_id", question.institution_id)
     final_difficulty = data.get("difficulty", question.difficulty)
     final_type = data.get("type", question.type)
+    if data.get("status", question.status) == QuestionStatus.published:
+        ensure_institution_can_publish(current_user, db)
     validate_question_type_for_institution(final_institution_id, final_type, db)
     validate_question_difficulty(final_institution_id, final_difficulty, db)
     for field, value in data.items():
@@ -1812,6 +1951,7 @@ def publish_question(
     ensure_question_staff(current_user)
     question = get_question_or_404(question_id, db)
     ensure_own_question(question, current_user)
+    ensure_institution_can_publish(current_user, db)
     question.status = QuestionStatus.published
     db.commit()
     return get_question_or_404(question.id, db)

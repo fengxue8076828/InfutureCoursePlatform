@@ -191,6 +191,13 @@ def register(payload: UserCreate, db: Session = Depends(get_db)) -> AuthOut:
     "/institution-register", response_model=AuthOut, status_code=status.HTTP_201_CREATED
 )
 def register_institution(payload: InstitutionRegisterIn, db: Session = Depends(get_db)) -> AuthOut:
+    if not (
+        payload.service_agreement_accepted
+        and payload.gdpr_agreement_accepted
+        and payload.fee_agreement_accepted
+    ):
+        raise HTTPException(status_code=422, detail="Platform agreements must be accepted")
+
     email = normalize_email(payload.email)
     if global_email_exists(email, db):
         raise HTTPException(status_code=409, detail="Email already registered")
@@ -206,6 +213,12 @@ def register_institution(payload: InstitutionRegisterIn, db: Session = Depends(g
         slug=unique_institution_slug(db, payload.institution_name),
         logo_url=payload.logo_url or "/logos/euro-future.svg",
         category=payload.category,
+        institution_type=payload.institution_type,
+        service_agreement_accepted=payload.service_agreement_accepted,
+        gdpr_agreement_accepted=payload.gdpr_agreement_accepted,
+        fee_agreement_accepted=payload.fee_agreement_accepted,
+        agreements_accepted_at=datetime.now(timezone.utc),
+        verification_status="unsubmitted" if payload.institution_type == "organization" else "not_required",
         region=payload.location,
         website=payload.website,
         phone=payload.phone,

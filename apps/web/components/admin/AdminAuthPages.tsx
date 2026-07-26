@@ -212,6 +212,7 @@ export function AdminLoginPage() {
 export function InstitutionRegisterPage() {
   const [form, setForm] = useState({
     institutionName: "",
+    institutionType: "individual",
     category: "language",
     contactName: "",
     phone: "",
@@ -219,12 +220,22 @@ export function InstitutionRegisterPage() {
     location: "",
     website: "",
     description: "",
-    logoUrl: ""
+    logoUrl: "",
+    serviceAgreementAccepted: false,
+    gdprAgreementAccepted: false,
+    feeAgreementAccepted: false
   });
   const [status, setStatus] = useState("提交后会创建机构和超级管理员账号，初始密码为 888888。");
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   function updateField(field: keyof typeof form, value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateAgreement(
+    field: "serviceAgreementAccepted" | "gdprAgreementAccepted" | "feeAgreementAccepted",
+    value: boolean
+  ) {
     setForm((current) => ({ ...current, [field]: value }));
   }
 
@@ -262,6 +273,10 @@ export function InstitutionRegisterPage() {
             className="mt-6 grid gap-4"
             onSubmit={async (event) => {
               event.preventDefault();
+              if (!form.serviceAgreementAccepted || !form.gdprAgreementAccepted || !form.feeAgreementAccepted) {
+                setStatus("\u8bf7\u5148\u52fe\u9009\u5e73\u53f0\u670d\u52a1\u534f\u8bae\u3001GDPR \u534f\u8bae\u548c\u6536\u8d39\u534f\u8bae\u3002");
+                return;
+              }
               setIsSubmitting(true);
               setStatus("正在提交注册申请...");
               try {
@@ -270,6 +285,7 @@ export function InstitutionRegisterPage() {
                   headers: { "Content-Type": "application/json" },
                   body: JSON.stringify({
                     institution_name: form.institutionName,
+                    institution_type: form.institutionType,
                     category: form.category,
                     contact_name: form.contactName,
                     phone: form.phone,
@@ -277,7 +293,10 @@ export function InstitutionRegisterPage() {
                     location: form.location,
                     website: form.website || null,
                     logo_url: form.logoUrl || null,
-                    description: form.description
+                    description: form.description,
+                    service_agreement_accepted: form.serviceAgreementAccepted,
+                    gdpr_agreement_accepted: form.gdprAgreementAccepted,
+                    fee_agreement_accepted: form.feeAgreementAccepted
                   })
                 });
                 if (!response.ok) {
@@ -345,6 +364,25 @@ export function InstitutionRegisterPage() {
                   onChange={(event) => updateField("institutionName", event.target.value)}
                   required
                 />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                {"\u673a\u6784\u7c7b\u578b"}
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {[
+                    { value: "individual", label: "\u4e2a\u4eba\u673a\u6784", description: "\u9002\u5408\u72ec\u7acb\u8001\u5e08\u548c\u4e2a\u4eba\u6559\u5b66\u54c1\u724c" },
+                    { value: "organization", label: "\u7ec4\u7ec7\u673a\u6784", description: "\u9002\u5408\u5b66\u6821\u3001\u57f9\u8bad\u673a\u6784\u548c\u4f01\u4e1a\u4e3b\u4f53" }
+                  ].map((option) => (
+                    <button
+                      key={option.value}
+                      type="button"
+                      onClick={() => updateField("institutionType", option.value)}
+                      className={`rounded-lg border p-4 text-left transition ${form.institutionType === option.value ? "border-mint bg-mint/10 text-ink" : "border-slate-200 bg-white text-slate-600"}`}
+                    >
+                      <span className="text-base font-black">{option.label}</span>
+                      <span className="mt-1 block text-xs font-semibold leading-5 text-slate-500">{option.description}</span>
+                    </button>
+                  ))}
+                </div>
               </label>
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
                 机构类别
@@ -416,6 +454,28 @@ export function InstitutionRegisterPage() {
                 minLength={10}
               />
             </label>
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-black text-ink">{"\u5e73\u53f0\u534f\u8bae"}</p>
+              <div className="mt-3 grid gap-2 text-sm font-semibold text-slate-700">
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={form.serviceAgreementAccepted} onChange={(event) => updateAgreement("serviceAgreementAccepted", event.target.checked)} />
+                  <span>{"\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f\u5e73\u53f0\u670d\u52a1\u534f\u8bae"}</span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={form.gdprAgreementAccepted} onChange={(event) => updateAgreement("gdprAgreementAccepted", event.target.checked)} />
+                  <span>{"\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f GDPR \u6570\u636e\u5904\u7406\u534f\u8bae"}</span>
+                </label>
+                <label className="flex items-start gap-2">
+                  <input type="checkbox" checked={form.feeAgreementAccepted} onChange={(event) => updateAgreement("feeAgreementAccepted", event.target.checked)} />
+                  <span>{"\u6211\u5df2\u9605\u8bfb\u5e76\u540c\u610f\u6536\u8d39\u534f\u8bae\uff1a\u5e73\u53f0\u6309\u8ba2\u9605\u5468\u671f\u62bd\u53d6 15% \u670d\u52a1\u8d39"}</span>
+                </label>
+              </div>
+              {form.institutionType === "organization" ? (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold leading-5 text-amber-700">
+                  {"\u7ec4\u7ec7\u673a\u6784\u6ce8\u518c\u540e\u9700\u901a\u8fc7 Stripe Connect \u5b8c\u6210\u4f01\u4e1a\u6536\u6b3e\u4e0e\u8eab\u4efd\u8ba4\u8bc1\uff0c\u8ba4\u8bc1\u901a\u8fc7\u540e\u624d\u80fd\u6b63\u5f0f\u53d1\u5e03\u8bfe\u7a0b\u548c\u8d44\u6e90\u3002"}
+                </p>
+              ) : null}
+            </div>
             <div className="flex flex-wrap items-center gap-4">
               <button
                 type="submit"

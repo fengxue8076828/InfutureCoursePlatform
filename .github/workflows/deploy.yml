@@ -1,0 +1,149 @@
+name: Deploy to DigitalOcean
+
+on:
+  push:
+    branches:
+      - main
+      - master
+  workflow_dispatch:
+
+concurrency:
+  group: production-deploy
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    name: Verify application
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install web dependencies
+        working-directory: apps/web
+        run: npm ci
+
+      - name: Type-check web
+        working-directory: apps/web
+        run: npm run typecheck
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install API dependencies
+        working-directory: apps/api
+        run: python -m pip install -e .
+
+      - name: Compile API
+        working-directory: apps/api
+        run: python -m compileall app
+
+  deploy:
+    name: Deploy production
+    runs-on: ubuntu-latest
+    needs: verify
+    environment: production
+    steps:
+      - name: Validate required secrets
+        run: |
+          test -n "${{ secrets.DO_HOST }}" || (echo "Missing secret: DO_HOST" && exit 1)
+          test -n "${{ secrets.DO_SSH_KEY }}" || (echo "Missing secret: DO_SSH_KEY" && exit 1)
+
+      - name: Install SSH key
+        env:
+          DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$DO_SSH_KEY" > ~/.ssh/id_deploy
+          chmod 600 ~/.ssh/id_deploy
+
+      - name: Trust DigitalOcean host
+        env:
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_PORT: ${{ secrets.DO_PORT || '22' }}
+        run: |
+          ssh-keyscan -p "$DO_PORT" "$DO_HOST" >> ~/.ssh/known_hosts
+
+      - name: Ensure app directory exists
+        env:
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USER: ${{ secrets.DO_USER || 'root' }}
+          DO_PORT: ${{ secrets.DO_PORT || '22' }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/InfutureCoursePlatform' }}
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$DO_PORT" "$DO_USER@$DO_HOST" "mkdir -p '$APP_DIR'"
+
+      - name: Upload production environment when configured
+        env:
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USER: ${{ secrets.DO_USER || 'root' }}
+          DO_PORT: ${{ secrets.DO_PORT || '22' }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/InfutureCoursePlatform' }}
+          PRODUCTION_ENV_B64: ${{ secrets.PRODUCTION_ENV_B64 }}
+        run: |
+          if [ -z "$PRODUCTION_ENV_B64" ]; then
+            echo "PRODUCTION_ENV_B64 is not set; using existing .env.production on the server."
+            exit 0
+          fi
+          umask 077
+          printf '%s' "$PRODUCTION_ENV_B64" | base64 --decode > /tmp/infuture.env.production
+          scp -i ~/.ssh/id_deploy -P "$DO_PORT" /tmp/infuture.env.production "$DO_USER@$DO_HOST:$APP_DIR/.env.production.tmp"
+          ssh -i ~/.ssh/id_deploy -p "$DO_PORT" "$DO_USER@$DO_HOST" "mv '$APP_DIR/.env.production.tmp' '$APP_DIR/.env.production' && chmod 600 '$APP_DIR/.env.production'"
+          rm -f /tmp/infuture.env.production
+
+      - name: Deploy with Docker Compose
+        env:
+          DO_HOST: ${{ secrets.DO_HOST }}
+          DO_USER: ${{ secrets.DO_USER || 'root' }}
+          DO_PORT: ${{ secrets.DO_PORT || '22' }}
+          APP_DIR: ${{ vars.APP_DIR || '/opt/InfutureCoursePlatform' }}
+          DEPLOY_BRANCH: ${{ github.ref_name }}
+          REPO_URL: https://github.com/${{ github.repository }}.git
+        run: |
+          ssh -i ~/.ssh/id_deploy -p "$DO_PORT" "$DO_USER@$DO_HOST" \
+            "APP_DIR='$APP_DIR' DEPLOY_BRANCH='$DEPLOY_BRANCH' REPO_URL='$REPO_URL' bash -s" <<'REMOTE'
+          set -euo pipefail
+
+          if ! command -v git >/dev/null 2>&1; then
+            echo "git is not installed on the server"
+            exit 1
+          fi
+
+          if ! command -v docker >/dev/null 2>&1; then
+            echo "docker is not installed on the server"
+            exit 1
+          fi
+
+          if [ ! -f "$APP_DIR/.env.production" ]; then
+            echo "Missing $APP_DIR/.env.production"
+            exit 1
+          fi
+
+          if [ ! -d "$APP_DIR/.git" ]; then
+            if [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
+              echo "$APP_DIR exists but is not a Git repository. Please move existing files or clone the repository there manually."
+              exit 1
+            fi
+            git clone --branch "$DEPLOY_BRANCH" "$REPO_URL" "$APP_DIR"
+          fi
+
+          cd "$APP_DIR"
+          git fetch origin "$DEPLOY_BRANCH"
+          git checkout "$DEPLOY_BRANCH"
+          git reset --hard "origin/$DEPLOY_BRANCH"
+
+          mkdir -p data/uploads data/certs
+
+          docker compose -f docker-compose.prod.yml --env-file .env.production build
+          docker compose -f docker-compose.prod.yml --env-file .env.production up -d --remove-orphans
+          docker image prune -f
+          REMOTE

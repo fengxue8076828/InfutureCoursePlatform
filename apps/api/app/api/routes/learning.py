@@ -1273,14 +1273,15 @@ def subscribe_course(
     if user and user.role != UserRole.student:
         raise HTTPException(status_code=403, detail="Please subscribe with a student account")
 
+    normalized_email = str(payload.email).strip().lower()
     if user is None:
-        user = db.scalar(select(User).where(User.email == payload.email))
+        user = db.scalar(select(User).where(User.email == normalized_email))
         if user and user.role != UserRole.student:
             raise HTTPException(status_code=409, detail="Email belongs to a non-student account")
 
     if user is None:
         user = User(
-            email=str(payload.email),
+            email=normalized_email,
             full_name=payload.full_name.strip(),
             role=UserRole.student,
             hashed_password=None,
@@ -1296,71 +1297,109 @@ def subscribe_course(
         user.phone = payload.phone or user.phone
 
     enrollment = db.scalar(
-        select(Enrollment).where(Enrollment.user_id == user.id, Enrollment.course_id == course.id)
-    )
-    created_enrollment = enrollment is None
-    if enrollment is None:
-        first_item = next(
-            (
-                item
-                for chapter in sorted(course.chapters, key=lambda chapter: chapter.position)
-                for item in sorted(chapter.items, key=lambda lesson_item: lesson_item.position)
-            ),
-            None,
-        )
-        enrollment = Enrollment(
-            user_id=user.id,
-            course_id=course.id,
-            status="active",
-            current_item_id=first_item.id if first_item else None,
-            progress_percent=0,
-        )
-        db.add(enrollment)
-    else:
-        enrollment.status = "active"
-
-    subscription = db.scalar(
-        select(Subscription).where(
-            Subscription.user_id == user.id,
-            Subscription.course_id == course.id,
-            Subscription.status == "active",
-        )
-    )
-    if subscription is None:
-        subscription = Subscription(
-            user_id=user.id,
-            course_id=course.id,
-            amount_eur_monthly=39,
-            status="active",
-            current_period_end=datetime.utcnow() + timedelta(days=30),
-            payment_provider="simulated",
-        )
-        db.add(subscription)
-
-    if created_enrollment:
-        course.students_count = (course.students_count or 0) + 1
-
-    db.commit()
-    db.refresh(user)
-    db.refresh(enrollment)
-    db.refresh(subscription)
-
-    enrollment = db.scalar(
         select(Enrollment)
-        .where(Enrollment.id == enrollment.id)
+        .where(Enrollment.user_id == user.id, Enrollment.course_id == course.id)
         .options(
             joinedload(Enrollment.course).joinedload(Course.institution),
             joinedload(Enrollment.course).joinedload(Course.teacher),
             joinedload(Enrollment.course).selectinload(Course.chapters).selectinload(CourseChapter.items),
         )
     )
-    if not enrollment:
-        raise HTTPException(status_code=500, detail="Enrollment was not created")
+    active_subscription = db.scalar(
+        select(Subscription).where(
+            Subscription.user_id == user.id,
+            Subscription.course_id == course.id,
+            Subscription.status == "active",
+        )
+    )
+    if enrollment and active_subscription:
+        db.commit()
+        return SubscribeCourseOut(
+            auth=AuthOut(access_token=f"demo-token-{user.id}", user=user),
+            enrollment=EnrollmentOut.model_validate(enrollment),
+            subscription_status=active_subscription.status,
+        )
+
+    settings = get_settings()
+    if not settings.stripe_secret_key:
+        db.rollback()
+        raise HTTPException(status_code=503, detail="Stripe payment is not configured")
+    if not course.institution or not course.institution.stripe_account_id or not course.institution.stripe_charges_enabled:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Institution Stripe onboarding is not complete")
+
+    frontend_base_url = settings.frontend_base_url.rstrip("/")
+    try:
+        import stripe
+
+        stripe.api_key = settings.stripe_secret_key
+        checkout_session = stripe.checkout.Session.create(
+            mode="subscription",
+            customer_email=user.email,
+            client_reference_id=str(user.id),
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "eur",
+                        "unit_amount": 3900,
+                        "recurring": {"interval": "month"},
+                        "product_data": {
+                            "name": course.title,
+                            "description": course.subtitle or course.institution.name,
+                        },
+                    },
+                    "quantity": 1,
+                }
+            ],
+            metadata={
+                "user_id": str(user.id),
+                "course_id": str(course.id),
+                "course_slug": course.slug,
+            },
+            subscription_data={
+                "application_fee_percent": settings.stripe_platform_fee_percent,
+                "transfer_data": {"destination": course.institution.stripe_account_id},
+                "metadata": {
+                    "user_id": str(user.id),
+                    "course_id": str(course.id),
+                    "course_slug": course.slug,
+                },
+            },
+            success_url=f"{frontend_base_url}/learn?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
+            cancel_url=f"{frontend_base_url}/courses/{course.slug}?payment=cancelled",
+        )
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=502, detail=f"Stripe checkout creation failed: {exc}") from exc
+
+    checkout_session_id = str(checkout_session.get("id"))
+    pending_subscription = db.scalar(
+        select(Subscription).where(Subscription.stripe_checkout_session_id == checkout_session_id)
+    )
+    if pending_subscription is None:
+        pending_subscription = Subscription(
+            user_id=user.id,
+            course_id=course.id,
+            amount_eur_monthly=39,
+            status="pending",
+            current_period_start=datetime.utcnow(),
+            current_period_end=None,
+            payment_provider="stripe",
+            stripe_checkout_session_id=checkout_session_id,
+            stripe_customer_id=str(checkout_session.get("customer") or "") or None,
+            platform_fee_percent=settings.stripe_platform_fee_percent,
+        )
+        db.add(pending_subscription)
+
+    db.commit()
+    db.refresh(user)
 
     return SubscribeCourseOut(
         auth=AuthOut(access_token=f"demo-token-{user.id}", user=user),
-        enrollment=EnrollmentOut.model_validate(enrollment),
-        subscription_status=subscription.status,
+        enrollment=None,
+        subscription_status="checkout_required",
+        checkout_url=str(checkout_session.get("url") or ""),
+        checkout_session_id=checkout_session_id,
     )
 
 

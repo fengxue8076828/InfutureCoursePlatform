@@ -22,6 +22,11 @@ class Settings(BaseSettings):
     smtp_from_email: str | None = None
     smtp_use_tls: bool = True
     google_client_id: str | None = None
+    frontend_base_url: str = "http://localhost:3000"
+    stripe_secret_key: str | None = None
+    stripe_webhook_secret: str | None = None
+    stripe_default_country: str = "HU"
+    stripe_platform_fee_percent: float = 15.0
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
