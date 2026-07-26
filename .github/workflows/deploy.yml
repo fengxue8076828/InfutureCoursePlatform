@@ -63,8 +63,17 @@ jobs:
           DO_SSH_KEY: ${{ secrets.DO_SSH_KEY }}
         run: |
           mkdir -p ~/.ssh
-          printf '%s\n' "$DO_SSH_KEY" > ~/.ssh/id_deploy
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          key = os.environ.get("DO_SSH_KEY", "").strip()
+          if "\\n" in key and "\n" not in key:
+              key = key.replace("\\n", "\n")
+          key = key.replace("\r\n", "\n").replace("\r", "\n")
+          Path.home().joinpath(".ssh", "id_deploy").write_text(key + "\n", encoding="utf-8")
+          PY
           chmod 600 ~/.ssh/id_deploy
+          ssh-keygen -y -f ~/.ssh/id_deploy > /dev/null
 
       - name: Trust DigitalOcean host
         env:
