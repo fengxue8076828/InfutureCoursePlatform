@@ -138,11 +138,10 @@ jobs:
           fi
 
           if [ ! -d "$APP_DIR/.git" ]; then
-            if [ -n "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 -print -quit)" ]; then
-              echo "$APP_DIR exists but is not a Git repository. Please move existing files or clone the repository there manually."
-              exit 1
-            fi
-            git clone --branch "$DEPLOY_BRANCH" "$REPO_URL" "$APP_DIR"
+            tmp_dir="$(mktemp -d)"
+            git clone --branch "$DEPLOY_BRANCH" "$REPO_URL" "$tmp_dir"
+            cp -a "$tmp_dir"/. "$APP_DIR"/
+            rm -rf "$tmp_dir"
           fi
 
           cd "$APP_DIR"
