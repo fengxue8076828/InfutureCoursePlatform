@@ -1601,6 +1601,35 @@ function OptionsEditor({
   );
 }
 
+function LocalUploadProgressRing({ progress }: { progress: number }) {
+  const size = 18;
+  const radius = 7;
+  const circumference = 2 * Math.PI * radius;
+  const value = Math.max(0, Math.min(100, Math.round(progress)));
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <span className="inline-flex items-center gap-1 text-xs font-bold tabular-nums text-mint" aria-label={`上传进度 ${value}%`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+        <circle cx="9" cy="9" r={radius} fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
+        <circle
+          cx="9"
+          cy="9"
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="3"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform="rotate(-90 9 9)"
+        />
+      </svg>
+      <span>{value}%</span>
+    </span>
+  );
+}
+
 function MediaEditor({
   mediaAssets,
   addMedia,
@@ -1613,8 +1642,14 @@ function MediaEditor({
   removeMedia: (index: number) => void | Promise<void>;
 }) {
   const [uploadError, setUploadError] = useState("");
+  const [uploadProgress, setUploadProgress] = useState<{ target: string; percent: number } | null>(null);
 
-  function handleFileUpload(type: UploadMediaType, file: File | undefined) {
+  function readMediaFile(
+    target: string,
+    type: UploadMediaType,
+    file: File | undefined,
+    onLoaded: (file: File, dataUrl: string) => void
+  ) {
     if (!file) {
       return;
     }
@@ -1629,16 +1664,36 @@ function MediaEditor({
       return;
     }
     const reader = new FileReader();
+    setUploadProgress({ target, percent: 1 });
+    reader.onprogress = (event) => {
+      const percent = event.lengthComputable
+        ? Math.max(1, Math.min(99, Math.round((event.loaded / event.total) * 100)))
+        : 1;
+      setUploadProgress({ target, percent });
+    };
+    reader.onerror = () => {
+      setUploadError("文件读取失败，请重新选择。");
+      setUploadProgress(null);
+    };
     reader.onload = () => {
       const dataUrl = typeof reader.result === "string" ? reader.result : "";
       if (!dataUrl) {
         setUploadError("文件读取失败，请重新选择。");
+        setUploadProgress(null);
         return;
       }
-      addMedia(type, file.name, dataUrl);
+      setUploadProgress({ target, percent: 100 });
+      onLoaded(file, dataUrl);
       setUploadError("");
+      window.setTimeout(() => setUploadProgress(null), 250);
     };
     reader.readAsDataURL(file);
+  }
+
+  function handleFileUpload(type: UploadMediaType, file: File | undefined) {
+    readMediaFile(type, type, file, (loadedFile, dataUrl) => {
+      addMedia(type, loadedFile.name, dataUrl);
+    });
   }
 
   return (
@@ -1649,20 +1704,27 @@ function MediaEditor({
           <p className="mt-1 text-sm text-slate-500">题干可以上传图片、音频或视频素材。</p>
         </div>
         <div className="flex flex-wrap gap-2">
-          {uploadMediaOptions.map((item) => (
-            <label
-              key={item.type}
-              className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"
-            >
-              <item.icon size={15} /> 上传{item.label}
-              <input
-                type="file"
-                accept={item.accept}
-                className="sr-only"
-                onChange={(event) => handleFileUpload(item.type, event.target.files?.[0])}
-              />
-            </label>
-          ))}
+          {uploadMediaOptions.map((item) => {
+            const isUploading = uploadProgress?.target === item.type;
+            return (
+              <label
+                key={item.type}
+                className="focus-ring inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"
+              >
+                {isUploading ? <LocalUploadProgressRing progress={uploadProgress.percent} /> : <item.icon size={15} />} 上传{item.label}
+                <input
+                  type="file"
+                  accept={item.accept}
+                  className="sr-only"
+                  disabled={isUploading}
+                  onChange={(event) => {
+                    handleFileUpload(item.type, event.target.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+            );
+          })}
         </div>
       </div>
       {uploadError ? (
@@ -1673,55 +1735,57 @@ function MediaEditor({
 
       {mediaAssets.length > 0 ? (
         <div className="mt-4 grid gap-3">
-          {mediaAssets.map((media, index) => (
-            <div key={`${media.media_type}-${index}`} className="grid gap-3 rounded-lg bg-slate-50 p-3 lg:grid-cols-[10rem_1fr_9rem_2.5rem]">
-              <MediaPreview media={media} />
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                素材名称
-                <input
-                  className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
-                  value={media.title}
-                  onChange={(event) => updateMedia(index, { title: event.target.value })}
-                  placeholder="素材名称"
-                />
-              </label>
-              <label className="grid content-center gap-2 text-sm font-semibold text-slate-700">
-                替换文件
-                <input
-                  className="block w-full text-xs text-slate-500 file:mr-2 file:rounded-md file:border-0 file:bg-white file:px-2 file:py-1.5 file:text-xs file:font-bold file:text-slate-700"
-                  type="file"
-                  accept={uploadMediaOptions.find((item) => item.type === media.media_type)?.accept}
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (!file || media.media_type === "handout") {
-                      return;
-                    }
-                    const reader = new FileReader();
-                    reader.onload = () => {
-                      const dataUrl = typeof reader.result === "string" ? reader.result : "";
-                      if (dataUrl) {
-                        updateMedia(index, { title: file.name, url: dataUrl });
-                      }
-                    };
-                    reader.readAsDataURL(file);
-                  }}
-                />
-              </label>
-              <button
-                onClick={() => { void removeMedia(index); }}
-                className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 text-coral"
-                aria-label="删除素材"
-              >
-                <Trash2 size={15} />
-              </button>
-            </div>
-          ))}
+          {mediaAssets.map((media, index) => {
+            const replaceTarget = `replace-${index}`;
+            const replacing = uploadProgress?.target === replaceTarget;
+            return (
+              <div key={`${media.media_type}-${index}`} className="grid gap-3 rounded-lg bg-slate-50 p-3 lg:grid-cols-[10rem_1fr_9rem_2.5rem]">
+                <MediaPreview media={media} />
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  素材名称
+                  <input
+                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm"
+                    value={media.title}
+                    onChange={(event) => updateMedia(index, { title: event.target.value })}
+                    placeholder="素材名称"
+                  />
+                </label>
+                <label className="grid content-center gap-2 text-sm font-semibold text-slate-700">
+                  替换文件
+                  <span className="flex items-center gap-2">
+                    <input
+                      className="block w-full text-xs text-slate-500 file:mr-2 file:rounded-md file:border-0 file:bg-white file:px-2 file:py-1.5 file:text-xs file:font-bold file:text-slate-700"
+                      type="file"
+                      accept={uploadMediaOptions.find((item) => item.type === media.media_type)?.accept}
+                      disabled={replacing}
+                      onChange={(event) => {
+                        const file = event.target.files?.[0];
+                        if (media.media_type !== "handout") {
+                          readMediaFile(replaceTarget, media.media_type, file, (loadedFile, dataUrl) => {
+                            updateMedia(index, { title: loadedFile.name, url: dataUrl });
+                          });
+                        }
+                        event.currentTarget.value = "";
+                      }}
+                    />
+                    {replacing ? <LocalUploadProgressRing progress={uploadProgress.percent} /> : null}
+                  </span>
+                </label>
+                <button
+                  onClick={() => { void removeMedia(index); }}
+                  className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 text-coral"
+                  aria-label="删除素材"
+                >
+                  <Trash2 size={15} />
+                </button>
+              </div>
+            );
+          })}
         </div>
       ) : null}
     </section>
   );
 }
-
 function MediaPreview({ media }: { media: QuestionMedia }) {
   const label = mediaTypeLabel(media.media_type);
   const hasSource = media.url.trim().length > 0;
