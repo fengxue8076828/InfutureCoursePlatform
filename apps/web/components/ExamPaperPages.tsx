@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, Clock3, FileText, Search, Send, Trophy, Users } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
@@ -8,7 +10,6 @@ import { MathText } from "@/components/MathText";
 import { getStudentSessionUser } from "@/lib/student-session";
 import type { CourseCategory, ExamPaper, ExamPaperKind, ExamPaperQuestion } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type RegistrationDraft = {
   student_name: string;

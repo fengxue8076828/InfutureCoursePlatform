@@ -1,9 +1,10 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { CalendarDays, CheckCircle2, Mail, MapPin, MonitorPlay, Phone, Sparkles, Trophy, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type ActivityMode = "online" | "offline";
 type ActivityStatus = "open" | "closed";

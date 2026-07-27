@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { Facebook, GraduationCap, Loader2, LogIn, Mail, UserPlus } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -7,7 +9,6 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 
 import { persistStudentSession, type StudentAuthResponse } from "@/lib/student-session";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const GOOGLE_SCRIPT_ID = "google-identity-services-script";
 

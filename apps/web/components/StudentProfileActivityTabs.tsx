@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import {
   BookOpenText,
   CheckCircle2,
@@ -18,7 +20,6 @@ import type { ReactNode } from "react";
 import { getStudentRequestHeaders } from "@/lib/student-session";
 import type { CommunityAnswer, CommunityNoteShare, CommunityQuestion, StudentPost, StudentPostComment } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type ActivityTabKey = "posts" | "questions" | "answers" | "notes";
 

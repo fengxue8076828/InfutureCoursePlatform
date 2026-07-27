@@ -1,4 +1,6 @@
-﻿"use client";
+"use client";
+
+import { API_BASE_URL } from "@/lib/api-config";
 
 import {
   AlertTriangle,
@@ -124,7 +126,6 @@ type ApiManagedUser = {
   is_active: boolean;
 };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const localDraftIdBase = 1_000_000_000;
 const QUESTION_BANK_CHANGE_EVENT = "infuture-question-bank-change";
 

@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import {
   ArrowRight,
   ChevronDown,
@@ -26,7 +28,6 @@ import {
 } from "@/lib/student-session";
 import type { CommunityAnswer, CommunityHome, CommunityNoteShare, CommunityQuestion, StudentProfileSummary } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 function formatDate(value?: string | null) {
   if (!value) return "刚刚";

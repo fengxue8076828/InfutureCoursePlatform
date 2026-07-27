@@ -1,3 +1,4 @@
+import { API_BASE_URL } from "./api-config";
 import type {
   BlogPost,
   Course,
@@ -11,7 +12,6 @@ import type {
   Teacher
 } from "./types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 async function fetchJson<T>(path: string, fallback: T): Promise<T> {
   try {

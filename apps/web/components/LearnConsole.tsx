@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import {
   Bold,
   AlertTriangle,
@@ -29,7 +31,6 @@ import { MathText } from "@/components/MathText";
 import { getStudentRequestHeaders } from "@/lib/student-session";
 import type { Chapter, CourseReview, Enrollment, LessonItem, Question, QuestionMedia, QuestionOption } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const API_ORIGIN = API_BASE_URL.replace(/\/api\/v1\/?$/, "");
 const LEARN_LAYOUT_STORAGE_KEY = "infuture-learn-console-layout";
 const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";

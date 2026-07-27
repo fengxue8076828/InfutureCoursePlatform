@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { CreditCard, Loader2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -13,7 +15,6 @@ import {
 } from "@/lib/student-session";
 import type { Course, Enrollment } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 const copy = {
   initialStatus: "\u8bf7\u586b\u5199\u5b66\u751f\u4fe1\u606f\uff0c\u786e\u8ba4\u540e\u5c06\u8df3\u8f6c\u5230 Stripe \u5b89\u5168\u652f\u4ed8\u9875\u3002",

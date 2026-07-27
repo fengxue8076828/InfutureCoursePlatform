@@ -1,12 +1,13 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import type { ReactNode } from "react";
 import { ArrowLeft, ArrowRight, BookOpen, CheckCircle2, Clock3, GraduationCap, PlayCircle, Route } from "lucide-react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useEffect, useState } from "react";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type LearningPathCourse = {
   id: number;

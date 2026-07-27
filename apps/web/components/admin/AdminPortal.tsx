@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import {
   ArrowUpRight,
@@ -40,6 +40,8 @@ import {
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
+import { API_BASE_URL, apiConnectionErrorMessage } from "@/lib/api-config";
+import { uploadFormDataWithProgress, type UploadProgress } from "@/lib/upload";
 
 import { MathText } from "@/components/MathText";
 import {
@@ -108,7 +110,6 @@ const QUESTION_BANK_CHANGE_EVENT = "infuture-question-bank-change";
 const COURSE_CONTENT_REFRESH_EVENT = "infuture-course-content-change";
 const COURSE_CONTENT_REFRESH_STORAGE_KEY = "infuture-course-content-version";
 const COURSE_CONTENT_BROADCAST_CHANNEL = "infuture-course-content";
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const DEFAULT_TEACHER_AVATAR_URL = "/avatars/default-teacher.svg";
 const DEFAULT_ADMIN_AVATAR =
   "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 160 160'%3E%3Crect width='160' height='160' rx='28' fill='%23f1f5f9'/%3E%3Ccircle cx='80' cy='59' r='28' fill='%2394a3b8'/%3E%3Cpath d='M35 132c6-27 24-43 45-43s39 16 45 43' fill='%2394a3b8'/%3E%3C/svg%3E";
@@ -1843,43 +1844,58 @@ function persistCourseDraft(draft: CourseDraft) {
   }
 }
 
-async function uploadAdminFile(file: File, kind: AdminUploadKind) {
+function UploadProgressRing({ progress, size = 18 }: { progress: number | null; size?: number }) {
+  const value = Math.max(0, Math.min(100, Math.round(progress ?? 0)));
+  const radius = (size - 4) / 2;
+  const circumference = 2 * Math.PI * radius;
+  const offset = circumference - (value / 100) * circumference;
+
+  return (
+    <span className="inline-flex items-center gap-1.5 text-xs font-bold tabular-nums text-mint" aria-label={`上传进度 ${value}%`}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+        <circle cx={size / 2} cy={size / 2} r={radius} fill="none" stroke="currentColor" strokeOpacity="0.18" strokeWidth="3" />
+        <circle
+          cx={size / 2}
+          cy={size / 2}
+          r={radius}
+          fill="none"
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeWidth="3"
+          strokeDasharray={circumference}
+          strokeDashoffset={offset}
+          transform={`rotate(-90 ${size / 2} ${size / 2})`}
+        />
+      </svg>
+      <span>{value}%</span>
+    </span>
+  );
+}
+
+async function uploadAdminFile(
+  file: File,
+  kind: AdminUploadKind,
+  onProgress?: (progress: UploadProgress) => void
+) {
   if (kind === "handout" && !/\.md$/i.test(file.name)) {
     throw new Error("讲义文件只支持 Markdown .md 文件。");
   }
   const formData = new FormData();
   formData.append("kind", kind);
   formData.append("file", file);
-  let response: Response;
-  try {
-    response = await fetch(`${API_BASE_URL}/admin/uploads`, {
-      method: "POST",
-      headers: getAdminRequestHeaders(),
-      body: formData
-    });
-  } catch {
-    throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
-  }
-  if (!response.ok) {
-    let detail = "";
-    try {
-      const errorPayload = (await response.json()) as { detail?: unknown };
-      detail = typeof errorPayload.detail === "string" ? errorPayload.detail : "";
-    } catch {
-      detail = "";
-    }
-    if (response.status === 413) {
-      throw new Error("文件太大，请压缩后再上传。");
-    }
-    throw new Error(detail || `上传失败，服务器返回 ${response.status}。`);
-  }
-  const payload = (await response.json()) as { url: string };
+
+  const payload = await uploadFormDataWithProgress<{ url: string }>({
+    url: `${API_BASE_URL}/admin/uploads`,
+    formData,
+    headers: getAdminRequestHeaders(),
+    onProgress
+  });
+
   if (!payload.url) {
     throw new Error("上传成功但服务器没有返回文件地址。");
   }
   return payload.url;
 }
-
 function uploadFailureMessage(error: unknown, fallback: string) {
   return error instanceof Error ? error.message : fallback;
 }
@@ -2243,6 +2259,7 @@ function RichTextEditor({
   const editorRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
   const [uploading, setUploading] = useState<"image" | "video" | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<number | null>(null);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -2281,8 +2298,9 @@ function RichTextEditor({
       return;
     }
     setUploading(mediaType);
+    setUploadProgress(1);
     try {
-      const url = await uploadAdminFile(file, mediaType === "image" ? "question_media" : "lesson_video");
+      const url = await uploadAdminFile(file, mediaType === "image" ? "question_media" : "lesson_video", (progress) => setUploadProgress(progress.percent));
       const safeName = file.name.replace(/[<>"']/g, "");
       insertHtml(
         mediaType === "image"
@@ -2293,6 +2311,7 @@ function RichTextEditor({
       window.alert(uploadFailureMessage(error, "文件上传失败，请确认 FastAPI 服务正在运行。"));
     } finally {
       setUploading(null);
+      setUploadProgress(null);
     }
   }
 
@@ -2359,7 +2378,7 @@ function RichTextEditor({
           <Link2 size={16} />
         </button>
         <label className={`${toolbarButtonClass} cursor-pointer`}>
-          <ImagePlus size={16} />
+          {uploading === "image" ? <UploadProgressRing progress={uploadProgress} /> : <ImagePlus size={16} />}
           <span className="ml-1 hidden sm:inline">{uploading === "image" ? "上传中" : "图片"}</span>
           <input
             type="file"
@@ -2373,7 +2392,7 @@ function RichTextEditor({
           />
         </label>
         <label className={`${toolbarButtonClass} cursor-pointer`}>
-          <Video size={16} />
+          {uploading === "video" ? <UploadProgressRing progress={uploadProgress} /> : <Video size={16} />}
           <span className="ml-1 hidden sm:inline">{uploading === "video" ? "上传中" : "视频"}</span>
           <input
             type="file"
@@ -3124,6 +3143,7 @@ function InstitutionPanel() {
   const [status, setStatus] = useState("修改机构信息后点击更新。");
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
   const [stripeBusy, setStripeBusy] = useState(false);
   const categoryLabel =
     institutionCategoryOptions.find((option) => option.value === draft.category)?.label ?? draft.category;
@@ -3168,9 +3188,10 @@ function InstitutionPanel() {
       return;
     }
     setUploadingLogo(true);
+    setLogoUploadProgress(1);
     setStatus("正在上传机构 Logo...");
     try {
-      const logoUrl = await uploadAdminFile(file, "logo");
+      const logoUrl = await uploadAdminFile(file, "logo", (progress) => setLogoUploadProgress(progress.percent));
       setDraft((current) => ({ ...current, logoUrl }));
       persistAdminBrandFromInstitution({ ...draft, logoUrl });
       setStatus("机构 Logo 已上传，点击更新机构信息后保存。");
@@ -3178,6 +3199,7 @@ function InstitutionPanel() {
       setStatus(`机构 Logo 上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingLogo(false);
+      setLogoUploadProgress(null);
     }
   }
 
@@ -3352,7 +3374,7 @@ function InstitutionPanel() {
             )}
           </div>
           <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 font-bold text-white">
-            <ImagePlus size={16} /> {uploadingLogo ? "上传中" : "上传新 Logo"}
+            {uploadingLogo ? <UploadProgressRing progress={logoUploadProgress} /> : <ImagePlus size={16} />} {uploadingLogo ? "上传中" : "上传新 Logo"}
             <input
               type="file"
               accept="image/*"
@@ -3784,6 +3806,8 @@ function LearningPathManagement() {
   const [deleting, setDeleting] = useState(false);
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingIntroVideo, setUploadingIntroVideo] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
+  const [introVideoUploadProgress, setIntroVideoUploadProgress] = useState<number | null>(null);
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
 
   const selectedPath = paths.find((path) => path.id === selectedPathId) ?? null;
@@ -3884,30 +3908,34 @@ function LearningPathManagement() {
   async function uploadLearningPathCover(file: File | undefined) {
     if (!file) return;
     setUploadingCover(true);
+    setCoverUploadProgress(1);
     setStatus("正在上传路径封面...");
     try {
-      const url = await uploadAdminFile(file, "course_cover");
+      const url = await uploadAdminFile(file, "course_cover", (progress) => setCoverUploadProgress(progress.percent));
       updateDraft("coverUrl", url);
       setStatus("路径封面已上传，保存路径后生效。");
     } catch (error) {
       setStatus(`路径封面上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingCover(false);
+      setCoverUploadProgress(null);
     }
   }
 
   async function uploadLearningPathIntroVideo(file: File | undefined) {
     if (!file) return;
     setUploadingIntroVideo(true);
+    setIntroVideoUploadProgress(1);
     setStatus("正在上传路径介绍视频...");
     try {
-      const url = await uploadAdminFile(file, "course_intro_video");
+      const url = await uploadAdminFile(file, "course_intro_video", (progress) => setIntroVideoUploadProgress(progress.percent));
       updateDraft("introVideoUrl", url);
       setStatus("路径介绍视频已上传，保存路径后生效。");
     } catch (error) {
       setStatus(`介绍视频上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingIntroVideo(false);
+      setIntroVideoUploadProgress(null);
     }
   }
 
@@ -4115,7 +4143,7 @@ function LearningPathManagement() {
                 )}
                 <div className="flex flex-col justify-center gap-3">
                   <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-mint">
-                    <ImagePlus size={16} /> {uploadingCover ? "上传中" : "封面图片"}
+                    {uploadingCover ? <UploadProgressRing progress={coverUploadProgress} /> : <ImagePlus size={16} />} {uploadingCover ? "上传中" : "封面图片"}
                     <input
                       type="file"
                       accept="image/*"
@@ -4156,7 +4184,7 @@ function LearningPathManagement() {
                 )}
                 <div className="flex flex-col justify-center gap-3">
                   <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-mint">
-                    <Video size={16} /> {uploadingIntroVideo ? "上传中" : "介绍视频"}
+                    {uploadingIntroVideo ? <UploadProgressRing progress={introVideoUploadProgress} /> : <Video size={16} />} {uploadingIntroVideo ? "上传中" : "介绍视频"}
                     <input
                       type="file"
                       accept="video/*"
@@ -4373,6 +4401,8 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
   const [uploadingCover, setUploadingCover] = useState(false);
   const [uploadingIntroVideo, setUploadingIntroVideo] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
+  const [introVideoUploadProgress, setIntroVideoUploadProgress] = useState<number | null>(null);
   const selectedCourseTeacherId = courseDraft.teacherId ?? selectedCourse.teacherId;
   const selectedCourseBelongsToCurrentUser = Boolean(
     currentTeacherId && selectedCourseTeacherId === currentTeacherId
@@ -4858,15 +4888,17 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
       return;
     }
     setUploadingCover(true);
+    setCoverUploadProgress(1);
     setCourseMessage("正在上传课程封面...");
     try {
-      const url = await uploadAdminFile(file, "course_cover");
+      const url = await uploadAdminFile(file, "course_cover", (progress) => setCoverUploadProgress(progress.percent));
       updateCourseDraft("coverUrl", url);
       setCourseMessage("课程封面已上传。");
     } catch (error) {
       setCourseMessage(`课程封面上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingCover(false);
+      setCoverUploadProgress(null);
     }
   }
 
@@ -4875,15 +4907,17 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
       return;
     }
     setUploadingIntroVideo(true);
+    setIntroVideoUploadProgress(1);
     setCourseMessage("正在上传介绍视频...");
     try {
-      const url = await uploadAdminFile(file, "course_intro_video");
+      const url = await uploadAdminFile(file, "course_intro_video", (progress) => setIntroVideoUploadProgress(progress.percent));
       updateCourseDraft("introVideoUrl", url);
       setCourseMessage("介绍视频已上传。");
     } catch (error) {
       setCourseMessage(`介绍视频上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingIntroVideo(false);
+      setIntroVideoUploadProgress(null);
     }
   }
 
@@ -5025,7 +5059,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
           body: JSON.stringify(courseDraftToCreatePayload(currentDraft, selectedSummary, teacherOptions))
         });
       } catch {
-        throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+        throw new Error(apiConnectionErrorMessage("无法连接课程服务"));
       }
       if (!createResponse.ok) {
         let detail = "";
@@ -5050,7 +5084,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
         body: JSON.stringify(courseDraftToApiPayload(draftForSave, teacherOptions, status))
       });
     } catch {
-      throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+      throw new Error(apiConnectionErrorMessage("无法连接课程服务"));
     }
     if (!response.ok) {
       let detail = "";
@@ -5132,7 +5166,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
         body: JSON.stringify({ status })
       });
     } catch {
-      throw new Error("无法连接 FastAPI 服务，请确认 http://localhost:8000 正在运行。");
+      throw new Error(apiConnectionErrorMessage("无法连接课程服务"));
     }
     if (!response.ok) {
       let detail = "";
@@ -5490,7 +5524,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
                 )}
                 <div className="grid content-center gap-3">
                   <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
-                    <ImagePlus size={16} /> {uploadingCover ? "上传中" : "选择封面图片"}
+                    {uploadingCover ? <UploadProgressRing progress={coverUploadProgress} /> : <ImagePlus size={16} />} {uploadingCover ? "上传中" : "选择封面图片"}
                     <input
                       type="file"
                       accept="image/*"
@@ -5518,7 +5552,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
                 </div>
                 <div className="grid content-center gap-3">
                   <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700">
-                    <Video size={16} /> {uploadingIntroVideo ? "上传中" : "选择介绍视频"}
+                    {uploadingIntroVideo ? <UploadProgressRing progress={introVideoUploadProgress} /> : <Video size={16} />} {uploadingIntroVideo ? "上传中" : "选择介绍视频"}
                     <input
                       type="file"
                       accept="video/*"
@@ -5738,6 +5772,7 @@ function CourseLessonItemEditor({
   const [collapsed, setCollapsed] = useState(itemIndex > 0);
   const [uploadMessage, setUploadMessage] = useState("");
   const [uploadingFile, setUploadingFile] = useState(false);
+  const [fileUploadProgress, setFileUploadProgress] = useState<number | null>(null);
   const itemTypeMeta =
     courseLessonItemTypes.find((type) => type.value === item.itemType) ?? courseLessonItemTypes[0];
   const ItemIcon = itemTypeMeta.icon;
@@ -5758,15 +5793,17 @@ function CourseLessonItemEditor({
       return;
     }
     setUploadingFile(true);
+    setFileUploadProgress(1);
     setUploadMessage("正在上传文件...");
     try {
-      const url = await uploadAdminFile(file, kind);
+      const url = await uploadAdminFile(file, kind, (progress) => setFileUploadProgress(progress.percent));
       onUpdate({ contentUrl: url });
       setUploadMessage("文件已上传。");
     } catch (error) {
       setUploadMessage(`文件上传失败：${uploadFailureMessage(error, "请确认 FastAPI 服务正在运行。")}`);
     } finally {
       setUploadingFile(false);
+      setFileUploadProgress(null);
     }
   }
 
@@ -5854,7 +5891,7 @@ function CourseLessonItemEditor({
                   <p className="mt-1 text-sm text-slate-500">视频仅支持本地文件上传。</p>
                 </div>
                 <label className="focus-ring inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">
-                  <Video size={16} /> {uploadingFile ? "上传中" : "选择视频"}
+                  {uploadingFile ? <UploadProgressRing progress={fileUploadProgress} /> : <Video size={16} />} {uploadingFile ? "上传中" : "选择视频"}
                   <input
                     type="file"
                     accept="video/*"
@@ -5888,7 +5925,7 @@ function CourseLessonItemEditor({
                   </p>
                 </div>
                 <label className="focus-ring inline-flex h-10 cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 text-sm font-bold text-slate-700">
-                  <FileText size={16} /> {uploadingFile ? "上传中" : "选择讲义"}
+                  {uploadingFile ? <UploadProgressRing progress={fileUploadProgress} /> : <FileText size={16} />} {uploadingFile ? "上传中" : "选择讲义"}
                   <input
                     type="file"
                     accept=".md,text/markdown,text/plain"

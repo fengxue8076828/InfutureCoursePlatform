@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { ArrowRight, Building2, GraduationCap, ImagePlus, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -9,7 +11,6 @@ import { useState } from "react";
 import { institutionCategoryOptions } from "@/lib/admin-data";
 import { AdminAuthResponse, persistAdminSession } from "@/lib/admin-session";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 export function AdminLoginPage() {
   const router = useRouter();

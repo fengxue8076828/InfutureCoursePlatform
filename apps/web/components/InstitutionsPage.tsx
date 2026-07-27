@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import {
   ArrowRight,
   BookOpen,
@@ -22,7 +24,6 @@ import { useEffect, useMemo, useState } from "react";
 
 import type { Course, CourseCategory, ExamPaper, Institution, Teacher } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type InstitutionCard = {
   institution: Institution;

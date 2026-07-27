@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { ChevronDown, Facebook, LogIn, Search, ShieldCheck } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
@@ -48,7 +50,6 @@ const navGroups = [
 const standaloneNavItem = { href: "/learn", label: "\u6211\u7684\u5b66\u4e60" };
 const homeNavItem = { href: "/", label: "\u9996\u9875" };
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 export function Header({
   wide = false,

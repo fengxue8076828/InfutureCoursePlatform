@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { ArrowRight, Award, BookOpenCheck, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, Share2, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
@@ -12,7 +14,6 @@ import { StudentProfileActivityTabs } from "@/components/StudentProfileActivityT
 import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
 import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";
 
 type LearningTab = "home" | "classroom" | "questions" | "notes";

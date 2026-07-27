@@ -1,5 +1,7 @@
 "use client";
 
+import { API_BASE_URL } from "@/lib/api-config";
+
 import { ArrowLeft, Loader2 } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useState, useSyncExternalStore } from "react";
@@ -15,7 +17,6 @@ import {
 } from "@/lib/student-session";
 import type { Enrollment } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 const COURSE_REFRESH_INTERVAL_MS = 10_000;
 const COURSE_CONTENT_REFRESH_EVENT = "infuture-course-content-change";
 const COURSE_CONTENT_REFRESH_STORAGE_KEY = "infuture-course-content-version";

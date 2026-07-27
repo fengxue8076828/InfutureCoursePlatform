@@ -1,4 +1,6 @@
-﻿"use client";
+"use client";
+
+import { API_BASE_URL } from "@/lib/api-config";
 
 import { HelpCircle, Send } from "lucide-react";
 import { useState } from "react";
@@ -6,7 +8,6 @@ import { useState } from "react";
 import { getStudentRequestHeaders } from "@/lib/student-session";
 import type { CommunityQuestion } from "@/lib/types";
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "http://localhost:8000/api/v1";
 
 type CommunityQuestionBoxProps = {
   title?: string;
