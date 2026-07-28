@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 import { FormEvent, useState } from "react";
 
 import {
+  clearStudentSession,
   getStudentRequestHeaders,
   getStudentSessionUser,
   persistStudentSession,
@@ -24,6 +25,7 @@ const copy = {
   redirecting: "\u5373\u5c06\u8df3\u8f6c\u5230 Stripe \u5b89\u5168\u652f\u4ed8\u9875...",
   alreadySubscribed: "\u8ba2\u9605\u5df2\u751f\u6548\uff0c\u6b63\u5728\u8fdb\u5165\u6211\u7684\u5b66\u4e60...",
   apiUnavailable: "\u65e0\u6cd5\u8fde\u63a5 FastAPI \u670d\u52a1\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u6b63\u5728\u8fd0\u884c\u3002",
+  nonStudentSession: "\u5f53\u524d\u767b\u5f55\u7684\u4e0d\u662f\u5b66\u751f\u8d26\u53f7\uff0c\u8bf7\u9000\u51fa\u540e\u4f7f\u7528\u5b66\u751f\u8d26\u53f7\u8ba2\u9605\u3002",
   nonStudentEmail: "\u8fd9\u4e2a\u90ae\u7bb1\u5c5e\u4e8e\u673a\u6784\u6216\u8001\u5e08\u8d26\u53f7\uff0c\u8bf7\u6362\u4e00\u4e2a\u5b66\u751f\u90ae\u7bb1\u3002",
   courseMissing: "\u8bfe\u7a0b\u4e0d\u5b58\u5728\u6216\u5c1a\u672a\u53d1\u5e03\u3002",
   stripeMissing: "\u652f\u4ed8\u7cfb\u7edf\u8fd8\u6ca1\u6709\u914d\u7f6e Stripe\uff0c\u8bf7\u8054\u7cfb\u5e73\u53f0\u7ba1\u7406\u5458\u3002",
@@ -60,6 +62,9 @@ function subscriptionErrorMessage(message: string) {
   if (message === "Email belongs to a non-student account") {
     return copy.nonStudentEmail;
   }
+  if (message === "Please subscribe with a student account") {
+    return copy.nonStudentSession;
+  }
   if (message === "Course not found") {
     return copy.courseMissing;
   }
@@ -74,7 +79,10 @@ function subscriptionErrorMessage(message: string) {
 
 export function CourseSubscribeForm({ course }: { course: Course }) {
   const router = useRouter();
-  const [initialStudent] = useState(() => getStudentSessionUser());
+  const [initialStudent] = useState(() => {
+    const sessionUser = getStudentSessionUser();
+    return sessionUser?.role === "student" ? sessionUser : null;
+  });
   const [fullName, setFullName] = useState(initialStudent?.full_name ?? "");
   const [email, setEmail] = useState(initialStudent?.email ?? "");
   const [region, setRegion] = useState("");
@@ -100,7 +108,7 @@ export function CourseSubscribeForm({ course }: { course: Course }) {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          ...getStudentRequestHeaders()
+          ...(initialStudent?.role === "student" ? getStudentRequestHeaders() : {})
         },
         body: JSON.stringify({
           full_name: fullName,
@@ -134,6 +142,9 @@ export function CourseSubscribeForm({ course }: { course: Course }) {
       setStatus(copy.subscribeFailed);
     } catch (error) {
       const message = error instanceof Error ? error.message : "";
+      if (message === "Please subscribe with a student account") {
+        clearStudentSession();
+      }
       setStatus(subscriptionErrorMessage(message));
     } finally {
       setIsSubmitting(false);

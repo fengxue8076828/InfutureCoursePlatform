@@ -84,7 +84,7 @@ export function getStudentSessionServerSnapshot(): StudentSessionUser | null {
 
 export function getStudentRequestHeaders(): HeadersInit {
   const user = getStudentSessionUser();
-  return user
+  return user?.role === "student"
     ? {
         "x-demo-user-id": String(user.id)
       }
