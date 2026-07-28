@@ -1,6 +1,6 @@
 "use client";
 
-import { API_BASE_URL } from "@/lib/api-config";
+import { API_BASE_URL, apiConnectionErrorMessage } from "@/lib/api-config";
 
 import { CreditCard, Loader2, ShieldCheck } from "lucide-react";
 import Link from "next/link";
@@ -24,7 +24,7 @@ const copy = {
   creatingCheckout: "\u6b63\u5728\u521b\u5efa\u5b89\u5168\u652f\u4ed8\u8ba2\u5355...",
   redirecting: "\u5373\u5c06\u8df3\u8f6c\u5230 Stripe \u5b89\u5168\u652f\u4ed8\u9875...",
   alreadySubscribed: "\u8ba2\u9605\u5df2\u751f\u6548\uff0c\u6b63\u5728\u8fdb\u5165\u6211\u7684\u5b66\u4e60...",
-  apiUnavailable: "\u65e0\u6cd5\u8fde\u63a5 FastAPI \u670d\u52a1\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u6b63\u5728\u8fd0\u884c\u3002",
+  apiUnavailable: apiConnectionErrorMessage("\u65e0\u6cd5\u521b\u5efa\u8ba2\u9605\u8ba2\u5355"),
   nonStudentSession: "\u5f53\u524d\u767b\u5f55\u7684\u4e0d\u662f\u5b66\u751f\u8d26\u53f7\uff0c\u8bf7\u9000\u51fa\u540e\u4f7f\u7528\u5b66\u751f\u8d26\u53f7\u8ba2\u9605\u3002",
   nonStudentEmail: "\u8fd9\u4e2a\u90ae\u7bb1\u5c5e\u4e8e\u673a\u6784\u6216\u8001\u5e08\u8d26\u53f7\uff0c\u8bf7\u6362\u4e00\u4e2a\u5b66\u751f\u90ae\u7bb1\u3002",
   courseMissing: "\u8bfe\u7a0b\u4e0d\u5b58\u5728\u6216\u5c1a\u672a\u53d1\u5e03\u3002",

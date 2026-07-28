@@ -86,6 +86,12 @@ from app.services.points import calculate_student_point_detail, load_student_wit
 router = APIRouter()
 
 
+def stripe_value(obj: object, key: str, default: object = None) -> object:
+    if isinstance(obj, dict):
+        return obj.get(key, default)
+    return getattr(obj, key, default)
+
+
 def normalize_xml_text(value: str) -> str:
     return " ".join(value.split())
 
@@ -1385,7 +1391,7 @@ def subscribe_course(
         db.rollback()
         raise HTTPException(status_code=502, detail=f"Stripe checkout creation failed: {exc}") from exc
 
-    checkout_session_id = str(checkout_session.get("id"))
+    checkout_session_id = str(stripe_value(checkout_session, "id", ""))
     pending_subscription = db.scalar(
         select(Subscription).where(Subscription.stripe_checkout_session_id == checkout_session_id)
     )
@@ -1399,7 +1405,7 @@ def subscribe_course(
             current_period_end=None,
             payment_provider="stripe",
             stripe_checkout_session_id=checkout_session_id,
-            stripe_customer_id=str(checkout_session.get("customer") or "") or None,
+            stripe_customer_id=str(stripe_value(checkout_session, "customer", "") or "") or None,
             platform_fee_percent=platform_fee_percent,
         )
         db.add(pending_subscription)
@@ -1411,7 +1417,7 @@ def subscribe_course(
         auth=AuthOut(access_token=f"demo-token-{user.id}", user=user),
         enrollment=None,
         subscription_status="checkout_required",
-        checkout_url=str(checkout_session.get("url") or ""),
+        checkout_url=str(stripe_value(checkout_session, "url", "") or ""),
         checkout_session_id=checkout_session_id,
     )
 
