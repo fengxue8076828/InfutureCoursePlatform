@@ -1324,7 +1324,12 @@ def subscribe_course(
     if not settings.stripe_secret_key:
         db.rollback()
         raise HTTPException(status_code=503, detail="Stripe payment is not configured")
-    if not course.institution or not course.institution.stripe_account_id or not course.institution.stripe_charges_enabled:
+    institution = course.institution
+    if not institution:
+        db.rollback()
+        raise HTTPException(status_code=409, detail="Course institution is not configured")
+    platform_owned = institution.payout_mode == "platform"
+    if not platform_owned and (not institution.stripe_account_id or not institution.stripe_charges_enabled):
         db.rollback()
         raise HTTPException(status_code=409, detail="Institution Stripe onboarding is not complete")
 
@@ -1333,6 +1338,20 @@ def subscribe_course(
         import stripe
 
         stripe.api_key = settings.stripe_secret_key
+        subscription_data = {
+            "metadata": {
+                "user_id": str(user.id),
+                "course_id": str(course.id),
+                "course_slug": course.slug,
+                "institution_id": str(institution.id),
+                "payout_mode": institution.payout_mode,
+            },
+        }
+        platform_fee_percent = 100.0 if platform_owned else settings.stripe_platform_fee_percent
+        if not platform_owned:
+            subscription_data["application_fee_percent"] = settings.stripe_platform_fee_percent
+            subscription_data["transfer_data"] = {"destination": institution.stripe_account_id}
+
         checkout_session = stripe.checkout.Session.create(
             mode="subscription",
             customer_email=user.email,
@@ -1345,7 +1364,7 @@ def subscribe_course(
                         "recurring": {"interval": "month"},
                         "product_data": {
                             "name": course.title,
-                            "description": course.subtitle or course.institution.name,
+                            "description": course.subtitle or institution.name,
                         },
                     },
                     "quantity": 1,
@@ -1355,16 +1374,10 @@ def subscribe_course(
                 "user_id": str(user.id),
                 "course_id": str(course.id),
                 "course_slug": course.slug,
+                "institution_id": str(institution.id),
+                "payout_mode": institution.payout_mode,
             },
-            subscription_data={
-                "application_fee_percent": settings.stripe_platform_fee_percent,
-                "transfer_data": {"destination": course.institution.stripe_account_id},
-                "metadata": {
-                    "user_id": str(user.id),
-                    "course_id": str(course.id),
-                    "course_slug": course.slug,
-                },
-            },
+            subscription_data=subscription_data,
             success_url=f"{frontend_base_url}/learn?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
             cancel_url=f"{frontend_base_url}/courses/{course.slug}?payment=cancelled",
         )
@@ -1387,7 +1400,7 @@ def subscribe_course(
             payment_provider="stripe",
             stripe_checkout_session_id=checkout_session_id,
             stripe_customer_id=str(checkout_session.get("customer") or "") or None,
-            platform_fee_percent=settings.stripe_platform_fee_percent,
+            platform_fee_percent=platform_fee_percent,
         )
         db.add(pending_subscription)
 

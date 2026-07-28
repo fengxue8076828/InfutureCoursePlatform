@@ -125,6 +125,9 @@ class Institution(Base, TimestampMixin):
     institution_type: Mapped[str] = mapped_column(
         String(32), default="individual", server_default="individual", index=True
     )
+    payout_mode: Mapped[str] = mapped_column(
+        String(32), default="partner", server_default="partner", index=True
+    )
     service_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     gdpr_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     fee_agreement_accepted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

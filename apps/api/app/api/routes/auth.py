@@ -214,6 +214,7 @@ def register_institution(payload: InstitutionRegisterIn, db: Session = Depends(g
         logo_url=payload.logo_url or "/logos/euro-future.svg",
         category=payload.category,
         institution_type=payload.institution_type,
+        payout_mode="partner",
         service_agreement_accepted=payload.service_agreement_accepted,
         gdpr_agreement_accepted=payload.gdpr_agreement_accepted,
         fee_agreement_accepted=payload.fee_agreement_accepted,

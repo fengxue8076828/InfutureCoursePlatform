@@ -54,6 +54,7 @@ def ensure_schema_extensions(db: Session) -> None:
         "address": "ALTER TABLE institutions ADD COLUMN address VARCHAR(500)",
         "contact_person": "ALTER TABLE institutions ADD COLUMN contact_person VARCHAR(120)",
         "institution_type": "ALTER TABLE institutions ADD COLUMN institution_type VARCHAR(32) NOT NULL DEFAULT 'individual'",
+        "payout_mode": "ALTER TABLE institutions ADD COLUMN payout_mode VARCHAR(32) NOT NULL DEFAULT 'partner'",
         "service_agreement_accepted": "ALTER TABLE institutions ADD COLUMN service_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
         "gdpr_agreement_accepted": "ALTER TABLE institutions ADD COLUMN gdpr_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
         "fee_agreement_accepted": "ALTER TABLE institutions ADD COLUMN fee_agreement_accepted BOOLEAN NOT NULL DEFAULT FALSE",
@@ -76,6 +77,32 @@ def ensure_schema_extensions(db: Session) -> None:
 
     db.execute(text("ALTER TABLE institutions ALTER COLUMN logo_url TYPE TEXT"))
     db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_institutions_stripe_account_id ON institutions(stripe_account_id) WHERE stripe_account_id IS NOT NULL"))
+    db.execute(
+        text(
+            """
+            UPDATE institutions
+            SET payout_mode = 'platform',
+                institution_type = 'organization',
+                verification_status = 'approved',
+                service_agreement_accepted = TRUE,
+                gdpr_agreement_accepted = TRUE,
+                fee_agreement_accepted = TRUE,
+                agreements_accepted_at = COALESCE(agreements_accepted_at, created_at)
+            WHERE lower(name) LIKE '%infuture%'
+               OR lower(slug) LIKE '%infuture%'
+               OR lower(COALESCE(email, '')) LIKE '%infuture%'
+            """
+        )
+    )
+    db.execute(
+        text(
+            """
+            UPDATE institutions
+            SET payout_mode = 'partner'
+            WHERE payout_mode IS NULL OR payout_mode = ''
+            """
+        )
+    )
     db.execute(
         text(
             """

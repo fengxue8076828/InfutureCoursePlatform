@@ -1284,6 +1284,8 @@ def start_stripe_connect_onboarding(
         raise HTTPException(status_code=404, detail="Institution not found")
     if not institution_agreements_completed(institution):
         raise HTTPException(status_code=403, detail=PUBLISH_AGREEMENT_DETAIL)
+    if institution.payout_mode == "platform":
+        raise HTTPException(status_code=409, detail="Platform-owned institution uses the platform Stripe account")
 
     stripe = get_stripe_client()
     settings = get_settings()
@@ -1323,6 +1325,8 @@ def sync_stripe_connect_status(
     institution = get_admin_institution(current_user, db)
     if not institution:
         raise HTTPException(status_code=404, detail="Institution not found")
+    if institution.payout_mode == "platform":
+        return institution
     if not institution.stripe_account_id:
         return institution
     stripe = get_stripe_client()

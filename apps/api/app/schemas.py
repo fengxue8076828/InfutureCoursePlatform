@@ -31,6 +31,7 @@ class InstitutionOut(OrmModel):
     logo_url: str
     category: str
     institution_type: str = "individual"
+    payout_mode: str = "partner"
     service_agreement_accepted: bool = False
     gdpr_agreement_accepted: bool = False
     fee_agreement_accepted: bool = False

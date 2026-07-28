@@ -52,7 +52,10 @@ def load_course_for_subscription(db: Session, course_id: int) -> Course | None:
     return db.scalar(
         select(Course)
         .where(Course.id == course_id)
-        .options(selectinload(Course.chapters).selectinload(CourseChapter.items))
+        .options(
+            selectinload(Course.institution),
+            selectinload(Course.chapters).selectinload(CourseChapter.items),
+        )
     )
 
 
@@ -73,6 +76,11 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
     period_start = None
     period_end = None
     settings = get_settings()
+    platform_fee_percent = (
+        100.0
+        if course.institution and course.institution.payout_mode == "platform"
+        else settings.stripe_platform_fee_percent
+    )
 
     if stripe_subscription_id and settings.stripe_secret_key:
         try:
@@ -96,7 +104,7 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
         stripe_checkout_session_id=stripe_value(session, "id"),
         stripe_subscription_id=str(stripe_subscription_id) if stripe_subscription_id else None,
         stripe_customer_id=str(stripe_customer_id) if stripe_customer_id else None,
-        platform_fee_percent=settings.stripe_platform_fee_percent,
+        platform_fee_percent=platform_fee_percent,
     )
 
 
