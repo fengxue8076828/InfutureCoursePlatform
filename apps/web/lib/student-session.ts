@@ -84,9 +84,13 @@ export function getStudentSessionServerSnapshot(): StudentSessionUser | null {
 
 export function getStudentRequestHeaders(): HeadersInit {
   const user = getStudentSessionUser();
-  return user?.role === "student"
-    ? {
-        "x-demo-user-id": String(user.id)
-      }
-    : {};
+  const token = typeof window === "undefined" ? null : window.localStorage.getItem(STUDENT_AUTH_TOKEN_STORAGE_KEY);
+  const headers: Record<string, string> = {};
+  if (token) {
+    headers.Authorization = `Bearer ${token}`;
+  }
+  if (user?.role === "student") {
+    headers["x-demo-user-id"] = String(user.id);
+  }
+  return headers;
 }
