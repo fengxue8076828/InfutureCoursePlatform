@@ -81,6 +81,10 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
         if course.institution and course.institution.payout_mode == "platform"
         else settings.stripe_platform_fee_percent
     )
+    try:
+        amount_eur_monthly = round(float(metadata.get("course_price_eur_monthly") or course.price_eur_monthly or 39), 2)
+    except (TypeError, ValueError):
+        amount_eur_monthly = round(float(course.price_eur_monthly or 39), 2)
 
     if stripe_subscription_id and settings.stripe_secret_key:
         try:
@@ -97,7 +101,7 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
         db,
         user=user,
         course=course,
-        amount_eur_monthly=39,
+        amount_eur_monthly=amount_eur_monthly,
         payment_provider="stripe",
         current_period_start=period_start,
         current_period_end=period_end,

@@ -216,7 +216,7 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ s
                 href={`/courses/${course.slug}/register`}
                 className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-5 py-3 text-sm font-bold text-white shadow-soft transition hover:bg-coral/90"
               >
-                订阅课程 39 欧元/月
+                订阅课程 {course.price_eur_monthly} 欧元/月
                 <ArrowRight size={18} />
               </Link>
               <a
@@ -262,7 +262,7 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ s
           <div className="panel rounded-lg p-5">
             <p className="text-sm font-bold text-slate-500">订阅价格</p>
             <div className="mt-2 flex items-end gap-2">
-              <span className="text-4xl font-black text-ink">39</span>
+              <span className="text-4xl font-black text-ink">{course.price_eur_monthly}</span>
               <span className="pb-1 text-sm font-bold text-slate-500">欧元/月</span>
             </div>
             <div className="mt-5 grid gap-3 text-sm text-slate-600">

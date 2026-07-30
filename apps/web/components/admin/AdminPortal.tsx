@@ -136,6 +136,7 @@ type CourseDraft = {
   title: string;
   category: string;
   level: string;
+  priceEurMonthly: number;
   coverUrl: string;
   teacher: string;
   teacherId: number | null;
@@ -153,6 +154,7 @@ type AdminCourseSummary = {
   level: string;
   teacher: string;
   teacherId: number | null;
+  priceEurMonthly: number;
   image: string;
   status: string;
   statusValue: CoursePublicationStatus;
@@ -488,6 +490,7 @@ type ApiCourseDetail = {
   title: string;
   category: string;
   level: string;
+  price_eur_monthly?: number;
   status?: CoursePublicationStatus;
   description?: string;
   hero_image_url: string;
@@ -516,6 +519,7 @@ type ApiCourseCard = {
   title: string;
   category: string;
   level: string;
+  price_eur_monthly?: number;
   status?: CoursePublicationStatus;
   hero_image_url: string;
   institution?: { id: number };
@@ -1569,6 +1573,14 @@ function normalizeCourseStatus(status?: string, fallback: CoursePublicationStatu
   return fallback;
 }
 
+function normalizeCoursePrice(value: unknown, fallback = 39) {
+  const price = Number(value);
+  if (!Number.isFinite(price) || price <= 0) {
+    return fallback;
+  }
+  return Math.round(price * 100) / 100;
+}
+
 function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
   const statusValue = normalizeCourseStatus(course.status, "draft");
   return {
@@ -1576,6 +1588,7 @@ function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
     title: course.title,
     category: course.category,
     level: course.level,
+    priceEurMonthly: normalizeCoursePrice(course.price_eur_monthly),
     teacher: course.teacher?.name ?? "未设置老师",
     teacherId: course.teacher?.id ?? null,
     image: course.hero_image_url,
@@ -1738,6 +1751,7 @@ const emptyCourseSummary: AdminCourseSummary = {
   title: "",
   category: "",
   level: "",
+  priceEurMonthly: 39,
   teacher: "",
   teacherId: null,
   image: "",
@@ -1843,6 +1857,7 @@ function createDefaultCourseDraft(
     title: course.title,
     category: course.category,
     level: course.level,
+    priceEurMonthly: course.priceEurMonthly,
     coverUrl: course.image,
     teacher: teacher?.name ?? course.teacher,
     teacherId: teacher?.id ?? course.teacherId ?? null,
@@ -1861,6 +1876,7 @@ function createNewCourseSummary(
     title: "新建课程",
     category: "",
     level: "",
+    priceEurMonthly: 39,
     teacher: teacher?.name ?? "未设置老师",
     teacherId: teacher?.id ?? null,
     image: "",
@@ -1953,6 +1969,7 @@ function normalizeCourseDraft(
     title: draft.title || fallback.title,
     category: draft.category ?? fallback.category,
     level: draft.level ?? fallback.level,
+    priceEurMonthly: normalizeCoursePrice(draft.priceEurMonthly, fallback.priceEurMonthly),
     coverUrl: draft.coverUrl || fallback.coverUrl,
     teacher: teacher?.name ?? draft.teacher ?? fallback.teacher,
     teacherId: teacher?.id ?? draft.teacherId ?? fallback.teacherId,
@@ -2263,6 +2280,7 @@ function courseDraftFromApi(
     title: course.title,
     category: course.category,
     level: course.level,
+    priceEurMonthly: normalizeCoursePrice(course.price_eur_monthly),
     coverUrl: course.hero_image_url,
     teacher: course.teacher?.name,
     teacherId: course.teacher?.id,
@@ -2313,6 +2331,7 @@ function courseDraftToApiPayload(
     description: draft.description,
     hero_image_url: draft.coverUrl,
     intro_video_url: draft.introVideoUrl,
+    price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly),
     status,
     teacher_id:
       getTeacherById(draft.teacherId, teachers)?.id ??
@@ -2362,7 +2381,7 @@ function courseDraftToCreatePayload(
     intro_video_url: draft.introVideoUrl,
     institution_id: course.institutionId ?? adminInstitution.id,
     teacher_id: teacherId,
-    price_eur_monthly: 39
+    price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly, course.priceEurMonthly)
   };
 }
 
@@ -5411,7 +5430,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
     setCourseMessage("正在编辑新课程草稿。填写信息后点击保存课程。");
   }
 
-  function updateCourseDraft(field: keyof CourseDraft, value: string) {
+  function updateCourseDraft<K extends keyof CourseDraft>(field: K, value: CourseDraft[K]) {
     updateCourseDraftWith((current) => ({ ...current, [field]: value }));
   }
 
@@ -6001,7 +6020,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
           ) : null}
           {shouldShowCourseEditor ? (
             <>
-          <div className="mt-5 grid gap-4 xl:grid-cols-[minmax(0,1fr)_17rem_13rem_18rem]">
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_15rem_12rem_12rem_18rem]">
             <label className="grid gap-2 text-sm font-semibold text-slate-700">
               课程标题
               <input
@@ -6049,6 +6068,18 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
                   </option>
                 ))}
               </select>
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              订阅费（欧元/月）
+              <input
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                type="number"
+                min={1}
+                step={0.01}
+                value={courseDraft.priceEurMonthly}
+                onChange={(event) => updateCourseDraft("priceEurMonthly", normalizeCoursePrice(event.target.value))}
+                disabled={!canModifyCourseContent}
+              />
             </label>
             <label className="grid gap-2 text-sm font-semibold text-slate-700">
               授课老师

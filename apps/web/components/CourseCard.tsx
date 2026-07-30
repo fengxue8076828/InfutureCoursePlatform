@@ -27,7 +27,7 @@ export function CourseCard({ course, className = "w-[20rem]" }: { course: Course
         <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{course.subtitle}</p>
         <div className="mt-4 flex items-center justify-between border-t border-slate-100 pt-4 text-sm text-slate-600">
           <span className="flex items-center gap-1.5">
-            <Euro size={15} /> {course.price_eur_monthly}/月
+            <Euro size={15} /> {course.price_eur_monthly.toLocaleString("zh-CN", { maximumFractionDigits: 2 })}/月
           </span>
           <span className="flex items-center gap-1.5">
             <Users size={15} /> {course.students_count}

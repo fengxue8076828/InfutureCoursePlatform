@@ -38,12 +38,10 @@ const copy = {
   phone: "\u8054\u7cfb\u7535\u8bdd",
   note: "\u5f53\u524d\u4f7f\u7528 Stripe \u5b89\u5168\u8ba2\u9605\u6d41\u7a0b\uff1a\u786e\u8ba4\u540e\u8df3\u8f6c\u5230\u652f\u4ed8\u9875\uff0c\u652f\u4ed8\u6210\u529f\u540e\u7cfb\u7edf\u4f1a\u81ea\u52a8\u521b\u5efa\u8ba2\u9605\u548c\u8bfe\u7a0b\u62a5\u540d\u8bb0\u5f55\u3002",
   processing: "\u5904\u7406\u4e2d",
-  confirmSubscribe: "\u786e\u8ba4\u8ba2\u9605 39 \u6b27\u5143/\u6708",
   summary: "\u8ba2\u9605\u6458\u8981",
   course: "\u8bfe\u7a0b",
   cycle: "\u5468\u671f",
   monthly: "\u6309\u6708",
-  monthlyPrice: "39 \u6b27\u5143",
   enterLearn: "\u5df2\u8ba2\u9605\uff1f\u8fdb\u5165\u6211\u7684\u5b66\u4e60"
 };
 
@@ -54,6 +52,11 @@ type SubscribeResponse = {
   checkout_url?: string | null;
   checkout_session_id?: string | null;
 };
+
+function formatMonthlyPrice(price: number | undefined) {
+  const normalizedPrice = Number.isFinite(Number(price)) && Number(price) > 0 ? Number(price) : 39;
+  return `${normalizedPrice.toLocaleString("zh-CN", { maximumFractionDigits: 2 })} 欧元`;
+}
 
 function subscriptionErrorMessage(message: string) {
   if (message === "Failed to fetch") {
@@ -89,6 +92,8 @@ export function CourseSubscribeForm({ course }: { course: Course }) {
   const [phone, setPhone] = useState("");
   const [status, setStatus] = useState(copy.initialStatus);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const monthlyPrice = formatMonthlyPrice(course.price_eur_monthly);
+  const confirmSubscribeLabel = `确认订阅 ${monthlyPrice}/月`;
 
   async function submitSubscription(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -212,7 +217,7 @@ export function CourseSubscribeForm({ course }: { course: Course }) {
             className="focus-ring mt-2 inline-flex w-fit items-center gap-2 rounded-lg bg-coral px-5 py-3 text-sm font-bold text-white shadow-sm hover:bg-[#f25f54] disabled:cursor-not-allowed disabled:opacity-70"
           >
             {isSubmitting ? <Loader2 size={18} className="animate-spin" /> : <CreditCard size={18} />}
-            {isSubmitting ? copy.processing : copy.confirmSubscribe}
+            {isSubmitting ? copy.processing : confirmSubscribeLabel}
           </button>
         </form>
 
@@ -234,8 +239,8 @@ export function CourseSubscribeForm({ course }: { course: Course }) {
             <span className="font-semibold text-ink">{copy.monthly}</span>
           </div>
           <div className="flex justify-between border-t border-slate-100 pt-3">
-            <span>{copy.monthlyPrice}</span>
-            <span className="font-black text-ink">{copy.monthlyPrice}</span>
+            <span>{monthlyPrice}</span>
+            <span className="font-black text-ink">{monthlyPrice}</span>
           </div>
         </div>
         <Link href="/learn" className="mt-5 block text-sm font-bold text-coral">

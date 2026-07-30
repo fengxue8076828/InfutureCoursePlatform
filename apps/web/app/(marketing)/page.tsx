@@ -58,7 +58,7 @@ const pointRules = [
 
 const learningSteps = [
   ["选择课程", "按类别、机构、级别快速筛选适合自己的课程。"],
-  ["订阅学习", "39 欧元/月/课程，订阅后进入个人课堂。"],
+  ["订阅学习", "按课程设置月费，订阅后进入个人课堂。"],
   ["完成章节", "视频、讲义、练习和测验组成清晰学习节奏。"],
   ["获得积分", "越快完成、测验分数越高，积分和排名提升越明显。"]
 ];
@@ -327,7 +327,7 @@ export default async function HomePage() {
       <section className="bg-white py-14">
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex flex-wrap items-end justify-between gap-4">
-            <SectionTitle eyebrow="Courses" title="热门课程" subtitle="按月订阅，每门课程 39 欧元/月，发布后的课程会在前台展示。" />
+            <SectionTitle eyebrow="Courses" title="热门课程" subtitle="按月订阅，价格由课程设置，发布后的课程会在前台展示。" />
             <Link href="/courses" className="inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-coral hover:text-coral">
               查看全部 <ChevronRight size={17} />
             </Link>

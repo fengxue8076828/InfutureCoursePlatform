@@ -1187,7 +1187,7 @@ class CourseCreate(BaseModel):
     intro_video_url: str
     institution_id: int
     teacher_id: int
-    price_eur_monthly: float = 39
+    price_eur_monthly: float = Field(default=39, gt=0, le=9999)
 
 
 class LessonItemUpsert(BaseModel):
@@ -1218,7 +1218,7 @@ class CourseUpdate(BaseModel):
     hero_image_url: str | None = None
     intro_video_url: str | None = None
     teacher_id: int | None = None
-    price_eur_monthly: float | None = None
+    price_eur_monthly: float | None = Field(default=None, gt=0, le=9999)
     status: CourseStatus | None = None
     chapters: list[ChapterUpsert] | None = None
 

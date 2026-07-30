@@ -536,7 +536,7 @@ def seed_database(db: Session) -> None:
             Subscription(
                 user_id=student.id,
                 course_id=course.id,
-                amount_eur_monthly=39,
+                amount_eur_monthly=float(course.price_eur_monthly or 39),
                 status="active",
                 current_period_end=datetime.utcnow() + timedelta(days=30),
             )

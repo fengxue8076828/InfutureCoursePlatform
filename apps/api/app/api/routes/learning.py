@@ -1340,6 +1340,8 @@ def subscribe_course(
         raise HTTPException(status_code=409, detail="Institution Stripe onboarding is not complete")
 
     frontend_base_url = settings.frontend_base_url.rstrip("/")
+    course_price_eur = round(float(course.price_eur_monthly or 39), 2)
+    course_price_cents = max(100, int(round(course_price_eur * 100)))
     try:
         import stripe
 
@@ -1351,6 +1353,7 @@ def subscribe_course(
                 "course_slug": course.slug,
                 "institution_id": str(institution.id),
                 "payout_mode": institution.payout_mode,
+                "course_price_eur_monthly": f"{course_price_eur:.2f}",
             },
         }
         platform_fee_percent = 100.0 if platform_owned else settings.stripe_platform_fee_percent
@@ -1366,7 +1369,7 @@ def subscribe_course(
                 {
                     "price_data": {
                         "currency": "eur",
-                        "unit_amount": 3900,
+                        "unit_amount": course_price_cents,
                         "recurring": {"interval": "month"},
                         "product_data": {
                             "name": course.title,
@@ -1382,6 +1385,7 @@ def subscribe_course(
                 "course_slug": course.slug,
                 "institution_id": str(institution.id),
                 "payout_mode": institution.payout_mode,
+                "course_price_eur_monthly": f"{course_price_eur:.2f}",
             },
             subscription_data=subscription_data,
             success_url=f"{frontend_base_url}/learn?payment=success&session_id={{CHECKOUT_SESSION_ID}}",
@@ -1399,7 +1403,7 @@ def subscribe_course(
         pending_subscription = Subscription(
             user_id=user.id,
             course_id=course.id,
-            amount_eur_monthly=39,
+            amount_eur_monthly=course_price_eur,
             status="pending",
             current_period_start=datetime.utcnow(),
             current_period_end=None,

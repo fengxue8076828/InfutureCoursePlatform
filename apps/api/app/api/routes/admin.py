@@ -1297,9 +1297,8 @@ def overview(
 ) -> AdminOverviewOut:
     ensure_admin(current_user)
     total_courses = db.scalar(select(func.count(Course.id))) or 0
-    active_subscriptions = (
-        db.scalar(select(func.count(Subscription.id)).where(Subscription.status == "active")) or 0
-    )
+    active_subscription_rows = list(db.scalars(select(Subscription).where(Subscription.status == "active")))
+    active_subscriptions = len(active_subscription_rows)
     pending_manual = (
         db.scalar(
             select(func.count(Submission.id)).where(
@@ -1311,7 +1310,7 @@ def overview(
     return AdminOverviewOut(
         total_courses=total_courses,
         active_subscriptions=active_subscriptions,
-        monthly_recurring_revenue_eur=active_subscriptions * 39,
+        monthly_recurring_revenue_eur=round(sum(float(subscription.amount_eur_monthly or 0) for subscription in active_subscription_rows), 2),
         pending_manual_grading=pending_manual,
         subscription_growth=[
             {"month": "2026-02", "subscriptions": 42},

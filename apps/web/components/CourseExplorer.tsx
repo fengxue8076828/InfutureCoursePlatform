@@ -289,7 +289,7 @@ export function CourseExplorer({
             <p className="mt-1 text-sm text-slate-600">
               {"\u5171 "}
               {filteredCourses.length}
-              {" \u95e8\u8bfe\u7a0b\uff0c\u8ba2\u9605\u4ef7\u7edf\u4e00 39 \u6b27\u5143/\u6708\u3002"}
+              {" \u95e8\u8bfe\u7a0b\uff0c\u53ef\u6309\u8bfe\u7a0b\u8bbe\u7f6e\u8ba2\u9605\u4ef7\u683c\u3002"}
             </p>
           </div>
         </div>
