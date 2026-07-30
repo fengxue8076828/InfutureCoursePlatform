@@ -9,6 +9,7 @@ from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import get_current_user, get_optional_current_user
+from app.api.routes.payments import checkout_metadata, retrieve_checkout_session, sync_checkout_session_if_complete
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
@@ -204,6 +205,30 @@ def resolve_uploaded_handout_path(url: str) -> Path:
     return target_path
 
 
+def sync_student_pending_checkouts(current_user: User, db: Session) -> None:
+    pending_subscriptions = list(
+        db.scalars(
+            select(Subscription).where(
+                Subscription.user_id == current_user.id,
+                Subscription.status == "pending",
+                Subscription.stripe_checkout_session_id.is_not(None),
+            )
+        )
+    )
+    synced_any = False
+    for subscription in pending_subscriptions:
+        session_id = subscription.stripe_checkout_session_id
+        if not session_id:
+            continue
+        try:
+            sync_checkout_session_if_complete(session_id, db)
+            synced_any = True
+        except Exception as exc:
+            print(f"[stripe-student-subscription-sync-error] subscription={subscription.id}: {exc}")
+    if synced_any:
+        db.commit()
+
+
 @router.get("/handouts/preview")
 def preview_handout(
     url: str,
@@ -240,6 +265,7 @@ def preview_handout(
 def dashboard(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> DashboardOut:
+    sync_student_pending_checkouts(current_user, db)
     enrollments = list(
         db.scalars(
             select(Enrollment)
@@ -269,6 +295,7 @@ def dashboard(
 def my_courses(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[Enrollment]:
+    sync_student_pending_checkouts(current_user, db)
     enrollments = list(
         db.scalars(
             select(Enrollment)
@@ -1423,6 +1450,65 @@ def subscribe_course(
         subscription_status="checkout_required",
         checkout_url=str(stripe_value(checkout_session, "url", "") or ""),
         checkout_session_id=checkout_session_id,
+    )
+
+
+@router.post("/checkout-sessions/{session_id}/confirm", response_model=SubscribeCourseOut)
+def confirm_checkout_session(
+    session_id: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscribeCourseOut:
+    if current_user.role != UserRole.student:
+        raise HTTPException(status_code=403, detail="Please subscribe with a student account")
+
+    pending_subscription = db.scalar(
+        select(Subscription).where(Subscription.stripe_checkout_session_id == session_id)
+    )
+    if pending_subscription and pending_subscription.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Checkout session belongs to another student")
+
+    try:
+        checkout_session = retrieve_checkout_session(session_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Stripe checkout lookup failed: {exc}") from exc
+
+    metadata = checkout_metadata(checkout_session)
+    metadata_user_id = metadata.get("user_id")
+    if metadata_user_id:
+        try:
+            if int(metadata_user_id) != current_user.id:
+                raise HTTPException(status_code=403, detail="Checkout session belongs to another student")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail="Invalid checkout session metadata") from exc
+    elif pending_subscription is None:
+        raise HTTPException(status_code=404, detail="Checkout session not found")
+
+    subscription = sync_checkout_session_if_complete(checkout_session, db) or pending_subscription
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Checkout session not found")
+    if subscription.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Checkout session belongs to another student")
+
+    enrollment = db.scalar(
+        select(Enrollment)
+        .where(Enrollment.user_id == current_user.id, Enrollment.course_id == subscription.course_id)
+        .options(
+            joinedload(Enrollment.course).joinedload(Course.institution),
+            joinedload(Enrollment.course).joinedload(Course.teacher),
+            joinedload(Enrollment.course).selectinload(Course.chapters).selectinload(CourseChapter.items),
+        )
+    )
+    enrollment_out = EnrollmentOut.model_validate(enrollment) if enrollment else None
+    subscription_status = subscription.status
+    db.commit()
+    return SubscribeCourseOut(
+        auth=AuthOut(access_token=f"demo-token-{current_user.id}", user=current_user),
+        enrollment=enrollment_out,
+        subscription_status=subscription_status,
+        checkout_session_id=session_id,
     )
 
 

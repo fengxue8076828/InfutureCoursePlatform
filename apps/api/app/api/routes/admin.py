@@ -12,6 +12,7 @@ from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.orm import Session, joinedload, selectinload
 
 from app.api.deps import get_current_user
+from app.api.routes.payments import sync_checkout_session_if_complete
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
@@ -1389,6 +1390,25 @@ def admin_institution_finance(
                 db.refresh(institution)
         except Exception as exc:
             print(f"[stripe-finance-sync-error] institution={institution.id}: {exc}")
+
+        pending_subscriptions = list(
+            db.scalars(
+                select(Subscription)
+                .join(Course, Subscription.course_id == Course.id)
+                .where(
+                    Course.institution_id == institution.id,
+                    Subscription.status == "pending",
+                    Subscription.stripe_checkout_session_id.is_not(None),
+                )
+            )
+        )
+        for subscription in pending_subscriptions:
+            try:
+                sync_checkout_session_if_complete(subscription.stripe_checkout_session_id or "", db)
+            except Exception as exc:
+                print(f"[stripe-subscription-sync-error] subscription={subscription.id}: {exc}")
+        if pending_subscriptions:
+            db.commit()
 
     rows = db.execute(
         select(Subscription, Course, User)

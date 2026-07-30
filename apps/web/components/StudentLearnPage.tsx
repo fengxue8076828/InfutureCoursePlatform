@@ -11,7 +11,7 @@ import { Header } from "@/components/Header";
 import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
 import { StudentFollowNetworkPanel } from "@/components/StudentFollowNetworkPanel";
 import { StudentProfileActivityTabs } from "@/components/StudentProfileActivityTabs";
-import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, subscribeToStudentSession, type StudentSessionUser } from "@/lib/student-session";
+import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, persistStudentSession, subscribeToStudentSession, type StudentAuthResponse, type StudentSessionUser } from "@/lib/student-session";
 import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
 const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";
@@ -212,6 +212,7 @@ export function StudentLearnPage() {
   const [notesStatus, setNotesStatus] = useState(ui.notesSubtitle);
   const [homeStatus, setHomeStatus] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const confirmedCheckoutSessionRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!studentSession) {
@@ -226,6 +227,37 @@ export function StudentLearnPage() {
       setHomeStatus("");
 
       const requestHeaders = getStudentRequestHeaders();
+
+      async function confirmCheckoutReturn() {
+        if (typeof window === "undefined") return;
+        const params = new URLSearchParams(window.location.search);
+        if (params.get("payment") !== "success") return;
+        const sessionId = params.get("session_id");
+        if (!sessionId || confirmedCheckoutSessionRef.current === sessionId) return;
+
+        confirmedCheckoutSessionRef.current = sessionId;
+        setStatus("支付成功，正在同步课程订阅...");
+        try {
+          const response = await fetch(`${API_BASE_URL}/learn/checkout-sessions/${encodeURIComponent(sessionId)}/confirm`, {
+            method: "POST",
+            headers: requestHeaders,
+            cache: "no-store"
+          });
+          if (!response.ok) {
+            if (clearInvalidStudentSession(response)) return;
+            const message = await readErrorMessage(response, "支付成功，但订阅同步失败。请稍后刷新页面。");
+            setStatus(message);
+            return;
+          }
+          const payload = (await response.json()) as { auth?: StudentAuthResponse; subscription_status?: string };
+          if (payload.auth) persistStudentSession(payload.auth);
+          const cleanUrl = `${window.location.pathname}${window.location.hash}`;
+          window.history.replaceState(null, "", cleanUrl);
+          setStatus(payload.subscription_status === "active" ? "订阅已生效，正在读取你的课程..." : "正在确认订阅状态...");
+        } catch {
+          setStatus("支付成功，但暂时无法同步订阅。请稍后刷新页面。");
+        }
+      }
 
       function clearInvalidStudentSession(response: Response) {
         if (response.status === 401 || response.status === 403 || response.status === 404) {
@@ -302,6 +334,7 @@ export function StudentLearnPage() {
       }
 
       try {
+        await confirmCheckoutReturn();
         await loadCourses();
       } finally {
         if (!ignore) setIsLoading(false);

@@ -48,6 +48,11 @@ def checkout_metadata(session: Any) -> dict[str, str]:
     return {str(key): str(value) for key, value in metadata.items()}
 
 
+def retrieve_checkout_session(session_id: str) -> Any:
+    stripe = get_stripe_client()
+    return stripe.checkout.Session.retrieve(session_id)
+
+
 def load_course_for_subscription(db: Session, course_id: int) -> Course | None:
     return db.scalar(
         select(Course)
@@ -110,6 +115,24 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
         stripe_customer_id=str(stripe_customer_id) if stripe_customer_id else None,
         platform_fee_percent=platform_fee_percent,
     )
+
+
+def sync_checkout_session_if_complete(session_or_id: Any, db: Session) -> Subscription | None:
+    session = retrieve_checkout_session(session_or_id) if isinstance(session_or_id, str) else session_or_id
+    session_id = str(stripe_value(session, "id", "") or "")
+    if not session_id:
+        return None
+
+    subscription = db.scalar(
+        select(Subscription).where(Subscription.stripe_checkout_session_id == session_id)
+    )
+    checkout_status = str(stripe_value(session, "status", "") or "")
+    payment_status = str(stripe_value(session, "payment_status", "") or "")
+    if checkout_status != "complete" and payment_status not in {"paid", "no_payment_required"}:
+        return subscription
+
+    handle_checkout_session_completed(session, db)
+    return db.scalar(select(Subscription).where(Subscription.stripe_checkout_session_id == session_id))
 
 
 def handle_subscription_changed(subscription_obj: Any, db: Session) -> None:
