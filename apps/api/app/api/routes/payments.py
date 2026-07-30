@@ -44,7 +44,14 @@ def get_stripe_client():
 def checkout_metadata(session: Any) -> dict[str, str]:
     metadata = stripe_value(session, "metadata") or {}
     if not isinstance(metadata, dict):
-        metadata = dict(metadata)
+        if hasattr(metadata, "to_dict_recursive"):
+            metadata = metadata.to_dict_recursive()
+        elif hasattr(metadata, "to_dict"):
+            metadata = metadata.to_dict()
+        elif hasattr(metadata, "items"):
+            metadata = dict(metadata.items())
+        else:
+            metadata = {}
     return {str(key): str(value) for key, value in metadata.items()}
 
 
