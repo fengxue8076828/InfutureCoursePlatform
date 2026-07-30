@@ -108,6 +108,7 @@ const ADMIN_PROFILE_STORAGE_KEY = "infuture-admin-profile";
 const COURSE_CATEGORY_CHANGE_EVENT = "infuture-course-categories-change";
 const QUESTION_BANK_CHANGE_EVENT = "infuture-question-bank-change";
 const COURSE_CONTENT_REFRESH_EVENT = "infuture-course-content-change";
+const ADMIN_INSTITUTION_TAB_EVENT = "infuture-admin-institution-tab";
 const COURSE_CONTENT_REFRESH_STORAGE_KEY = "infuture-course-content-version";
 const COURSE_CONTENT_BROADCAST_CHANNEL = "infuture-course-content";
 const DEFAULT_TEACHER_AVATAR_URL = "/avatars/default-teacher.svg";
@@ -640,6 +641,7 @@ type InstitutionDraft = {
   logoUrl: string;
   category: string;
   institutionType: "individual" | "organization";
+  payoutMode: "partner" | "platform";
   region: string;
   website: string;
   phone: string;
@@ -664,6 +666,7 @@ type ApiInstitution = {
   logo_url: string;
   category: string;
   institution_type?: "individual" | "organization";
+  payout_mode?: "partner" | "platform";
   region: string;
   website: string | null;
   phone: string | null;
@@ -685,6 +688,61 @@ type StripeConnectOnboardingResponse = {
   url: string;
   institution: ApiInstitution;
 };
+type StripeDashboardLinkResponse = StripeConnectOnboardingResponse;
+
+type StripeBalanceAmount = {
+  currency: string;
+  amount: number;
+};
+
+type StripeRequirements = {
+  currently_due: string[];
+  eventually_due: string[];
+  past_due: string[];
+  pending_verification: string[];
+  disabled_reason: string | null;
+};
+
+type AdminSubscriptionPayment = {
+  id: number;
+  course_title: string;
+  student_name: string;
+  student_email: string;
+  status: string;
+  amount_eur_monthly: number;
+  platform_fee_percent: number;
+  net_amount_eur_monthly: number;
+  stripe_subscription_id: string | null;
+  stripe_checkout_session_id: string | null;
+  current_period_start: string;
+  current_period_end: string | null;
+  created_at: string;
+};
+
+
+type AdminNotice = {
+  id: string;
+  tone: "info" | "warning" | "danger";
+  title: string;
+  body: string;
+};
+type InstitutionFinance = {
+  institution: ApiInstitution;
+  account_mode: "partner" | "platform" | string;
+  stripe_connected: boolean;
+  stripe_account_id: string | null;
+  charges_enabled: boolean;
+  payouts_enabled: boolean;
+  details_submitted: boolean;
+  verification_status: string;
+  requirements: StripeRequirements;
+  available_balance: StripeBalanceAmount[];
+  pending_balance: StripeBalanceAmount[];
+  total_monthly_revenue_eur: number;
+  platform_fee_monthly_eur: number;
+  net_monthly_revenue_eur: number;
+  subscription_payments: AdminSubscriptionPayment[];
+};
 
 const defaultAdminProfile: AdminProfile = {
   institutionId: adminInstitution.id,
@@ -704,6 +762,7 @@ const defaultInstitutionDraft: InstitutionDraft = {
   logoUrl: adminInstitution.logo_url,
   category: adminInstitution.category,
   institutionType: "individual",
+  payoutMode: "partner",
   region: adminInstitution.region,
   website: adminInstitution.website ?? "",
   phone: adminInstitution.phone ?? "",
@@ -788,6 +847,7 @@ function institutionFromApi(institution: ApiInstitution): InstitutionDraft {
     logoUrl: institution.logo_url || adminInstitution.logo_url,
     category: institution.category,
     institutionType: institution.institution_type === "organization" ? "organization" : "individual",
+    payoutMode: institution.payout_mode === "platform" ? "platform" : "partner",
     region: institution.region,
     website: institution.website ?? "",
     phone: institution.phone ?? "",
@@ -1082,6 +1142,118 @@ async function startStripeConnectOnboarding(): Promise<{ draft?: InstitutionDraf
   }
 }
 
+
+async function fetchInstitutionFinance(): Promise<{ finance?: InstitutionFinance; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution/finance`, {
+      headers: getAdminRequestHeaders(),
+      cache: "no-store"
+    });
+    if (!response.ok) {
+      return { error: await readApiErrorMessage(response, "财务数据读取失败。") };
+    }
+    return { finance: (await response.json()) as InstitutionFinance };
+  } catch {
+    return { error: "无法连接 FastAPI 服务，请确认后端正在运行。" };
+  }
+}
+
+
+function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): AdminNotice[] {
+  const notices: AdminNotice[] = [];
+  const requirements = finance.requirements;
+  const requiredNow = requirements.currently_due.length + requirements.past_due.length;
+  const requiredLater = requirements.eventually_due.length;
+
+  if (!finance.stripe_connected && finance.account_mode !== "platform") {
+    notices.push({
+      id: "stripe-not-connected",
+      tone: "info",
+      title: "Stripe 收款账户未连接",
+      body: "课程可以正常发布，但学生付款和机构分账需要先连接 Stripe 收款账户。"
+    });
+  }
+
+  if (requirements.disabled_reason) {
+    notices.push({
+      id: "stripe-disabled",
+      tone: "danger",
+      title: "Stripe 账户存在限制",
+      body: `Stripe 返回限制原因：${requirements.disabled_reason}。请进入财务中心继续完成验证。`
+    });
+  }
+
+  if (requirements.past_due.length) {
+    notices.push({
+      id: "stripe-past-due",
+      tone: "danger",
+      title: "Stripe 资料已逾期",
+      body: `有 ${requirements.past_due.length} 项资料已逾期，可能影响收款或提现。请尽快在 Stripe 后台补充。`
+    });
+  }
+
+  if (requirements.currently_due.length) {
+    notices.push({
+      id: "stripe-currently-due",
+      tone: "warning",
+      title: "Stripe 要求补充资料",
+      body: `当前有 ${requirements.currently_due.length} 项资料需要补充。到期前未完成可能影响提现或收款能力。`
+    });
+  }
+
+  if (finance.stripe_connected && !finance.payouts_enabled) {
+    notices.push({
+      id: "stripe-payouts-disabled",
+      tone: "warning",
+      title: "Stripe 提现暂未开启",
+      body: "Stripe 当前没有开启 payouts_enabled。课程仍可发布，但提现可能需要先完成 Stripe 要求的资料补充。"
+    });
+  }
+
+  if (finance.stripe_connected && !finance.charges_enabled) {
+    notices.push({
+      id: "stripe-charges-disabled",
+      tone: "warning",
+      title: "Stripe 收款暂未开启",
+      body: "Stripe 当前没有开启 charges_enabled。请在财务中心进入 Stripe 后台查看需要补充的信息。"
+    });
+  }
+
+  if (requirements.pending_verification.length) {
+    notices.push({
+      id: "stripe-pending-verification",
+      tone: "info",
+      title: "Stripe 正在审核资料",
+      body: `有 ${requirements.pending_verification.length} 项资料正在 Stripe 审核中。`
+    });
+  }
+
+  if (requiredLater && !requiredNow) {
+    notices.push({
+      id: "stripe-eventually-due",
+      tone: "info",
+      title: "Stripe 后续可能需要补充资料",
+      body: `Stripe 提示后续可能需要补充 ${requiredLater} 项资料，建议定期查看财务中心。`
+    });
+  }
+
+  return notices.slice(0, 8);
+}
+async function createStripeDashboardLink(): Promise<{ draft?: InstitutionDraft; url?: string; error?: string }> {
+  try {
+    const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/login-link`, {
+      method: "POST",
+      headers: getAdminRequestHeaders()
+    });
+    if (!response.ok) {
+      return { error: await readApiErrorMessage(response, "Stripe 收款账户管理入口创建失败。") };
+    }
+    const payload = (await response.json()) as StripeDashboardLinkResponse;
+    return { draft: institutionFromApi(payload.institution), url: payload.url };
+  } catch {
+    return { error: "Stripe 收款账户入口创建失败，请确认 FastAPI 服务正在运行。" };
+  }
+}
 async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; error?: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/sync`, {
@@ -2591,7 +2763,15 @@ export function AdminPortal() {
         ) : null}
 
         <main className="min-w-0">
-          <AdminPageHeader activeModule={effectiveActiveModule} />
+          <AdminPageHeader
+            activeModule={effectiveActiveModule}
+            onOpenInstitutionFinance={() => {
+              setActiveModule("institution");
+              window.setTimeout(() => {
+                window.dispatchEvent(new CustomEvent(ADMIN_INSTITUTION_TAB_EVENT, { detail: "finance" }));
+              }, 0);
+            }}
+          />
           <div className={effectiveActiveModule === "dashboard" ? "block" : "hidden"}>
             <DashboardPanel />
           </div>
@@ -2731,22 +2911,122 @@ function AdminSidebar({
   );
 }
 
-function AdminPageHeader({ activeModule }: { activeModule: ModuleKey }) {
+function AdminPageHeader({
+  activeModule,
+  onOpenInstitutionFinance
+}: {
+  activeModule: ModuleKey;
+  onOpenInstitutionFinance: () => void;
+}) {
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [notifications, setNotifications] = useState<AdminNotice[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [notificationsStatus, setNotificationsStatus] = useState("正在读取财务通知...");
+
+  async function loadNotifications() {
+    setNotificationsLoading(true);
+    const result = await fetchInstitutionFinance();
+    if (result.finance) {
+      const nextNotifications = buildAdminStripeFinanceNotifications(result.finance);
+      setNotifications(nextNotifications);
+      setNotificationsStatus(nextNotifications.length ? "Stripe 财务待办" : "当前没有 Stripe 财务待办。");
+    } else {
+      setNotifications([
+        {
+          id: "stripe-finance-unavailable",
+          tone: "warning",
+          title: "财务通知读取失败",
+          body: result.error ?? "无法读取 Stripe 财务状态。"
+        }
+      ]);
+      setNotificationsStatus("财务通知读取失败。");
+    }
+    setNotificationsLoading(false);
+  }
+
+  useEffect(() => {
+    void loadNotifications();
+  }, []);
+
+  function openFinanceCenter() {
+    setNotificationsOpen(false);
+    onOpenInstitutionFinance();
+  }
+
   return (
     <div className="mb-5 flex flex-wrap items-center justify-between gap-4">
       <div>
         <p className="font-bold text-coral">机构后台管理系统</p>
         <h1 className="mt-2 text-3xl font-black text-ink">{moduleLabels[activeModule]}</h1>
       </div>
-      <div className="flex items-center gap-2">
-        <button className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 font-bold">
+      <div className="relative flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => {
+            const nextOpen = !notificationsOpen;
+            setNotificationsOpen(nextOpen);
+            if (nextOpen) {
+              void loadNotifications();
+            }
+          }}
+          className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 font-bold"
+        >
           <Bell size={18} /> 通知
+          {notifications.length ? (
+            <span className="grid h-5 min-w-5 place-items-center rounded-full bg-coral px-1 text-xs text-white">{notifications.length}</span>
+          ) : null}
         </button>
+        {notificationsOpen ? (
+          <div className="absolute right-0 top-full z-30 mt-2 w-[24rem] max-w-[calc(100vw-2rem)] rounded-lg border border-slate-200 bg-white p-4 shadow-soft">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <p className="font-bold text-ink">机构通知</p>
+                <p className="mt-1 text-xs text-slate-500">{notificationsStatus}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadNotifications()}
+                disabled={notificationsLoading}
+                className="focus-ring inline-flex items-center gap-1 rounded-md border border-slate-200 px-2 py-1 text-xs font-bold text-slate-600 disabled:opacity-60"
+              >
+                <RefreshCw size={13} className={notificationsLoading ? "animate-spin" : ""} /> 刷新
+              </button>
+            </div>
+            <div className="mt-3 grid max-h-80 gap-2 overflow-auto pr-1">
+              {notifications.length ? (
+                notifications.map((notice) => {
+                  const toneClass =
+                    notice.tone === "danger"
+                      ? "border-red-200 bg-red-50 text-red-700"
+                      : notice.tone === "warning"
+                        ? "border-amber-200 bg-amber-50 text-amber-700"
+                        : "border-sky-100 bg-sky-50 text-sky-700";
+                  return (
+                    <div key={notice.id} className={`rounded-lg border p-3 ${toneClass}`}>
+                      <p className="text-sm font-bold">{notice.title}</p>
+                      <p className="mt-1 text-xs leading-5 opacity-90">{notice.body}</p>
+                    </div>
+                  );
+                })
+              ) : (
+                <div className="rounded-lg border border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">
+                  当前没有需要处理的 Stripe 财务提醒。
+                </div>
+              )}
+            </div>
+            <button
+              type="button"
+              onClick={openFinanceCenter}
+              className="focus-ring mt-3 w-full rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white"
+            >
+              前往财务中心
+            </button>
+          </div>
+        ) : null}
       </div>
     </div>
   );
 }
-
 function ProfileEditorModal({ onClose }: { onClose: () => void }) {
   const profile = useAdminProfile();
   const [draft, setDraft] = useState<AdminProfile>(profile);
@@ -3140,25 +3420,30 @@ function DashboardPanel() {
 
 function InstitutionPanel() {
   const [draft, setDraft] = useState<InstitutionDraft>(defaultInstitutionDraft);
+  const [activeTab, setActiveTab] = useState<"basic" | "finance">("basic");
+  const [finance, setFinance] = useState<InstitutionFinance | null>(null);
   const [status, setStatus] = useState("修改机构信息后点击更新。");
+  const [financeStatus, setFinanceStatus] = useState("正在加载 Stripe 财务信息...");
   const [saving, setSaving] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
   const [logoUploadProgress, setLogoUploadProgress] = useState<number | null>(null);
   const [stripeBusy, setStripeBusy] = useState(false);
+  const [financeLoading, setFinanceLoading] = useState(false);
   const categoryLabel =
     institutionCategoryOptions.find((option) => option.value === draft.category)?.label ?? draft.category;
   const agreementReady = draft.serviceAgreementAccepted && draft.gdprAgreementAccepted && draft.feeAgreementAccepted;
-  const verificationReady =
-    draft.institutionType === "individual" ||
-    (draft.verificationStatus === "approved" && draft.stripeChargesEnabled && draft.stripePayoutsEnabled);
-  const institutionTypeLabel = draft.institutionType === "organization" ? "\u7ec4\u7ec7\u673a\u6784" : "\u4e2a\u4eba\u673a\u6784";
-  const verificationLabel = draft.institutionType === "individual"
-    ? "\u4e2a\u4eba\u673a\u6784\u65e0\u9700\u4f01\u4e1a\u8ba4\u8bc1"
-    : verificationReady
-      ? "\u8ba4\u8bc1\u5df2\u5b8c\u6210"
-      : draft.stripeDetailsSubmitted
-        ? "Stripe \u5ba1\u6838\u4e2d"
-        : "\u7b49\u5f85 Stripe \u8ba4\u8bc1";
+  const isPlatformOwned = draft.payoutMode === "platform";
+  const stripeReady = Boolean(draft.stripeChargesEnabled && draft.stripeDetailsSubmitted);
+  const institutionTypeLabel = draft.institutionType === "organization" ? "组织机构" : "个人机构";
+  const accountModeLabel = isPlatformOwned ? "平台自营账户" : "合作机构账户";
+  const financeSnapshot = finance;
+  const stripeRequirements = financeSnapshot?.requirements;
+  const missingRequirements = [
+    ...(stripeRequirements?.currently_due ?? []),
+    ...(stripeRequirements?.past_due ?? []),
+    ...(stripeRequirements?.eventually_due ?? []),
+    ...(stripeRequirements?.pending_verification ?? [])
+  ].filter((item, index, items) => item && items.indexOf(item) === index);
 
   useEffect(() => {
     let isMounted = true;
@@ -3175,8 +3460,85 @@ function InstitutionPanel() {
     };
   }, []);
 
+  useEffect(() => {
+    void loadFinance();
+  }, []);
+
+  useEffect(() => {
+    function handleInstitutionTab(event: Event) {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail === "finance") {
+        setActiveTab("finance");
+        void loadFinance();
+      }
+      if (detail === "basic") {
+        setActiveTab("basic");
+      }
+    }
+
+    window.addEventListener(ADMIN_INSTITUTION_TAB_EVENT, handleInstitutionTab);
+    return () => window.removeEventListener(ADMIN_INSTITUTION_TAB_EVENT, handleInstitutionTab);
+  }, []);
+
   function updateDraft(field: keyof InstitutionDraft, value: string) {
     setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateDraftBoolean(field: keyof InstitutionDraft, value: boolean) {
+    setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function syncFinanceInstitution(nextFinance: InstitutionFinance) {
+    const nextDraft = institutionFromApi(nextFinance.institution);
+    setDraft(nextDraft);
+    persistAdminBrandFromInstitution(nextDraft);
+  }
+
+  async function loadFinance() {
+    setFinanceLoading(true);
+    const result = await fetchInstitutionFinance();
+    if (result.finance) {
+      setFinance(result.finance);
+      syncFinanceInstitution(result.finance);
+      setFinanceStatus("已从 Stripe 和数据库加载财务信息。");
+    } else {
+      setFinance(null);
+      setFinanceStatus(result.error ?? "财务数据读取失败。");
+    }
+    setFinanceLoading(false);
+  }
+
+  function formatMoney(amount: number) {
+    return new Intl.NumberFormat("zh-CN", {
+      style: "currency",
+      currency: "EUR",
+      minimumFractionDigits: 2
+    }).format(amount);
+  }
+
+  function formatBalance(items: StripeBalanceAmount[]) {
+    if (!items.length) {
+      return "€0.00";
+    }
+    return items
+      .map((item) =>
+        new Intl.NumberFormat("zh-CN", {
+          style: "currency",
+          currency: item.currency || "EUR",
+          minimumFractionDigits: 2
+        }).format(item.amount)
+      )
+      .join(" / ");
+  }
+
+  function formatPeriod(payment: AdminSubscriptionPayment) {
+    const start = payment.current_period_start ? new Date(payment.current_period_start) : null;
+    const end = payment.current_period_end ? new Date(payment.current_period_end) : null;
+    const formatter = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit" });
+    if (!start || Number.isNaN(start.getTime())) {
+      return "周期未记录";
+    }
+    return end && !Number.isNaN(end.getTime()) ? `${formatter.format(start)} - ${formatter.format(end)}` : formatter.format(start);
   }
 
   async function handleLogoUpload(file: File | undefined) {
@@ -3211,6 +3573,7 @@ function InstitutionPanel() {
       setDraft(savedInstitution);
       persistAdminBrandFromInstitution(savedInstitution);
       setStatus("机构信息已更新。");
+      void loadFinance();
     } else {
       setStatus("机构信息更新失败，请确认 FastAPI 服务正在运行。");
     }
@@ -3219,222 +3582,421 @@ function InstitutionPanel() {
 
   async function handleStripeOnboarding() {
     setStripeBusy(true);
-    setStatus("\u6b63\u5728\u521b\u5efa Stripe \u8ba4\u8bc1\u5165\u53e3...");
+    setFinanceStatus("正在创建 Stripe 验证入口...");
     const result = await startStripeConnectOnboarding();
     if (result.draft) {
       setDraft(result.draft);
     }
     if (result.url) {
-      setStatus("\u6b63\u5728\u6253\u5f00 Stripe \u8ba4\u8bc1\u9875\u9762...");
+      setFinanceStatus("正在打开 Stripe 验证页面...");
       window.location.assign(result.url);
     } else {
-      setStatus(result.error ?? "Stripe \u8ba4\u8bc1\u5165\u53e3\u521b\u5efa\u5931\u8d25\u3002");
+      setFinanceStatus(result.error ?? "Stripe 验证入口创建失败。");
+    }
+    setStripeBusy(false);
+  }
+
+  async function handleStripeDashboard() {
+    setStripeBusy(true);
+    setFinanceStatus("正在创建 Stripe 收款账户管理入口...");
+    const result = await createStripeDashboardLink();
+    if (result.draft) {
+      setDraft(result.draft);
+    }
+    if (result.url) {
+      setFinanceStatus("正在打开 Stripe 收款账户管理页...");
+      window.location.assign(result.url);
+    } else {
+      setFinanceStatus(result.error ?? "Stripe 收款账户管理入口创建失败。");
     }
     setStripeBusy(false);
   }
 
   async function handleStripeSync() {
     setStripeBusy(true);
-    setStatus("\u6b63\u5728\u521b\u5efa Stripe \u8ba4\u8bc1\u5165\u53e3...");
+    setFinanceStatus("正在同步 Stripe 状态...");
     const result = await syncStripeConnectStatus();
     if (result.draft) {
       setDraft(result.draft);
-      setStatus("Stripe \u8ba4\u8bc1\u72b6\u6001\u5df2\u5237\u65b0\u3002");
+      setFinanceStatus("Stripe 状态已同步。");
+      await loadFinance();
     } else {
-      setStatus(result.error ?? "Stripe \u8ba4\u8bc1\u72b6\u6001\u5237\u65b0\u5931\u8d25\u3002");
+      setFinanceStatus(result.error ?? "Stripe 状态同步失败。");
     }
     setStripeBusy(false);
   }
 
+  function statusPill(ready: boolean, readyText: string, pendingText: string) {
+    return (
+      <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${ready ? "bg-mint/10 text-mint" : "bg-amber-100 text-amber-700"}`}>
+        {ready ? readyText : pendingText}
+      </span>
+    );
+  }
+
   return (
     <section className="panel rounded-lg p-5">
-      <div className="grid gap-5 xl:grid-cols-[1fr_18rem]">
+      <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <h2 className="text-xl font-bold text-ink">机构资料</h2>
-              <p className="mt-1 text-sm text-slate-500">{status}</p>
-            </div>
-            <button
-              onClick={updateInstitution}
-              disabled={saving}
-              className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {saving ? "更新中" : "更新机构信息"}
-            </button>
-          </div>
-          <div className="mt-5 grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              机构类别
-              <select
-                className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
-                value={draft.category}
-                disabled
-                aria-label={`机构类别：${categoryLabel}`}
-              >
-                {institutionCategoryOptions.map((option) => (
-                  <option key={option.value} value={option.value}>
-                    {option.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              {"\u673a\u6784\u7c7b\u578b"}
-              <input
-                className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
-                value={institutionTypeLabel}
-                disabled
-                readOnly
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              {"\u53d1\u5e03\u8d44\u683c"}
-              <input
-                className={`rounded-lg border px-3 py-2 ${verificationReady ? "border-mint/40 bg-mint/10 text-mint" : "border-amber-200 bg-amber-50 text-amber-700"}`}
-                value={verificationLabel}
-                disabled
-                readOnly
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              机构名称
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.name}
-                onChange={(event) => updateDraft("name", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              联系电话
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.phone}
-                onChange={(event) => updateDraft("phone", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              邮箱
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                type="email"
-                value={draft.email}
-                onChange={(event) => updateDraft("email", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              地址
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.address}
-                onChange={(event) => updateDraft("address", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              网站
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.website}
-                onChange={(event) => updateDraft("website", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              联系人
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.contactPerson}
-                onChange={(event) => updateDraft("contactPerson", event.target.value)}
-              />
-            </label>
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              所在地区
-              <input
-                className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                value={draft.region}
-                onChange={(event) => updateDraft("region", event.target.value)}
-              />
-            </label>
-          </div>
-          <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
-            机构介绍
-            <textarea
-              className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-2 leading-7"
-              value={draft.description}
-              onChange={(event) => updateDraft("description", event.target.value)}
-            />
-          </label>
+          <h2 className="text-xl font-bold text-ink">机构信息</h2>
+          <p className="mt-1 text-sm text-slate-500">管理机构资料、平台协议和 Stripe 收款状态。</p>
         </div>
-        <aside className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-          <p className="text-sm font-bold text-slate-700">机构 Logo</p>
-          <div className="mt-3 grid aspect-square place-items-center overflow-hidden rounded-lg bg-white p-4 text-mint">
-            {draft.logoUrl ? (
-              <img src={draft.logoUrl} alt={`${draft.name} Logo`} className="h-full w-full object-contain" />
-            ) : (
-              <Building2 size={56} />
-            )}
-          </div>
-          <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 font-bold text-white">
-            {uploadingLogo ? <UploadProgressRing progress={logoUploadProgress} /> : <ImagePlus size={16} />} {uploadingLogo ? "上传中" : "上传新 Logo"}
-            <input
-              type="file"
-              accept="image/*"
-              className="sr-only"
-              disabled={uploadingLogo}
-              onChange={(event) => {
-                void handleLogoUpload(event.target.files?.[0]);
-                event.currentTarget.value = "";
-              }}
-            />
-          </label>
-          <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <p className="text-sm font-bold text-ink">{"\u5e73\u53f0\u534f\u8bae\u4e0e\u6536\u6b3e\u8ba4\u8bc1"}</p>
-                <p className="mt-1 text-xs leading-5 text-slate-500">
-                  {"\u5e73\u53f0\u6309\u8bfe\u7a0b\u8ba2\u9605\u91d1\u989d\u62bd\u53d6 15% \u670d\u52a1\u8d39\u3002"}
-                </p>
-              </div>
-              <span className={`rounded-full px-2.5 py-1 text-xs font-bold ${verificationReady ? "bg-mint/10 text-mint" : "bg-amber-100 text-amber-700"}`}>
-                {verificationLabel}
-              </span>
-            </div>
-            <div className="mt-3 grid gap-2 text-xs font-semibold text-slate-600">
-              <div className="flex items-center justify-between"><span>{"\u670d\u52a1\u534f\u8bae"}</span><span>{draft.serviceAgreementAccepted ? "OK" : "Pending"}</span></div>
-              <div className="flex items-center justify-between"><span>{"GDPR \u534f\u8bae"}</span><span>{draft.gdprAgreementAccepted ? "OK" : "Pending"}</span></div>
-              <div className="flex items-center justify-between"><span>{"\u6536\u8d39\u534f\u8bae"}</span><span>{draft.feeAgreementAccepted ? "OK" : "Pending"}</span></div>
-              <div className="flex items-center justify-between"><span>{"Stripe \u6536\u6b3e"}</span><span>{draft.stripeChargesEnabled ? "OK" : "Pending"}</span></div>
-              <div className="flex items-center justify-between"><span>{"Stripe \u63d0\u73b0"}</span><span>{draft.stripePayoutsEnabled ? "OK" : "Pending"}</span></div>
-            </div>
-            <div className="mt-4 grid gap-2">
-              <button
-                type="button"
-                onClick={handleStripeOnboarding}
-                disabled={!agreementReady || stripeBusy}
-                className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                {stripeBusy ? "Stripe..." : "Stripe Connect"}
-              </button>
-              <button
-                type="button"
-                onClick={handleStripeSync}
-                disabled={stripeBusy || !draft.stripeAccountId}
-                className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-60"
-              >
-                <RefreshCw size={15} /> {"\u5237\u65b0\u8ba4\u8bc1\u72b6\u6001"}
-              </button>
-            </div>
-            {draft.institutionType === "organization" && !verificationReady ? (
-              <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
-                {"\u7ec4\u7ec7\u673a\u6784\u9700\u5b8c\u6210 Stripe \u8ba4\u8bc1\u540e\u624d\u80fd\u6b63\u5f0f\u53d1\u5e03\u8bfe\u7a0b\u3001\u9898\u76ee\u3001\u6d3b\u52a8\u3001\u5b66\u4e60\u8def\u5f84\u3001\u6a21\u62df\u8003\u548c\u7ade\u8d5b\u3002"}
-              </p>
-            ) : null}
-          </div>
-        </aside>
+        <div className="inline-flex rounded-lg border border-slate-200 bg-white p-1">
+          <button
+            type="button"
+            onClick={() => setActiveTab("basic")}
+            className={`rounded-md px-4 py-2 text-sm font-bold ${activeTab === "basic" ? "bg-ink text-white" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            基本信息
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("finance")}
+            className={`rounded-md px-4 py-2 text-sm font-bold ${activeTab === "finance" ? "bg-ink text-white" : "text-slate-600 hover:bg-slate-50"}`}
+          >
+            财务中心
+          </button>
+        </div>
       </div>
+
+      {activeTab === "basic" ? (
+        <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_18rem]">
+          <div>
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-bold text-ink">基本资料</h3>
+                <p className="mt-1 text-sm text-slate-500">{status}</p>
+              </div>
+              <button
+                onClick={updateInstitution}
+                disabled={saving}
+                className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {saving ? "更新中" : "更新机构信息"}
+              </button>
+            </div>
+            <div className="mt-5 grid gap-4 md:grid-cols-2">
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                机构类别
+                <select
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                  value={draft.category}
+                  disabled
+                  aria-label={`机构类别：${categoryLabel}`}
+                >
+                  {institutionCategoryOptions.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                机构类型
+                <input
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                  value={institutionTypeLabel}
+                  disabled
+                  readOnly
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                收款模式
+                <input
+                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
+                  value={accountModeLabel}
+                  disabled
+                  readOnly
+                />
+              </label>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                机构名称
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.name}
+                  onChange={(event) => updateDraft("name", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                联系电话
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.phone}
+                  onChange={(event) => updateDraft("phone", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                邮箱
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  type="email"
+                  value={draft.email}
+                  onChange={(event) => updateDraft("email", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                地址
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.address}
+                  onChange={(event) => updateDraft("address", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                网站
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.website}
+                  onChange={(event) => updateDraft("website", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                联系人
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.contactPerson}
+                  onChange={(event) => updateDraft("contactPerson", event.target.value)}
+                />
+              </label>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                所在地区
+                <input
+                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
+                  value={draft.region}
+                  onChange={(event) => updateDraft("region", event.target.value)}
+                />
+              </label>
+            </div>
+            <label className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
+              机构介绍
+              <textarea
+                className="focus-ring min-h-32 rounded-lg border border-slate-200 px-3 py-2 leading-7"
+                value={draft.description}
+                onChange={(event) => updateDraft("description", event.target.value)}
+              />
+            </label>
+          </div>
+          <aside className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+            <p className="text-sm font-bold text-slate-700">机构 Logo</p>
+            <div className="mt-3 grid aspect-square place-items-center overflow-hidden rounded-lg bg-white p-4 text-mint">
+              {draft.logoUrl ? (
+                <img src={draft.logoUrl} alt={`${draft.name} Logo`} className="h-full w-full object-contain" />
+              ) : (
+                <Building2 size={56} />
+              )}
+            </div>
+            <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 font-bold text-white">
+              {uploadingLogo ? <UploadProgressRing progress={logoUploadProgress} /> : <ImagePlus size={16} />} {uploadingLogo ? "上传中" : "上传新 Logo"}
+              <input
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                disabled={uploadingLogo}
+                onChange={(event) => {
+                  void handleLogoUpload(event.target.files?.[0]);
+                  event.currentTarget.value = "";
+                }}
+              />
+            </label>
+            <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
+              <p className="text-sm font-bold text-ink">平台协议</p>
+              <p className="mt-1 text-xs leading-5 text-slate-500">平台按课程订阅金额抽取 15% 服务费。Stripe 需要的税务、身份和银行信息会在财务中心继续完善。</p>
+              <div className="mt-3 grid gap-2 text-sm font-semibold text-slate-700">
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={draft.serviceAgreementAccepted}
+                    onChange={(event) => updateDraftBoolean("serviceAgreementAccepted", event.target.checked)}
+                  />
+                  服务协议
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={draft.gdprAgreementAccepted}
+                    onChange={(event) => updateDraftBoolean("gdprAgreementAccepted", event.target.checked)}
+                  />
+                  GDPR 协议
+                </label>
+                <label className="flex items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={draft.feeAgreementAccepted}
+                    onChange={(event) => updateDraftBoolean("feeAgreementAccepted", event.target.checked)}
+                  />
+                  收费协议
+                </label>
+              </div>
+            </div>
+          </aside>
+        </div>
+      ) : (
+        <div className="mt-5 grid gap-5 xl:grid-cols-[1fr_20rem]">
+          <div className="grid gap-5">
+            <div className="rounded-lg border border-slate-200 bg-white p-5">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-lg font-bold text-ink">Stripe 财务中心</h3>
+                  <p className="mt-1 text-sm text-slate-500">{financeStatus}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={loadFinance}
+                  disabled={financeLoading}
+                  className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:opacity-60"
+                >
+                  <RefreshCw size={15} className={financeLoading ? "animate-spin" : ""} /> 刷新
+                </button>
+              </div>
+              <div className="mt-5 grid gap-3 md:grid-cols-4">
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-400">Stripe 连接</p>
+                  <div className="mt-3">{statusPill(Boolean(draft.stripeAccountId) || isPlatformOwned, "已连接", "未连接")}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-400">身份验证</p>
+                  <div className="mt-3">{statusPill(stripeReady, "已完成", "待补充")}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-400">Charges</p>
+                  <div className="mt-3">{statusPill(draft.stripeChargesEnabled, "可收款", "未开启")}</div>
+                </div>
+                <div className="rounded-lg bg-slate-50 p-4">
+                  <p className="text-xs font-bold uppercase text-slate-400">Payouts</p>
+                  <div className="mt-3">{statusPill(draft.stripePayoutsEnabled, "可提现", "未开启")}</div>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-3">
+              <div className="rounded-lg border border-slate-200 bg-white p-5">
+                <p className="text-sm font-bold text-slate-500">订阅月收入</p>
+                <p className="mt-2 text-3xl font-black text-ink">{formatMoney(financeSnapshot?.total_monthly_revenue_eur ?? 0)}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-5">
+                <p className="text-sm font-bold text-slate-500">平台服务费</p>
+                <p className="mt-2 text-3xl font-black text-coral">{formatMoney(financeSnapshot?.platform_fee_monthly_eur ?? 0)}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-5">
+                <p className="text-sm font-bold text-slate-500">机构预计收入</p>
+                <p className="mt-2 text-3xl font-black text-mint">{formatMoney(financeSnapshot?.net_monthly_revenue_eur ?? 0)}</p>
+              </div>
+            </div>
+
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="rounded-lg border border-slate-200 bg-white p-5">
+                <p className="text-sm font-bold text-slate-500">当前可用余额</p>
+                <p className="mt-2 text-2xl font-black text-ink">{formatBalance(financeSnapshot?.available_balance ?? [])}</p>
+              </div>
+              <div className="rounded-lg border border-slate-200 bg-white p-5">
+                <p className="text-sm font-bold text-slate-500">待结算余额</p>
+                <p className="mt-2 text-2xl font-black text-ink">{formatBalance(financeSnapshot?.pending_balance ?? [])}</p>
+              </div>
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5">
+              <h3 className="text-lg font-bold text-ink">订阅收款记录</h3>
+              <div className="mt-4 overflow-x-auto">
+                <table className="w-full min-w-[46rem] text-left text-sm">
+                  <thead className="text-xs uppercase text-slate-400">
+                    <tr className="border-b border-slate-100">
+                      <th className="py-3 pr-4">课程</th>
+                      <th className="py-3 pr-4">学生</th>
+                      <th className="py-3 pr-4">状态</th>
+                      <th className="py-3 pr-4">月付金额</th>
+                      <th className="py-3 pr-4">机构收入</th>
+                      <th className="py-3">当前周期</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(financeSnapshot?.subscription_payments ?? []).map((payment) => (
+                      <tr key={payment.id} className="border-b border-slate-100 last:border-0">
+                        <td className="py-3 pr-4 font-bold text-ink">{payment.course_title}</td>
+                        <td className="py-3 pr-4 text-slate-600">
+                          <span className="font-semibold text-ink">{payment.student_name}</span>
+                          <span className="block text-xs text-slate-400">{payment.student_email}</span>
+                        </td>
+                        <td className="py-3 pr-4 text-slate-600">{payment.status}</td>
+                        <td className="py-3 pr-4 font-semibold text-ink">{formatMoney(payment.amount_eur_monthly)}</td>
+                        <td className="py-3 pr-4 font-semibold text-mint">{formatMoney(payment.net_amount_eur_monthly)}</td>
+                        <td className="py-3 text-slate-500">{formatPeriod(payment)}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+                {financeSnapshot && financeSnapshot.subscription_payments.length === 0 ? (
+                  <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-5 text-sm font-semibold text-slate-500">
+                    暂无订阅收款记录。
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <aside className="grid content-start gap-4">
+            <div className="rounded-lg border border-slate-200 bg-white p-5">
+              <h3 className="text-lg font-bold text-ink">收款账户</h3>
+              <div className="mt-4 grid gap-3 text-sm">
+                <div className="flex items-center justify-between gap-3"><span className="text-slate-500">收款模式</span><span className="font-bold text-ink">{accountModeLabel}</span></div>
+                <div className="flex items-center justify-between gap-3"><span className="text-slate-500">机构类型</span><span className="font-bold text-ink">{institutionTypeLabel}</span></div>
+                <div className="flex items-start justify-between gap-3"><span className="text-slate-500">Stripe 账户</span><span className="max-w-44 break-all text-right font-bold text-ink">{isPlatformOwned ? "平台主账户" : draft.stripeAccountId || "未连接"}</span></div>
+              </div>
+              <div className="mt-5 grid gap-2">
+                <button
+                  type="button"
+                  onClick={handleStripeOnboarding}
+                  disabled={!agreementReady || stripeBusy}
+                  className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  {stripeBusy ? "处理中..." : "继续完成验证"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStripeDashboard}
+                  disabled={stripeBusy || (!isPlatformOwned && !draft.stripeAccountId)}
+                  className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  管理 Stripe 收款账户
+                </button>
+                <button
+                  type="button"
+                  onClick={handleStripeSync}
+                  disabled={stripeBusy || (!isPlatformOwned && !draft.stripeAccountId)}
+                  className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-60"
+                >
+                  <RefreshCw size={15} /> 同步状态
+                </button>
+              </div>
+              {!agreementReady ? (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                  请先在基本信息中勾选服务协议、GDPR 协议和收费协议，再进入 Stripe 验证。
+                </p>
+              ) : null}
+            </div>
+
+            <div className="rounded-lg border border-slate-200 bg-white p-5">
+              <h3 className="text-lg font-bold text-ink">资料待补充</h3>
+              <p className="mt-1 text-xs leading-5 text-slate-500">平台不再单独收集税务和银行资料。Stripe 需要补充的内容会显示在这里。</p>
+              {stripeRequirements?.disabled_reason ? (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs font-semibold text-amber-700">{stripeRequirements.disabled_reason}</p>
+              ) : null}
+              {missingRequirements.length ? (
+                <ul className="mt-3 grid gap-2 text-xs font-semibold text-slate-600">
+                  {missingRequirements.map((item) => (
+                    <li key={item} className="rounded-md bg-slate-50 px-3 py-2">{item}</li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 rounded-lg bg-mint/10 p-3 text-xs font-semibold text-mint">当前没有 Stripe 待补充资料。</p>
+              )}
+            </div>
+          </aside>
+        </div>
+      )}
     </section>
   );
 }
-
 function CourseCategoryManagement() {
   const [categories, setCategories] = useState<CourseCategory[]>([]);
   const [selectedCategoryId, setSelectedCategoryId] = useState<number | null>(null);

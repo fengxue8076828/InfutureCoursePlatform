@@ -73,6 +73,58 @@ class StripeConnectOnboardingOut(BaseModel):
     institution: InstitutionOut
 
 
+class StripeDashboardLinkOut(BaseModel):
+    url: str
+    institution: InstitutionOut
+
+
+class StripeBalanceAmountOut(BaseModel):
+    currency: str
+    amount: float
+
+
+class StripeRequirementsOut(BaseModel):
+    currently_due: list[str] = Field(default_factory=list)
+    eventually_due: list[str] = Field(default_factory=list)
+    past_due: list[str] = Field(default_factory=list)
+    pending_verification: list[str] = Field(default_factory=list)
+    disabled_reason: str | None = None
+
+
+class AdminSubscriptionPaymentOut(BaseModel):
+    id: int
+    course_title: str
+    student_name: str
+    student_email: EmailStr
+    status: str
+    amount_eur_monthly: float
+    platform_fee_percent: float
+    net_amount_eur_monthly: float
+    stripe_subscription_id: str | None = None
+    stripe_checkout_session_id: str | None = None
+    current_period_start: datetime
+    current_period_end: datetime | None = None
+    created_at: datetime
+
+
+class InstitutionFinanceOut(BaseModel):
+    institution: InstitutionOut
+    account_mode: str
+    stripe_connected: bool
+    stripe_account_id: str | None = None
+    charges_enabled: bool
+    payouts_enabled: bool
+    details_submitted: bool
+    verification_status: str
+    requirements: StripeRequirementsOut
+    available_balance: list[StripeBalanceAmountOut] = Field(default_factory=list)
+    pending_balance: list[StripeBalanceAmountOut] = Field(default_factory=list)
+    total_monthly_revenue_eur: float = 0
+    platform_fee_monthly_eur: float = 0
+    net_monthly_revenue_eur: float = 0
+    subscription_payments: list[AdminSubscriptionPaymentOut] = Field(default_factory=list)
+
+
 class ActivityRegistrationOut(OrmModel):
     id: int
     activity_id: int

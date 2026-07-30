@@ -54,6 +54,7 @@ from app.schemas import (
     ActivityRegistrationOut,
     ActivityUpdate,
     AdminOverviewOut,
+    AdminSubscriptionPaymentOut,
     AdminActivityOut,
     AdminGradingSubmissionOut,
     AdminPasswordCodeOut,
@@ -79,6 +80,7 @@ from app.schemas import (
     ExamPaperUpdate,
     CompetitionRegistrationOut,
     GradeSubmissionIn,
+    InstitutionFinanceOut,
     InstitutionOut,
     InstitutionUpdate,
     LearningPathCreate,
@@ -89,7 +91,10 @@ from app.schemas import (
     QuestionOut,
     QuestionUpdate,
     SubmissionOut,
+    StripeBalanceAmountOut,
     StripeConnectOnboardingOut,
+    StripeDashboardLinkOut,
+    StripeRequirementsOut,
     TeacherCreate,
     TeacherOut,
 )
@@ -159,7 +164,6 @@ def get_current_institution_id_or_403(current_user: User) -> int:
 
 
 PUBLISH_AGREEMENT_DETAIL = "Platform agreements must be accepted before publishing"
-PUBLISH_VERIFICATION_DETAIL = "Organization Stripe verification required before publishing"
 
 
 def institution_agreements_completed(institution: Institution) -> bool:
@@ -170,20 +174,12 @@ def institution_agreements_completed(institution: Institution) -> bool:
     )
 
 
-def institution_verification_completed(institution: Institution) -> bool:
-    if institution.institution_type != "organization":
-        return True
-    return institution.verification_status == "approved"
-
-
 def ensure_institution_can_publish(current_user: User, db: Session) -> Institution:
     institution = get_admin_institution(current_user, db)
     if not institution:
         raise HTTPException(status_code=403, detail="Institution context required")
     if not institution_agreements_completed(institution):
         raise HTTPException(status_code=403, detail=PUBLISH_AGREEMENT_DETAIL)
-    if not institution_verification_completed(institution):
-        raise HTTPException(status_code=403, detail=PUBLISH_VERIFICATION_DETAIL)
     return institution
 
 
@@ -214,10 +210,103 @@ def update_institution_stripe_state(institution: Institution, account: object) -
     institution.stripe_details_submitted = details_submitted
     if details_submitted and institution.stripe_onboarding_completed_at is None:
         institution.stripe_onboarding_completed_at = datetime.now(timezone.utc)
-    if institution.institution_type == "organization":
-        institution.verification_status = "approved" if charges_enabled and payouts_enabled and details_submitted else "pending"
+    if institution.payout_mode == "platform":
+        institution.verification_status = "approved" if charges_enabled else "pending"
     else:
-        institution.verification_status = "not_required"
+        institution.verification_status = (
+            "approved" if charges_enabled and payouts_enabled and details_submitted else "pending"
+        )
+
+
+def stripe_sequence_value(obj: object, key: str) -> list[str]:
+    value = stripe_value(obj, key, [])
+    if value is None:
+        return []
+    return [str(item) for item in list(value)]
+
+
+def stripe_requirements_from_account(account: object | None) -> StripeRequirementsOut:
+    if not account:
+        return StripeRequirementsOut()
+    requirements = stripe_value(account, "requirements")
+    if not requirements:
+        return StripeRequirementsOut()
+    return StripeRequirementsOut(
+        currently_due=stripe_sequence_value(requirements, "currently_due"),
+        eventually_due=stripe_sequence_value(requirements, "eventually_due"),
+        past_due=stripe_sequence_value(requirements, "past_due"),
+        pending_verification=stripe_sequence_value(requirements, "pending_verification"),
+        disabled_reason=stripe_value(requirements, "disabled_reason"),
+    )
+
+
+def stripe_balance_amounts(balance: object | None, key: str) -> list[StripeBalanceAmountOut]:
+    values = stripe_value(balance, key, []) if balance else []
+    amounts: list[StripeBalanceAmountOut] = []
+    for item in list(values or []):
+        raw_amount = stripe_value(item, "amount", 0) or 0
+        currency = str(stripe_value(item, "currency", "eur") or "eur").upper()
+        try:
+            amount = int(raw_amount) / 100
+        except (TypeError, ValueError):
+            amount = 0
+        amounts.append(StripeBalanceAmountOut(currency=currency, amount=amount))
+    return amounts
+
+
+def subscription_payment_to_out(
+    subscription: Subscription,
+    course: Course,
+    student: User,
+    institution: Institution,
+) -> AdminSubscriptionPaymentOut:
+    amount = float(subscription.amount_eur_monthly or 0)
+    platform_fee_percent = 0.0 if institution.payout_mode == "platform" else float(subscription.platform_fee_percent or 15)
+    net_amount = amount if institution.payout_mode == "platform" else amount * (1 - platform_fee_percent / 100)
+    return AdminSubscriptionPaymentOut(
+        id=subscription.id,
+        course_title=course.title,
+        student_name=student.full_name,
+        student_email=student.email,
+        status=subscription.status,
+        amount_eur_monthly=round(amount, 2),
+        platform_fee_percent=round(platform_fee_percent, 2),
+        net_amount_eur_monthly=round(net_amount, 2),
+        stripe_subscription_id=subscription.stripe_subscription_id,
+        stripe_checkout_session_id=subscription.stripe_checkout_session_id,
+        current_period_start=subscription.current_period_start,
+        current_period_end=subscription.current_period_end,
+        created_at=subscription.created_at,
+    )
+
+
+def build_institution_finance_out(
+    institution: Institution,
+    account: object | None,
+    balance: object | None,
+    payments: list[AdminSubscriptionPaymentOut],
+) -> InstitutionFinanceOut:
+    active_payments = [payment for payment in payments if payment.status in {"active", "trialing", "past_due"}]
+    total_revenue = sum(payment.amount_eur_monthly for payment in active_payments)
+    net_revenue = sum(payment.net_amount_eur_monthly for payment in active_payments)
+    platform_fee = 0.0 if institution.payout_mode == "platform" else max(total_revenue - net_revenue, 0)
+    return InstitutionFinanceOut(
+        institution=InstitutionOut.model_validate(institution),
+        account_mode=institution.payout_mode,
+        stripe_connected=bool(get_settings().stripe_secret_key and (institution.payout_mode == "platform" or institution.stripe_account_id)),
+        stripe_account_id=None if institution.payout_mode == "platform" else institution.stripe_account_id,
+        charges_enabled=bool(institution.stripe_charges_enabled),
+        payouts_enabled=bool(institution.stripe_payouts_enabled),
+        details_submitted=bool(institution.stripe_details_submitted),
+        verification_status=institution.verification_status,
+        requirements=stripe_requirements_from_account(account),
+        available_balance=stripe_balance_amounts(balance, "available"),
+        pending_balance=stripe_balance_amounts(balance, "pending"),
+        total_monthly_revenue_eur=round(total_revenue, 2),
+        platform_fee_monthly_eur=round(platform_fee, 2),
+        net_monthly_revenue_eur=round(net_revenue, 2),
+        subscription_payments=payments,
+    )
 
 
 def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
@@ -1273,6 +1362,46 @@ def update_admin_institution(
     return institution
 
 
+@router.get("/institution/finance", response_model=InstitutionFinanceOut)
+def admin_institution_finance(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> InstitutionFinanceOut:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+
+    account = None
+    balance = None
+    settings = get_settings()
+    if settings.stripe_secret_key:
+        try:
+            stripe = get_stripe_client()
+            if institution.payout_mode == "platform":
+                account = stripe.Account.retrieve()
+                balance = stripe.Balance.retrieve()
+            elif institution.stripe_account_id:
+                account = stripe.Account.retrieve(institution.stripe_account_id)
+                balance = stripe.Balance.retrieve(stripe_account=institution.stripe_account_id)
+            if account:
+                update_institution_stripe_state(institution, account)
+                db.commit()
+                db.refresh(institution)
+        except Exception as exc:
+            print(f"[stripe-finance-sync-error] institution={institution.id}: {exc}")
+
+    rows = db.execute(
+        select(Subscription, Course, User)
+        .join(Course, Subscription.course_id == Course.id)
+        .join(User, Subscription.user_id == User.id)
+        .where(Course.institution_id == institution.id)
+        .order_by(Subscription.created_at.desc())
+    ).all()
+    payments = [subscription_payment_to_out(subscription, course, student, institution) for subscription, course, student in rows]
+    return build_institution_finance_out(institution, account, balance, payments)
+
+
 @router.post("/institution/stripe/connect", response_model=StripeConnectOnboardingOut)
 def start_stripe_connect_onboarding(
     current_user: User = Depends(get_current_user),
@@ -1284,11 +1413,19 @@ def start_stripe_connect_onboarding(
         raise HTTPException(status_code=404, detail="Institution not found")
     if not institution_agreements_completed(institution):
         raise HTTPException(status_code=403, detail=PUBLISH_AGREEMENT_DETAIL)
-    if institution.payout_mode == "platform":
-        raise HTTPException(status_code=409, detail="Platform-owned institution uses the platform Stripe account")
 
     stripe = get_stripe_client()
     settings = get_settings()
+    if institution.payout_mode == "platform":
+        try:
+            account = stripe.Account.retrieve()
+            update_institution_stripe_state(institution, account)
+            db.commit()
+            db.refresh(institution)
+        except Exception as exc:
+            print(f"[stripe-platform-account-sync-error] institution={institution.id}: {exc}")
+        return StripeConnectOnboardingOut(url="https://dashboard.stripe.com/settings/account", institution=institution)
+
     if institution.stripe_account_id:
         account = stripe.Account.retrieve(institution.stripe_account_id)
     else:
@@ -1316,6 +1453,38 @@ def start_stripe_connect_onboarding(
     return StripeConnectOnboardingOut(url=stripe_value(account_link, "url", ""), institution=institution)
 
 
+@router.post("/institution/stripe/login-link", response_model=StripeDashboardLinkOut)
+def create_stripe_dashboard_login_link(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StripeDashboardLinkOut:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    stripe = get_stripe_client()
+    if institution.payout_mode == "platform":
+        try:
+            account = stripe.Account.retrieve()
+            update_institution_stripe_state(institution, account)
+            db.commit()
+            db.refresh(institution)
+        except Exception as exc:
+            print(f"[stripe-platform-login-sync-error] institution={institution.id}: {exc}")
+        return StripeDashboardLinkOut(url="https://dashboard.stripe.com", institution=institution)
+    if not institution.stripe_account_id:
+        raise HTTPException(status_code=409, detail="Stripe account is not connected")
+    account = stripe.Account.retrieve(institution.stripe_account_id)
+    update_institution_stripe_state(institution, account)
+    try:
+        login_link = stripe.Account.create_login_link(institution.stripe_account_id)
+    except AttributeError:
+        login_link = stripe.LoginLink.create(account=institution.stripe_account_id)
+    db.commit()
+    db.refresh(institution)
+    return StripeDashboardLinkOut(url=stripe_value(login_link, "url", ""), institution=institution)
+
+
 @router.post("/institution/stripe/sync", response_model=InstitutionOut)
 def sync_stripe_connect_status(
     current_user: User = Depends(get_current_user),
@@ -1325,12 +1494,10 @@ def sync_stripe_connect_status(
     institution = get_admin_institution(current_user, db)
     if not institution:
         raise HTTPException(status_code=404, detail="Institution not found")
-    if institution.payout_mode == "platform":
-        return institution
-    if not institution.stripe_account_id:
+    if institution.payout_mode != "platform" and not institution.stripe_account_id:
         return institution
     stripe = get_stripe_client()
-    account = stripe.Account.retrieve(institution.stripe_account_id)
+    account = stripe.Account.retrieve() if institution.payout_mode == "platform" else stripe.Account.retrieve(institution.stripe_account_id)
     update_institution_stripe_state(institution, account)
     db.commit()
     db.refresh(institution)
