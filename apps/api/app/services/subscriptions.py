@@ -66,6 +66,16 @@ def activate_course_subscription(
             )
         )
     if subscription is None:
+        subscription = db.scalar(
+            select(Subscription)
+            .where(
+                Subscription.user_id == user.id,
+                Subscription.course_id == course.id,
+                Subscription.status.in_(("pending", "past_due")),
+            )
+            .order_by(Subscription.created_at.desc())
+        )
+    if subscription is None:
         subscription = Subscription(
             user_id=user.id,
             course_id=course.id,

@@ -53,6 +53,20 @@ def retrieve_checkout_session(session_id: str) -> Any:
     return stripe.checkout.Session.retrieve(session_id)
 
 
+def retrieve_subscription(subscription_id: str) -> Any:
+    stripe = get_stripe_client()
+    return stripe.Subscription.retrieve(subscription_id)
+
+
+def stripe_object_id(value: Any) -> str | None:
+    if value in (None, ""):
+        return None
+    if isinstance(value, str):
+        return value
+    value_id = stripe_value(value, "id")
+    return str(value_id) if value_id else str(value)
+
+
 def load_course_for_subscription(db: Session, course_id: int) -> Course | None:
     return db.scalar(
         select(Course)
@@ -64,22 +78,29 @@ def load_course_for_subscription(db: Session, course_id: int) -> Course | None:
     )
 
 
-def handle_checkout_session_completed(session: Any, db: Session) -> None:
-    metadata = checkout_metadata(session)
+def activate_subscription_from_metadata(
+    db: Session,
+    metadata: dict[str, str],
+    *,
+    stripe_checkout_session_id: str | None = None,
+    stripe_subscription_id: str | None = None,
+    stripe_customer_id: str | None = None,
+    period_start: datetime | None = None,
+    period_end: datetime | None = None,
+) -> Subscription | None:
     user_id = metadata.get("user_id")
     course_id = metadata.get("course_id")
     if not user_id or not course_id:
-        return
+        return None
 
-    user = db.get(User, int(user_id))
-    course = load_course_for_subscription(db, int(course_id))
+    try:
+        user = db.get(User, int(user_id))
+        course = load_course_for_subscription(db, int(course_id))
+    except ValueError:
+        return None
     if not user or not course:
-        return
+        return None
 
-    stripe_subscription_id = stripe_value(session, "subscription")
-    stripe_customer_id = stripe_value(session, "customer")
-    period_start = None
-    period_end = None
     settings = get_settings()
     platform_fee_percent = (
         100.0
@@ -91,18 +112,7 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
     except (TypeError, ValueError):
         amount_eur_monthly = round(float(course.price_eur_monthly or 39), 2)
 
-    if stripe_subscription_id and settings.stripe_secret_key:
-        try:
-            stripe = get_stripe_client()
-            subscription = stripe.Subscription.retrieve(str(stripe_subscription_id))
-            period_start = timestamp_to_datetime(stripe_value(subscription, "current_period_start"))
-            period_end = timestamp_to_datetime(stripe_value(subscription, "current_period_end"))
-            stripe_customer_id = stripe_value(subscription, "customer", stripe_customer_id)
-        except Exception:
-            period_start = None
-            period_end = None
-
-    activate_course_subscription(
+    _, subscription, _ = activate_course_subscription(
         db,
         user=user,
         course=course,
@@ -110,10 +120,43 @@ def handle_checkout_session_completed(session: Any, db: Session) -> None:
         payment_provider="stripe",
         current_period_start=period_start,
         current_period_end=period_end,
-        stripe_checkout_session_id=stripe_value(session, "id"),
-        stripe_subscription_id=str(stripe_subscription_id) if stripe_subscription_id else None,
-        stripe_customer_id=str(stripe_customer_id) if stripe_customer_id else None,
+        stripe_checkout_session_id=stripe_checkout_session_id,
+        stripe_subscription_id=stripe_subscription_id,
+        stripe_customer_id=stripe_customer_id,
         platform_fee_percent=platform_fee_percent,
+    )
+    return subscription
+
+
+def handle_checkout_session_completed(session: Any, db: Session) -> Subscription | None:
+    metadata = checkout_metadata(session)
+    checkout_session_id = stripe_object_id(stripe_value(session, "id"))
+    subscription_value = stripe_value(session, "subscription")
+    stripe_subscription_id = stripe_object_id(subscription_value)
+    stripe_customer_id = stripe_object_id(stripe_value(session, "customer"))
+    period_start = None
+    period_end = None
+
+    subscription_obj = None if isinstance(subscription_value, str) else subscription_value
+    if stripe_subscription_id:
+        try:
+            subscription_obj = subscription_obj or retrieve_subscription(stripe_subscription_id)
+            period_start = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_start"))
+            period_end = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_end"))
+            stripe_customer_id = stripe_object_id(stripe_value(subscription_obj, "customer")) or stripe_customer_id
+            if not metadata.get("user_id") or not metadata.get("course_id"):
+                metadata = checkout_metadata(subscription_obj)
+        except Exception as exc:
+            print(f"[stripe-subscription-retrieve-error] subscription={stripe_subscription_id}: {exc}")
+
+    return activate_subscription_from_metadata(
+        db,
+        metadata,
+        stripe_checkout_session_id=checkout_session_id,
+        stripe_subscription_id=stripe_subscription_id,
+        stripe_customer_id=stripe_customer_id,
+        period_start=period_start,
+        period_end=period_end,
     )
 
 
@@ -131,21 +174,38 @@ def sync_checkout_session_if_complete(session_or_id: Any, db: Session) -> Subscr
     if checkout_status != "complete" and payment_status not in {"paid", "no_payment_required"}:
         return subscription
 
-    handle_checkout_session_completed(session, db)
-    return db.scalar(select(Subscription).where(Subscription.stripe_checkout_session_id == session_id))
+    return handle_checkout_session_completed(session, db) or db.scalar(
+        select(Subscription).where(Subscription.stripe_checkout_session_id == session_id)
+    )
 
 
 def handle_subscription_changed(subscription_obj: Any, db: Session) -> None:
-    stripe_subscription_id = stripe_value(subscription_obj, "id")
+    stripe_subscription_id = stripe_object_id(stripe_value(subscription_obj, "id"))
     if not stripe_subscription_id:
         return
+
+    stripe_status = str(stripe_value(subscription_obj, "status", ""))
+    stripe_customer_id = stripe_object_id(stripe_value(subscription_obj, "customer"))
+    period_start = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_start"))
+    period_end = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_end"))
+    if stripe_status in {"active", "trialing"}:
+        subscription = activate_subscription_from_metadata(
+            db,
+            checkout_metadata(subscription_obj),
+            stripe_subscription_id=stripe_subscription_id,
+            stripe_customer_id=stripe_customer_id,
+            period_start=period_start,
+            period_end=period_end,
+        )
+        if subscription:
+            return
+
     subscription = db.scalar(
-        select(Subscription).where(Subscription.stripe_subscription_id == str(stripe_subscription_id))
+        select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
     )
     if not subscription:
         return
 
-    stripe_status = str(stripe_value(subscription_obj, "status", ""))
     if stripe_status in {"active", "trialing"}:
         subscription.status = "active"
     elif stripe_status in {"canceled", "unpaid", "incomplete_expired"}:
@@ -154,11 +214,10 @@ def handle_subscription_changed(subscription_obj: Any, db: Session) -> None:
         subscription.status = "past_due"
     else:
         subscription.status = stripe_status or subscription.status
-    subscription.current_period_start = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_start")) or subscription.current_period_start
-    subscription.current_period_end = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_end")) or subscription.current_period_end
-    customer_id = stripe_value(subscription_obj, "customer")
-    if customer_id:
-        subscription.stripe_customer_id = str(customer_id)
+    subscription.current_period_start = period_start or subscription.current_period_start
+    subscription.current_period_end = period_end or subscription.current_period_end
+    if stripe_customer_id:
+        subscription.stripe_customer_id = stripe_customer_id
 
 
 @router.post("/stripe/webhook")
@@ -185,7 +244,7 @@ async def stripe_webhook(request: Request, db: Session = Depends(get_db)) -> dic
 
     if event_type == "checkout.session.completed":
         handle_checkout_session_completed(event_object, db)
-    elif event_type in {"customer.subscription.updated", "customer.subscription.deleted"}:
+    elif event_type in {"customer.subscription.created", "customer.subscription.updated", "customer.subscription.deleted"}:
         handle_subscription_changed(event_object, db)
 
     db.commit()
