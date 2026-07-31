@@ -213,7 +213,7 @@ def get_stripe_client():
 
 def stripe_operation_failed(action: str, exc: Exception) -> HTTPException:
     message = str(exc).strip() or exc.__class__.__name__
-    return HTTPException(status_code=502, detail=f"{action}: {message}")
+    return HTTPException(status_code=400, detail=f"{action}: {message}")
 
 
 def update_institution_stripe_state(institution: Institution, account: object) -> None:
@@ -1614,7 +1614,7 @@ def start_stripe_connect_onboarding(
                 country=settings.stripe_default_country,
                 email=institution.email,
                 business_type="company" if institution.institution_type == "organization" else "individual",
-                capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
+                capabilities={"transfers": {"requested": True}},
                 metadata={"institution_id": str(institution.id)},
             )
             account_id = stripe_value(account, "id")

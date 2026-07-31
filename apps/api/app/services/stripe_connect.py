@@ -51,7 +51,6 @@ def create_connect_account_for_institution(institution: Institution) -> str | No
             email=institution.email,
             business_type="company" if institution.institution_type == "organization" else "individual",
             capabilities={
-                "card_payments": {"requested": True},
                 "transfers": {"requested": True},
             },
             metadata={"institution_slug": institution.slug},
