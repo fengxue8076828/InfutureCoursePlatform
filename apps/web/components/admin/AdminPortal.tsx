@@ -1182,12 +1182,15 @@ async function startStripeConnectOnboarding(): Promise<{ draft?: InstitutionDraf
       headers: getAdminRequestHeaders()
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "Stripe \u8ba4\u8bc1\u5165\u53e3\u521b\u5efa\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u5df2\u914d\u7f6e Stripe\u3002") };
+      return { error: await readAdminApiErrorMessage(response, "Stripe 认证入口创建失败，请确认后端已配置 Stripe。") };
     }
-    const payload = (await response.json()) as StripeConnectOnboardingResponse;
+    const payload = (await response.json()) as Partial<StripeConnectOnboardingResponse>;
+    if (!payload.institution || !payload.url) {
+      return { error: "Stripe 认证入口创建失败：服务器返回数据格式不正确。" };
+    }
     return { draft: institutionFromApi(payload.institution), url: payload.url };
-  } catch {
-    return { error: apiConnectionErrorMessage("Stripe \u64cd\u4f5c\u5931\u8d25") };
+  } catch (error) {
+    return { error: apiConnectionErrorMessage(`Stripe 操作失败${error instanceof Error ? `：${error.message}` : ""}`) };
   }
 }
 
@@ -1198,11 +1201,11 @@ async function fetchInstitutionFinance(): Promise<{ finance?: InstitutionFinance
       cache: "no-store"
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "\u8d22\u52a1\u6570\u636e\u8bfb\u53d6\u5931\u8d25\u3002") };
+      return { error: await readAdminApiErrorMessage(response, "财务数据读取失败。") };
     }
     return { finance: (await response.json()) as InstitutionFinance };
   } catch {
-    return { error: apiConnectionErrorMessage("\u65e0\u6cd5\u8bfb\u53d6 Stripe \u8d22\u52a1\u4fe1\u606f") };
+    return { error: apiConnectionErrorMessage("无法读取 Stripe 财务信息") };
   }
 }
 
@@ -1294,12 +1297,15 @@ async function createStripeDashboardLink(): Promise<{ draft?: InstitutionDraft; 
       headers: getAdminRequestHeaders()
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "Stripe \u6536\u6b3e\u8d26\u6237\u7ba1\u7406\u5165\u53e3\u521b\u5efa\u5931\u8d25\u3002") };
+      return { error: await readAdminApiErrorMessage(response, "Stripe 收款账户管理入口创建失败。") };
     }
-    const payload = (await response.json()) as StripeDashboardLinkResponse;
+    const payload = (await response.json()) as Partial<StripeDashboardLinkResponse>;
+    if (!payload.institution || !payload.url) {
+      return { error: "Stripe 收款账户管理入口创建失败：服务器返回数据格式不正确。" };
+    }
     return { draft: institutionFromApi(payload.institution), url: payload.url };
   } catch {
-    return { error: apiConnectionErrorMessage("Stripe \u6536\u6b3e\u8d26\u6237\u5165\u53e3\u521b\u5efa\u5931\u8d25") };
+    return { error: apiConnectionErrorMessage("Stripe 收款账户入口创建失败") };
   }
 }
 
@@ -1310,11 +1316,11 @@ async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; er
       headers: getAdminRequestHeaders()
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "Stripe \u8ba4\u8bc1\u72b6\u6001\u5237\u65b0\u5931\u8d25\u3002") };
+      return { error: await readAdminApiErrorMessage(response, "Stripe 认证状态刷新失败。") };
     }
     return { draft: institutionFromApi((await response.json()) as ApiInstitution) };
   } catch {
-    return { error: apiConnectionErrorMessage("Stripe \u64cd\u4f5c\u5931\u8d25") };
+    return { error: apiConnectionErrorMessage("Stripe 操作失败") };
   }
 }
 function profileFromApi(profile: ApiAdminProfile): AdminProfile {
@@ -1514,6 +1520,48 @@ async function readApiErrorMessage(response: Response, fallback: string) {
   return fallback;
 }
 
+async function readAdminApiErrorMessage(response: Response, fallback: string) {
+  const statusSuffix = response.status ? `（HTTP ${response.status}）` : "";
+  let rawBody = "";
+
+  try {
+    rawBody = await response.text();
+    const body = rawBody ? (JSON.parse(rawBody) as { detail?: unknown }) : {};
+    const detail = typeof body.detail === "string" ? body.detail.trim() : "";
+    if (detail === "Email already exists") {
+      return "用户保存失败：邮箱已存在，请换一个邮箱。";
+    }
+    if (
+      detail === "Institution admins cannot create super admins" ||
+      detail === "Institution admins cannot assign super admin"
+    ) {
+      return "用户保存失败：只有超级管理员才能创建或授予超级管理员角色。";
+    }
+    if (detail === "User belongs to another institution") {
+      return "用户保存失败：不能编辑其他机构的用户。";
+    }
+    if (detail === "Unsupported user role") {
+      return "用户保存失败：请选择有效的用户角色。";
+    }
+    if (detail === "Stripe is not configured") {
+      return "Stripe 尚未配置，请检查服务器环境变量 STRIPE_SECRET_KEY。";
+    }
+    if (detail === "Stripe SDK is not installed") {
+      return "服务器没有安装 Stripe SDK，请重新部署后端依赖。";
+    }
+    if (detail) {
+      return detail;
+    }
+  } catch {
+    const plainText = rawBody.trim();
+    if (plainText) {
+      return `${fallback}${statusSuffix}：${plainText.slice(0, 180)}`;
+    }
+  }
+
+  return `${fallback}${statusSuffix}`;
+}
+
 async function fetchManagedUsers(): Promise<ManagedUser[] | null> {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/users`, {
@@ -1552,7 +1600,7 @@ async function saveManagedUser(user: ManagedUser): Promise<ManagedUserSaveResult
     });
     if (!response.ok) {
       return {
-        error: await readApiErrorMessage(response, "用户保存失败，请确认邮箱未重复且 FastAPI 服务正在运行。")
+        error: await readAdminApiErrorMessage(response, "用户保存失败，请确认邮箱未重复且 FastAPI 服务正在运行。")
       };
     }
     return { user: managedUserFromApi((await response.json()) as ApiManagedUser) };

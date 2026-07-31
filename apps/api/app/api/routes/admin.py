@@ -211,6 +211,11 @@ def get_stripe_client():
     return stripe
 
 
+def stripe_operation_failed(action: str, exc: Exception) -> HTTPException:
+    message = str(exc).strip() or exc.__class__.__name__
+    return HTTPException(status_code=502, detail=f"{action}: {message}")
+
+
 def update_institution_stripe_state(institution: Institution, account: object) -> None:
     charges_enabled = bool(stripe_value(account, "charges_enabled", False))
     payouts_enabled = bool(stripe_value(account, "payouts_enabled", False))
@@ -1600,31 +1605,42 @@ def start_stripe_connect_onboarding(
             print(f"[stripe-platform-account-sync-error] institution={institution.id}: {exc}")
         return StripeConnectOnboardingOut(url="https://dashboard.stripe.com/settings/account", institution=institution)
 
-    if institution.stripe_account_id:
-        account = stripe.Account.retrieve(institution.stripe_account_id)
-    else:
-        account = stripe.Account.create(
-            type="express",
-            country=settings.stripe_default_country,
-            email=institution.email,
-            business_type="company" if institution.institution_type == "organization" else "individual",
-            capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
-            metadata={"institution_id": str(institution.id)},
+    try:
+        if institution.stripe_account_id:
+            account = stripe.Account.retrieve(institution.stripe_account_id)
+        else:
+            account = stripe.Account.create(
+                type="express",
+                country=settings.stripe_default_country,
+                email=institution.email,
+                business_type="company" if institution.institution_type == "organization" else "individual",
+                capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
+                metadata={"institution_id": str(institution.id)},
+            )
+            account_id = stripe_value(account, "id")
+            if not account_id:
+                raise RuntimeError("Stripe did not return a connected account id")
+            institution.stripe_account_id = str(account_id)
+
+        update_institution_stripe_state(institution, account)
+        db.commit()
+        db.refresh(institution)
+
+        frontend_url = settings.frontend_base_url.rstrip("/")
+        account_link = stripe.AccountLink.create(
+            account=institution.stripe_account_id,
+            refresh_url=f"{frontend_url}/admin?module=institution&stripe=refresh",
+            return_url=f"{frontend_url}/admin?module=institution&stripe=return",
+            type="account_onboarding",
         )
-        institution.stripe_account_id = stripe_value(account, "id")
+        url = stripe_value(account_link, "url", "")
+        if not url:
+            raise RuntimeError("Stripe did not return an onboarding URL")
+    except Exception as exc:
+        db.rollback()
+        raise stripe_operation_failed("Stripe Connect onboarding failed", exc) from exc
 
-    update_institution_stripe_state(institution, account)
-    db.commit()
-    db.refresh(institution)
-
-    frontend_url = settings.frontend_base_url.rstrip("/")
-    account_link = stripe.AccountLink.create(
-        account=institution.stripe_account_id,
-        refresh_url=f"{frontend_url}/admin?module=institution&stripe=refresh",
-        return_url=f"{frontend_url}/admin?module=institution&stripe=return",
-        type="account_onboarding",
-    )
-    return StripeConnectOnboardingOut(url=stripe_value(account_link, "url", ""), institution=institution)
+    return StripeConnectOnboardingOut(url=str(url), institution=institution)
 
 
 @router.post("/institution/stripe/login-link", response_model=StripeDashboardLinkOut)
@@ -1646,17 +1662,27 @@ def create_stripe_dashboard_login_link(
         except Exception as exc:
             print(f"[stripe-platform-login-sync-error] institution={institution.id}: {exc}")
         return StripeDashboardLinkOut(url="https://dashboard.stripe.com", institution=institution)
-    if not institution.stripe_account_id:
-        raise HTTPException(status_code=409, detail="Stripe account is not connected")
-    account = stripe.Account.retrieve(institution.stripe_account_id)
-    update_institution_stripe_state(institution, account)
     try:
-        login_link = stripe.Account.create_login_link(institution.stripe_account_id)
-    except AttributeError:
-        login_link = stripe.LoginLink.create(account=institution.stripe_account_id)
-    db.commit()
-    db.refresh(institution)
-    return StripeDashboardLinkOut(url=stripe_value(login_link, "url", ""), institution=institution)
+        if not institution.stripe_account_id:
+            raise HTTPException(status_code=409, detail="Stripe account is not connected")
+        account = stripe.Account.retrieve(institution.stripe_account_id)
+        update_institution_stripe_state(institution, account)
+        try:
+            login_link = stripe.Account.create_login_link(institution.stripe_account_id)
+        except AttributeError:
+            login_link = stripe.LoginLink.create(account=institution.stripe_account_id)
+        db.commit()
+        db.refresh(institution)
+        url = stripe_value(login_link, "url", "")
+        if not url:
+            raise RuntimeError("Stripe did not return a dashboard login URL")
+    except HTTPException:
+        raise
+    except Exception as exc:
+        db.rollback()
+        raise stripe_operation_failed("Stripe dashboard login link failed", exc) from exc
+
+    return StripeDashboardLinkOut(url=str(url), institution=institution)
 
 
 @router.post("/institution/stripe/sync", response_model=InstitutionOut)
@@ -1671,10 +1697,14 @@ def sync_stripe_connect_status(
     if institution.payout_mode != "platform" and not institution.stripe_account_id:
         return institution
     stripe = get_stripe_client()
-    account = stripe.Account.retrieve() if institution.payout_mode == "platform" else stripe.Account.retrieve(institution.stripe_account_id)
-    update_institution_stripe_state(institution, account)
-    db.commit()
-    db.refresh(institution)
+    try:
+        account = stripe.Account.retrieve() if institution.payout_mode == "platform" else stripe.Account.retrieve(institution.stripe_account_id)
+        update_institution_stripe_state(institution, account)
+        db.commit()
+        db.refresh(institution)
+    except Exception as exc:
+        db.rollback()
+        raise stripe_operation_failed("Stripe status sync failed", exc) from exc
     return institution
 
 
