@@ -38,6 +38,7 @@ import {
   X
 } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
 import { API_BASE_URL, apiConnectionErrorMessage } from "@/lib/api-config";
@@ -59,7 +60,9 @@ import {
   clearAdminSession,
   getAdminRequestHeaders,
   getAdminSessionUser,
-  getAdminSessionUserId
+  getAdminSessionUserId,
+  isAdminSessionValid,
+  refreshAdminSessionActivity
 } from "@/lib/admin-session";
 
 import { QuestionBankManager } from "./QuestionBankManager";
@@ -2718,9 +2721,11 @@ function useAdminProfile() {
 }
 
 export function AdminPortal() {
+  const router = useRouter();
   const [activeModule, setActiveModule] = useState<ModuleKey>("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [profileOpen, setProfileOpen] = useState(false);
+  const [sessionReady, setSessionReady] = useState(false);
   const profile = useAdminProfile();
   const visibleMenuItems = useMemo(() => visibleMenuItemsForRole(profile.roleValue), [profile.roleValue]);
   const effectiveActiveModule = useMemo(() => {
@@ -2731,6 +2736,53 @@ export function AdminPortal() {
   }, [activeModule, visibleMenuItems]);
 
   useEffect(() => {
+    if (!isAdminSessionValid()) {
+      clearAdminSession();
+      router.replace("/admin/login");
+      return;
+    }
+    refreshAdminSessionActivity();
+    setSessionReady(true);
+  }, [router]);
+
+  useEffect(() => {
+    if (!sessionReady) {
+      return;
+    }
+    let lastRefreshAt = Date.now();
+    const logoutForTimeout = () => {
+      clearAdminSession();
+      router.replace("/admin/login");
+    };
+    const handleActivity = () => {
+      const now = Date.now();
+      if (!isAdminSessionValid(now)) {
+        logoutForTimeout();
+        return;
+      }
+      if (now - lastRefreshAt >= 30_000) {
+        refreshAdminSessionActivity(now);
+        lastRefreshAt = now;
+      }
+    };
+    const checkSession = () => {
+      if (!isAdminSessionValid()) {
+        logoutForTimeout();
+      }
+    };
+    const events: Array<keyof WindowEventMap> = ["pointerdown", "keydown", "scroll", "wheel", "touchstart"];
+    events.forEach((eventName) => window.addEventListener(eventName, handleActivity, { passive: true }));
+    const timer = window.setInterval(checkSession, 30_000);
+    return () => {
+      events.forEach((eventName) => window.removeEventListener(eventName, handleActivity));
+      window.clearInterval(timer);
+    };
+  }, [router, sessionReady]);
+
+  useEffect(() => {
+    if (!sessionReady) {
+      return;
+    }
     let isMounted = true;
     fetchAdminProfile().then((remoteProfile) => {
       if (!isMounted || !remoteProfile) {
@@ -2741,7 +2793,17 @@ export function AdminPortal() {
     return () => {
       isMounted = false;
     };
-  }, []);
+  }, [sessionReady]);
+
+  if (!sessionReady) {
+    return (
+      <main className="grid min-h-screen place-items-center bg-mist px-4 text-ink">
+        <section className="panel rounded-lg p-6 text-center">
+          <p className="text-sm font-semibold text-slate-500">正在检查后台登录状态...</p>
+        </section>
+      </main>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-mist text-ink">

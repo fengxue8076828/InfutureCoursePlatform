@@ -6,10 +6,15 @@ import { ArrowRight, Building2, GraduationCap, ImagePlus, ShieldCheck } from "lu
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FormEvent } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { institutionCategoryOptions } from "@/lib/admin-data";
-import { AdminAuthResponse, persistAdminSession } from "@/lib/admin-session";
+import {
+  AdminAuthResponse,
+  isAdminSessionValid,
+  persistAdminSession,
+  refreshAdminSessionActivity
+} from "@/lib/admin-session";
 
 
 export function AdminLoginPage() {
@@ -23,6 +28,13 @@ export function AdminLoginPage() {
   const [demoCode, setDemoCode] = useState("");
   const [isRequestingCode, setIsRequestingCode] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isAdminSessionValid()) {
+      refreshAdminSessionActivity();
+      router.replace("/admin");
+    }
+  }, [router]);
 
   function updateField(field: keyof typeof form, value: string) {
     setForm((current) => ({ ...current, [field]: value }));
