@@ -1614,7 +1614,7 @@ def start_stripe_connect_onboarding(
                 country=settings.stripe_default_country,
                 email=institution.email,
                 business_type="company" if institution.institution_type == "organization" else "individual",
-                capabilities={"transfers": {"requested": True}},
+                capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
                 metadata={"institution_id": str(institution.id)},
             )
             account_id = stripe_value(account, "id")
