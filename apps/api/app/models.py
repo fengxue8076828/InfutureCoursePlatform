@@ -16,6 +16,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     func,
+    true,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -635,6 +636,7 @@ class Question(Base, TimestampMixin):
     difficulty: Mapped[str] = mapped_column(String(40), default="A2")
     points: Mapped[int] = mapped_column(Integer, default=10)
     requires_manual_grading: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_public: Mapped[bool] = mapped_column(Boolean, default=True, server_default=true(), index=True)
     status: Mapped[QuestionStatus] = mapped_column(
         Enum(QuestionStatus), default=QuestionStatus.saved, server_default=QuestionStatus.saved.value, index=True
     )

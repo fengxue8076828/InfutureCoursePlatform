@@ -93,6 +93,7 @@ type AdminQuestion = {
   difficulty: string;
   points: number;
   requires_manual_grading: boolean;
+  is_public: boolean;
   status: QuestionStatusValue;
   options: QuestionOption[];
   media_assets: QuestionMedia[];
@@ -318,6 +319,7 @@ function createBlankQuestion(
     difficulty: difficultyOptions[0],
     points: 10,
     requires_manual_grading: type === "writing",
+    is_public: true,
     status: "draft",
     options: createDefaultOptions(type),
     media_assets: []
@@ -339,6 +341,7 @@ function normalizeQuestion(raw: AdminQuestion): AdminQuestion {
     skill_area: normalizeSkillArea(raw.skill_area),
     content: raw.content ?? {},
     answer_key: raw.answer_key ?? {},
+    is_public: raw.is_public ?? true,
     status: raw.status ?? "saved",
     options: raw.options ?? [],
     media_assets: (raw.media_assets ?? []).filter((media) => media.media_type !== "handout")
@@ -1091,6 +1094,13 @@ export function QuestionBankManager() {
                     >
                       {questionStatusLabels[question.status]}
                     </span>
+                    <span
+                      className={`rounded-full px-2.5 py-1 text-xs font-bold ${
+                        question.is_public ? "bg-mint/15 text-mint" : "bg-slate-100 text-slate-500"
+                      }`}
+                    >
+                      {question.is_public ? "公开" : "机构内部"}
+                    </span>
                     {question.requires_manual_grading ? (
                       <span className="rounded-full bg-coral/10 px-2.5 py-1 text-xs font-bold text-coral">人工批改</span>
                     ) : null}
@@ -1235,6 +1245,20 @@ export function QuestionBankManager() {
                 min={1}
                 value={selectedQuestion.points}
                 onChange={(event) => updateSelected({ points: Number(event.target.value) })}
+              />
+            </label>
+            <label className="flex h-full min-h-20 items-center justify-between gap-4 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-700">
+              <span>
+                <span className="block text-ink">公开到前台题库</span>
+                <span className="mt-1 block text-xs font-medium text-slate-500">
+                  关闭后仅用于本机构练习、测验、模拟考或竞赛。
+                </span>
+              </span>
+              <input
+                type="checkbox"
+                checked={selectedQuestion.is_public}
+                onChange={(event) => updateSelected({ is_public: event.target.checked })}
+                className="h-5 w-5 accent-mint"
               />
             </label>
           </div>
@@ -1916,6 +1940,7 @@ function buildQuestionPayload(question: AdminQuestion) {
     difficulty: question.difficulty || "A2",
     points: Number(question.points) || 10,
     requires_manual_grading: question.requires_manual_grading,
+    is_public: question.is_public,
     status: question.status,
     options,
     media_assets: question.media_assets

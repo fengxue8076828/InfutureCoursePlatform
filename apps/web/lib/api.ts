@@ -81,7 +81,7 @@ export function getStudentPublicProfile(studentId: number): Promise<StudentPubli
 }
 
 export function getPublishedQuestions(): Promise<Question[]> {
-  return fetchJson("/learn/questions", []);
+  return fetchJson("/learn/public-questions", []);
 }
 
 export async function getTeacher(slug: string): Promise<Teacher | undefined> {

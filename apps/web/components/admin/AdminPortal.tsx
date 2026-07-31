@@ -1187,10 +1187,9 @@ async function startStripeConnectOnboarding(): Promise<{ draft?: InstitutionDraf
     const payload = (await response.json()) as StripeConnectOnboardingResponse;
     return { draft: institutionFromApi(payload.institution), url: payload.url };
   } catch {
-    return { error: "Stripe \u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002" };
+    return { error: apiConnectionErrorMessage("Stripe \u64cd\u4f5c\u5931\u8d25") };
   }
 }
-
 
 async function fetchInstitutionFinance(): Promise<{ finance?: InstitutionFinance; error?: string }> {
   try {
@@ -1199,14 +1198,13 @@ async function fetchInstitutionFinance(): Promise<{ finance?: InstitutionFinance
       cache: "no-store"
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "财务数据读取失败。") };
+      return { error: await readApiErrorMessage(response, "\u8d22\u52a1\u6570\u636e\u8bfb\u53d6\u5931\u8d25\u3002") };
     }
     return { finance: (await response.json()) as InstitutionFinance };
   } catch {
-    return { error: "无法连接 FastAPI 服务，请确认后端正在运行。" };
+    return { error: apiConnectionErrorMessage("\u65e0\u6cd5\u8bfb\u53d6 Stripe \u8d22\u52a1\u4fe1\u606f") };
   }
 }
-
 
 function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): AdminNotice[] {
   const notices: AdminNotice[] = [];
@@ -1218,8 +1216,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-not-connected",
       tone: "info",
-      title: "Stripe 收款账户未连接",
-      body: "课程可以正常发布，但学生付款和机构分账需要先连接 Stripe 收款账户。"
+      title: "Stripe \u6536\u6b3e\u8d26\u6237\u672a\u8fde\u63a5",
+      body: "\u8bfe\u7a0b\u53ef\u4ee5\u6b63\u5e38\u53d1\u5e03\uff0c\u4f46\u5b66\u751f\u4ed8\u6b3e\u548c\u673a\u6784\u5206\u8d26\u9700\u8981\u8fde\u63a5 Stripe \u6536\u6b3e\u8d26\u6237\u3002"
     });
   }
 
@@ -1227,8 +1225,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-disabled",
       tone: "danger",
-      title: "Stripe 账户存在限制",
-      body: `Stripe 返回限制原因：${requirements.disabled_reason}。请进入财务中心继续完成验证。`
+      title: "Stripe \u8d26\u6237\u5b58\u5728\u9650\u5236",
+      body: `Stripe \u8fd4\u56de\u9650\u5236\u539f\u56e0\uff1a${requirements.disabled_reason}\u3002\u8bf7\u8fdb\u5165\u8d22\u52a1\u4e2d\u5fc3\u7ee7\u7eed\u5b8c\u6210\u9a8c\u8bc1\u3002`
     });
   }
 
@@ -1236,8 +1234,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-past-due",
       tone: "danger",
-      title: "Stripe 资料已逾期",
-      body: `有 ${requirements.past_due.length} 项资料已逾期，可能影响收款或提现。请尽快在 Stripe 后台补充。`
+      title: "Stripe \u8d44\u6599\u5df2\u903e\u671f",
+      body: `\u6709 ${requirements.past_due.length} \u9879\u8d44\u6599\u5df2\u903e\u671f\uff0c\u53ef\u80fd\u5f71\u54cd\u6536\u6b3e\u6216\u63d0\u73b0\u3002\u8bf7\u5c3d\u5feb\u5230 Stripe \u540e\u53f0\u8865\u5145\u3002`
     });
   }
 
@@ -1245,8 +1243,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-currently-due",
       tone: "warning",
-      title: "Stripe 要求补充资料",
-      body: `当前有 ${requirements.currently_due.length} 项资料需要补充。到期前未完成可能影响提现或收款能力。`
+      title: "Stripe \u8981\u6c42\u8865\u5145\u8d44\u6599",
+      body: `\u5f53\u524d\u6709 ${requirements.currently_due.length} \u9879\u8d44\u6599\u9700\u8981\u8865\u5145\u3002\u5230\u671f\u524d\u672a\u5b8c\u6210\u53ef\u80fd\u5f71\u54cd\u63d0\u73b0\u6216\u6536\u6b3e\u80fd\u529b\u3002`
     });
   }
 
@@ -1254,8 +1252,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-payouts-disabled",
       tone: "warning",
-      title: "Stripe 提现暂未开启",
-      body: "Stripe 当前没有开启 payouts_enabled。课程仍可发布，但提现可能需要先完成 Stripe 要求的资料补充。"
+      title: "Stripe \u63d0\u73b0\u6682\u672a\u5f00\u542f",
+      body: "Stripe \u5f53\u524d\u6ca1\u6709\u5f00\u542f payouts_enabled\u3002\u8bfe\u7a0b\u4ecd\u53ef\u53d1\u5e03\uff0c\u4f46\u63d0\u73b0\u53ef\u80fd\u9700\u8981\u5148\u5b8c\u6210 Stripe \u8981\u6c42\u7684\u8d44\u6599\u8865\u5145\u3002"
     });
   }
 
@@ -1263,8 +1261,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-charges-disabled",
       tone: "warning",
-      title: "Stripe 收款暂未开启",
-      body: "Stripe 当前没有开启 charges_enabled。请在财务中心进入 Stripe 后台查看需要补充的信息。"
+      title: "Stripe \u6536\u6b3e\u6682\u672a\u5f00\u542f",
+      body: "Stripe \u5f53\u524d\u6ca1\u6709\u5f00\u542f charges_enabled\u3002\u8bf7\u5728\u8d22\u52a1\u4e2d\u5fc3\u8fdb\u5165 Stripe \u540e\u53f0\u67e5\u770b\u9700\u8981\u8865\u5145\u7684\u4fe1\u606f\u3002"
     });
   }
 
@@ -1272,8 +1270,8 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-pending-verification",
       tone: "info",
-      title: "Stripe 正在审核资料",
-      body: `有 ${requirements.pending_verification.length} 项资料正在 Stripe 审核中。`
+      title: "Stripe \u6b63\u5728\u5ba1\u6838\u8d44\u6599",
+      body: `\u6709 ${requirements.pending_verification.length} \u9879\u8d44\u6599\u6b63\u5728 Stripe \u5ba1\u6838\u4e2d\u3002`
     });
   }
 
@@ -1281,13 +1279,14 @@ function buildAdminStripeFinanceNotifications(finance: InstitutionFinance): Admi
     notices.push({
       id: "stripe-eventually-due",
       tone: "info",
-      title: "Stripe 后续可能需要补充资料",
-      body: `Stripe 提示后续可能需要补充 ${requiredLater} 项资料，建议定期查看财务中心。`
+      title: "Stripe \u540e\u7eed\u53ef\u80fd\u9700\u8981\u8865\u5145\u8d44\u6599",
+      body: `Stripe \u63d0\u793a\u540e\u7eed\u53ef\u80fd\u9700\u8981\u8865\u5145 ${requiredLater} \u9879\u8d44\u6599\uff0c\u5efa\u8bae\u5b9a\u671f\u67e5\u770b\u8d22\u52a1\u4e2d\u5fc3\u3002`
     });
   }
 
   return notices.slice(0, 8);
 }
+
 async function createStripeDashboardLink(): Promise<{ draft?: InstitutionDraft; url?: string; error?: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/login-link`, {
@@ -1295,14 +1294,15 @@ async function createStripeDashboardLink(): Promise<{ draft?: InstitutionDraft; 
       headers: getAdminRequestHeaders()
     });
     if (!response.ok) {
-      return { error: await readApiErrorMessage(response, "Stripe 收款账户管理入口创建失败。") };
+      return { error: await readApiErrorMessage(response, "Stripe \u6536\u6b3e\u8d26\u6237\u7ba1\u7406\u5165\u53e3\u521b\u5efa\u5931\u8d25\u3002") };
     }
     const payload = (await response.json()) as StripeDashboardLinkResponse;
     return { draft: institutionFromApi(payload.institution), url: payload.url };
   } catch {
-    return { error: "Stripe 收款账户入口创建失败，请确认 FastAPI 服务正在运行。" };
+    return { error: apiConnectionErrorMessage("Stripe \u6536\u6b3e\u8d26\u6237\u5165\u53e3\u521b\u5efa\u5931\u8d25") };
   }
 }
+
 async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; error?: string }> {
   try {
     const response = await fetch(`${API_BASE_URL}/admin/institution/stripe/sync`, {
@@ -1314,10 +1314,9 @@ async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; er
     }
     return { draft: institutionFromApi((await response.json()) as ApiInstitution) };
   } catch {
-    return { error: "Stripe \u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002" };
+    return { error: apiConnectionErrorMessage("Stripe \u64cd\u4f5c\u5931\u8d25") };
   }
 }
-
 function profileFromApi(profile: ApiAdminProfile): AdminProfile {
   const roleValue = normalizeAdminRoleValue(profile.role);
   return {

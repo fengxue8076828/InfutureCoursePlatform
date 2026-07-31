@@ -1,4 +1,4 @@
-﻿const localApiBaseUrl = "http://localhost:8000/api/v1";
+const defaultApiBaseUrl = "https://api.infuture.world/api/v1";
 
 function trimTrailingSlash(value: string) {
   return value.replace(/\/+$/, "");
@@ -19,7 +19,7 @@ function inferBrowserApiBaseUrl() {
 
   const { protocol, hostname } = window.location;
   if (isLocalHostname(hostname)) {
-    return localApiBaseUrl;
+    return defaultApiBaseUrl;
   }
 
   const rootDomain = hostname.replace(/^www\./i, "");
@@ -34,7 +34,7 @@ export function getApiBaseUrl() {
     return trimTrailingSlash(configured);
   }
 
-  return trimTrailingSlash(browserFallback ?? configured ?? localApiBaseUrl);
+  return trimTrailingSlash(browserFallback ?? configured ?? defaultApiBaseUrl);
 }
 
 export const API_BASE_URL = getApiBaseUrl();
@@ -43,6 +43,6 @@ export function getApiOrigin() {
   return API_BASE_URL.replace(/\/api\/v\d+\/?$/i, "");
 }
 
-export function apiConnectionErrorMessage(action = "无法连接 API 服务") {
-  return `${action}，请确认 ${getApiOrigin()} 可以访问。`;
+export function apiConnectionErrorMessage(action = "\u65e0\u6cd5\u8fde\u63a5 API \u670d\u52a1") {
+  return `${action}\uff0c\u8bf7\u786e\u8ba4 ${getApiOrigin()} \u53ef\u4ee5\u8bbf\u95ee\u3002`;
 }

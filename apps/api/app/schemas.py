@@ -875,6 +875,7 @@ class QuestionOut(OrmModel):
     difficulty: str
     points: int
     requires_manual_grading: bool
+    is_public: bool = True
     status: QuestionStatus
     options: list[QuestionOptionOut] = []
     media_assets: list[QuestionMediaOut] = []
@@ -900,6 +901,7 @@ class StudentQuestionOut(OrmModel):
     difficulty: str
     points: int
     requires_manual_grading: bool
+    is_public: bool = True
     institution: InstitutionOut | None = None
     options: list[StudentQuestionOptionOut] = []
     media_assets: list[QuestionMediaOut] = []
@@ -1348,6 +1350,7 @@ class QuestionCreate(BaseModel):
     difficulty: str = "A2"
     points: int = 10
     requires_manual_grading: bool = False
+    is_public: bool = True
     status: QuestionStatus = QuestionStatus.saved
     options: list[QuestionOptionCreate] = Field(default_factory=list)
     media_assets: list[QuestionMediaCreate] = Field(default_factory=list)
@@ -1365,6 +1368,7 @@ class QuestionUpdate(BaseModel):
     difficulty: str | None = None
     points: int | None = None
     requires_manual_grading: bool | None = None
+    is_public: bool | None = None
     status: QuestionStatus | None = None
     options: list[QuestionOptionCreate] | None = None
     media_assets: list[QuestionMediaCreate] | None = None

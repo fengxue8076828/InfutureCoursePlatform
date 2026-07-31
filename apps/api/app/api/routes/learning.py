@@ -1754,6 +1754,36 @@ def list_questions(
     return list(db.scalars(stmt))
 
 
+@router.get("/public-questions", response_model=list[StudentQuestionOut])
+def list_public_questions(
+    ids: str | None = None,
+    type: str | None = None,
+    db: Session = Depends(get_db),
+) -> list[Question]:
+    stmt = (
+        select(Question)
+        .where(
+            Question.status == QuestionStatus.published,
+            Question.is_public.is_(True),
+            Question.type != QuestionType.code_review,
+        )
+        .options(joinedload(Question.institution), selectinload(Question.options), selectinload(Question.media_assets))
+        .order_by(Question.created_at.desc())
+    )
+    if ids:
+        question_ids = [
+            int(question_id)
+            for question_id in ids.split(",")
+            if question_id.strip().isdigit()
+        ]
+        if not question_ids:
+            return []
+        stmt = stmt.where(Question.id.in_(question_ids))
+    if type:
+        stmt = stmt.where(Question.type == type)
+    return list(db.scalars(stmt))
+
+
 @router.post("/questions/{question_id}/run-code", response_model=CodeRunOut)
 def run_question_code(
     question_id: int,

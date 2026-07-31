@@ -397,6 +397,7 @@ export type Question = {
   difficulty: string;
   points: number;
   requires_manual_grading: boolean;
+  is_public?: boolean;
   options: QuestionOption[];
   media_assets: QuestionMedia[];
 };

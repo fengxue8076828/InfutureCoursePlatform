@@ -368,7 +368,7 @@ export function SavedQuestionBankPanel({ studentSession }: { studentSession: Stu
       setIsLoading(true);
       setStatus(ui.loadingBank);
       try {
-        const response = await fetch(`${API_BASE_URL}/learn/questions?ids=${encodeURIComponent(allIdsKey)}&ts=${Date.now()}`, {
+        const response = await fetch(`${API_BASE_URL}/learn/public-questions?ids=${encodeURIComponent(allIdsKey)}&ts=${Date.now()}`, {
           headers: getStudentRequestHeaders(),
           cache: "no-store"
         });

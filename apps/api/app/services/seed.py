@@ -140,6 +140,11 @@ def ensure_schema_extensions(db: Session) -> None:
             db.execute(text("CREATE INDEX IF NOT EXISTS ix_questions_created_by_user_id ON questions(created_by_user_id)"))
         if "hint" not in question_columns:
             db.execute(text("ALTER TABLE questions ADD COLUMN hint TEXT"))
+        if "is_public" not in question_columns:
+            db.execute(
+                text("ALTER TABLE questions ADD COLUMN is_public BOOLEAN NOT NULL DEFAULT TRUE")
+            )
+            db.execute(text("CREATE INDEX IF NOT EXISTS ix_questions_is_public ON questions(is_public)"))
         db.execute(
             text(
                 """

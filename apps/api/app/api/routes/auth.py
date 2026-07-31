@@ -26,6 +26,7 @@ from app.schemas import (
     SocialLoginIn,
     UserCreate,
 )
+from app.services.stripe_connect import create_connect_account_for_institution
 
 router = APIRouter()
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
@@ -235,6 +236,7 @@ def register_institution(payload: InstitutionRegisterIn, db: Session = Depends(g
         hashed_password=pwd_context.hash("888888"),
         institution=institution,
     )
+    create_connect_account_for_institution(institution)
     db.add_all([institution, user])
     db.commit()
     db.refresh(user)
