@@ -83,6 +83,7 @@ from app.schemas import (
 )
 from app.services.code_runner import code_tests_for_question, run_python_code
 from app.services.points import calculate_student_point_detail, load_student_with_point_data
+from app.services.subscriptions import stop_course_subscription_renewal_after_completion
 
 router = APIRouter()
 
@@ -1870,6 +1871,7 @@ def get_student_lesson_item(
 
 
 def update_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
+    previous_status = enrollment.status
     total_items = db.scalar(
         select(func.count(LessonItem.id))
         .join(LessonItem.chapter)
@@ -1883,6 +1885,8 @@ def update_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
     )
     enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
     enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
+    if enrollment.status == "completed" and previous_status != "completed":
+        stop_course_subscription_renewal_after_completion(db, enrollment)
 
 
 def latest_submission_by_question_id(

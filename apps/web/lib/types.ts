@@ -428,13 +428,20 @@ export type ExamPaperSubmission = {
 
 export type CompetitionRegistration = {
   id: number;
-  paper_id: number;
+  paper_id?: number | null;
+  competition_id?: number | null;
   student_name: string;
   student_email: string;
   phone?: string | null;
   note?: string | null;
   user_id?: number | null;
   created_at: string;
+};
+
+export type CompetitionPrize = {
+  rank: number;
+  prize_type: string;
+  description: string;
 };
 
 export type ExamPaper = {
@@ -447,8 +454,10 @@ export type ExamPaper = {
   instructions: string;
   audience: string;
   kind: ExamPaperKind;
-  source_type: ExamPaperSourceType;
+  source_type?: ExamPaperSourceType | null;
   past_year?: number | null;
+  difficulty?: string | null;
+  prizes?: CompetitionPrize[];
   duration_minutes: number;
   status: ExamPaperStatus;
   starts_at?: string | null;

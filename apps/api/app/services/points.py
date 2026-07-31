@@ -12,6 +12,7 @@ from app.models import (
     CommunityNoteShare,
     CommunityQuestion,
     CommunityReaction,
+    CompetitionSubmission,
     Course,
     CourseChapter,
     Enrollment,
@@ -408,6 +409,51 @@ def exam_submission_point_events(
     return total_points, weekly_points, events
 
 
+def competition_submission_point_events(
+    submissions: list[CompetitionSubmission],
+    week_start: datetime,
+) -> tuple[int, int, list[StudentPointEvent]]:
+    best_by_competition: dict[int, CompetitionSubmission] = {}
+    for submission in submissions:
+        if not submission.competition:
+            continue
+        total_score = max(float(submission.total_score or 0), 0)
+        if total_score <= 0:
+            continue
+        ratio = min(max(float(submission.score or 0), 0) / total_score, 1)
+        current = best_by_competition.get(submission.competition_id)
+        current_total = max(float(current.total_score or 0), 0) if current else 0
+        current_ratio = (
+            min(max(float(current.score or 0), 0) / current_total, 1)
+            if current and current_total > 0
+            else -1
+        )
+        if current is None or ratio > current_ratio:
+            best_by_competition[submission.competition_id] = submission
+
+    total_points = 0
+    weekly_points = 0
+    events: list[StudentPointEvent] = []
+    for submission in best_by_competition.values():
+        competition = submission.competition
+        total_score = max(float(submission.total_score or 0), 1)
+        ratio = min(max(float(submission.score or 0), 0) / total_score, 1)
+        points = 30 + round(100 * ratio) + (30 if ratio >= PASSING_RATIO else 0) + (20 if ratio >= 0.95 else 0)
+        total_points += points
+        if is_this_week(submission.submitted_at, week_start):
+            weekly_points += points
+        events.append(
+            build_point_event(
+                label="\u5b8c\u6210\u7ade\u8d5b\u8bd5\u5377",
+                source="competition",
+                points=points,
+                occurred_at=submission.submitted_at,
+                detail=f"{competition.title} \u00b7 \u5f97\u5206\u7387 {round(ratio * 100, 1)}%",
+            )
+        )
+    return total_points, weekly_points, events
+
+
 def follower_point_events(db: Session, user_id: int, week_start: datetime) -> tuple[int, int, int, list[StudentPointEvent]]:
     follows = list(
         db.scalars(
@@ -550,10 +596,17 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
     weekly_points += community_weekly_points
     recent_events.extend(community_events)
 
-    competition_points, competition_weekly_points, competition_events = exam_submission_point_events(
+    mock_exam_points, mock_exam_weekly_points, mock_exam_events = exam_submission_point_events(
         list(student.exam_submissions),
         week_start,
     )
+    competition_points, competition_weekly_points, competition_events = competition_submission_point_events(
+        list(student.competition_submissions),
+        week_start,
+    )
+    competition_points += mock_exam_points
+    competition_weekly_points += mock_exam_weekly_points
+    competition_events = mock_exam_events + competition_events
     total_points += competition_points
     weekly_points += competition_weekly_points
     recent_events.extend(competition_events)
@@ -620,6 +673,7 @@ def student_point_load_options():
         .joinedload(ProgressRecord.lesson_item),
         selectinload(User.submissions).joinedload(Submission.question),
         selectinload(User.exam_submissions).joinedload(ExamPaperSubmission.paper),
+        selectinload(User.competition_submissions).joinedload(CompetitionSubmission.competition),
     )
 
 

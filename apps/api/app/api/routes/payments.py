@@ -195,6 +195,8 @@ def handle_subscription_changed(subscription_obj: Any, db: Session) -> None:
     stripe_customer_id = stripe_object_id(stripe_value(subscription_obj, "customer"))
     period_start = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_start"))
     period_end = timestamp_to_datetime(stripe_value(subscription_obj, "current_period_end"))
+    cancel_at_period_end = bool(stripe_value(subscription_obj, "cancel_at_period_end", False))
+    subscription = None
     if stripe_status in {"active", "trialing"}:
         subscription = activate_subscription_from_metadata(
             db,
@@ -204,17 +206,16 @@ def handle_subscription_changed(subscription_obj: Any, db: Session) -> None:
             period_start=period_start,
             period_end=period_end,
         )
-        if subscription:
-            return
 
-    subscription = db.scalar(
-        select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
-    )
+    if not subscription:
+        subscription = db.scalar(
+            select(Subscription).where(Subscription.stripe_subscription_id == stripe_subscription_id)
+        )
     if not subscription:
         return
 
     if stripe_status in {"active", "trialing"}:
-        subscription.status = "active"
+        subscription.status = "ending" if cancel_at_period_end else "active"
     elif stripe_status in {"canceled", "unpaid", "incomplete_expired"}:
         subscription.status = "canceled"
     elif stripe_status in {"past_due", "incomplete"}:

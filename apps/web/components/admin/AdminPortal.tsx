@@ -296,6 +296,12 @@ type AdminCompetitionRegistration = {
   createdAt: string;
 };
 
+type AdminCompetitionPrize = {
+  rank: number;
+  prizeType: string;
+  description: string;
+};
+
 type AdminExamPaper = {
   id: number;
   slug: string;
@@ -307,6 +313,8 @@ type AdminExamPaper = {
   kind: ExamPaperKind;
   sourceType: ExamPaperSourceType;
   pastYear: string;
+  difficulty: string;
+  prizes: AdminCompetitionPrize[];
   durationMinutes: number;
   status: ExamPaperStatus;
   startsAt: string;
@@ -331,8 +339,14 @@ type ApiExamPaper = {
   instructions: string;
   audience: string;
   kind: ExamPaperKind;
-  source_type: ExamPaperSourceType;
+  source_type?: ExamPaperSourceType | null;
   past_year?: number | null;
+  difficulty?: string | null;
+  prizes?: Array<{
+    rank: number;
+    prize_type: string;
+    description: string;
+  }> | null;
   duration_minutes: number;
   status: ExamPaperStatus;
   starts_at?: string | null;
@@ -985,6 +999,8 @@ function createBlankExamPaperDraft(kind: ExamPaperKind): AdminExamPaper {
     kind,
     sourceType: "mock",
     pastYear: "",
+    difficulty: "",
+    prizes: [],
     durationMinutes: kind === "competition" ? 90 : 60,
     status: "draft",
     startsAt: kind === "competition" ? toDateTimeInputValue() : "",
@@ -1011,8 +1027,14 @@ function examPaperFromApi(paper: ApiExamPaper): AdminExamPaper {
     instructions: paper.instructions ?? "",
     audience: paper.audience ?? "",
     kind: paper.kind,
-    sourceType: paper.source_type,
+    sourceType: paper.source_type ?? "mock",
     pastYear: paper.past_year ? String(paper.past_year) : "",
+    difficulty: paper.difficulty ?? "",
+    prizes: (paper.prizes ?? []).map((prize) => ({
+      rank: prize.rank,
+      prizeType: prize.prize_type,
+      description: prize.description
+    })),
     durationMinutes: paper.duration_minutes,
     status: paper.status,
     startsAt: paper.starts_at ? toDateTimeInputValue(paper.starts_at) : "",
@@ -1058,24 +1080,44 @@ function examPaperFromApi(paper: ApiExamPaper): AdminExamPaper {
 
 function examPaperToApiPayload(paper: AdminExamPaper) {
   const pastYear = Number(paper.pastYear);
-  return {
+  const basePayload = {
     title: paper.title.trim(),
     description: paper.description.trim(),
     cover_url: paper.coverUrl.trim(),
     instructions: paper.instructions.trim(),
     audience: paper.audience.trim(),
-    kind: paper.kind,
-    source_type: paper.sourceType,
-    past_year: paper.sourceType === "past_paper" && Number.isFinite(pastYear) ? pastYear : null,
     duration_minutes: Math.max(1, Number(paper.durationMinutes) || 60),
     status: paper.status,
-    starts_at: paper.kind === "competition" && paper.startsAt ? dateTimeInputToIso(paper.startsAt) : null,
-    ends_at: paper.kind === "competition" && paper.endsAt ? dateTimeInputToIso(paper.endsAt) : null,
     category_id: paper.categoryId,
     questions: paper.questions.map((link) => ({
       question_id: link.question.id,
       points_override: link.points
     }))
+  };
+
+  if (paper.kind === "competition") {
+    return {
+      ...basePayload,
+      difficulty: paper.difficulty.trim(),
+      prizes: paper.prizes
+        .map((prize) => ({
+          rank: Math.max(1, Number(prize.rank) || 1),
+          prize_type: prize.prizeType.trim() || "item",
+          description: prize.description.trim()
+        }))
+        .filter((prize) => prize.description || prize.prize_type),
+      starts_at: paper.startsAt ? dateTimeInputToIso(paper.startsAt) : null,
+      ends_at: paper.endsAt ? dateTimeInputToIso(paper.endsAt) : null
+    };
+  }
+
+  return {
+    ...basePayload,
+    kind: paper.kind,
+    source_type: paper.sourceType,
+    past_year: paper.sourceType === "past_paper" && Number.isFinite(pastYear) ? pastYear : null,
+    starts_at: null,
+    ends_at: null
   };
 }
 
@@ -7822,12 +7864,14 @@ const examPaperSourceLabels: Record<ExamPaperSourceType, string> = {
 
 function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
   const isCompetition = kind === "competition";
+  const apiPath = isCompetition ? "competitions" : "exam-papers";
   const moduleTitle = isCompetition ? "竞赛" : "模拟考试";
   const [papers, setPapers] = useState<AdminExamPaper[]>([]);
   const [draft, setDraft] = useState<AdminExamPaper>(() => createBlankExamPaperDraft(kind));
   const [selectedPaperId, setSelectedPaperId] = useState<number>(draft.id);
   const [categories, setCategories] = useState<CourseCategory[]>([]);
   const [availableQuestions, setAvailableQuestions] = useState<CourseQuestion[]>([]);
+  const [difficultyOptions, setDifficultyOptions] = useState<string[]>([]);
   const [questionQuery, setQuestionQuery] = useState("");
   const [status, setStatus] = useState(`正在加载${moduleTitle}...`);
   const [isSaving, setIsSaving] = useState(false);
@@ -7870,8 +7914,8 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
   async function loadData(nextSelectedId?: number) {
     setIsLoading(true);
     try {
-      const [papersResponse, categoriesResponse, questionsResponse] = await Promise.all([
-        fetch(`${API_BASE_URL}/admin/exam-papers?kind=${kind}`, {
+      const [papersResponse, categoriesResponse, questionsResponse, difficultyResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/admin/${apiPath}${isCompetition ? "" : `?kind=${kind}`}`, {
           headers: getAdminRequestHeaders(),
           cache: "no-store"
         }),
@@ -7880,6 +7924,10 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
           cache: "no-store"
         }),
         fetch(`${API_BASE_URL}/admin/question-pool`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        }),
+        fetch(`${API_BASE_URL}/admin/difficulty-levels`, {
           headers: getAdminRequestHeaders(),
           cache: "no-store"
         })
@@ -7899,6 +7947,10 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
           .map((question) => normalizeQuestionForCoursePicker(question))
           .filter((question): question is CourseQuestion => Boolean(question));
         setAvailableQuestions(nextQuestions);
+      }
+      if (difficultyResponse.ok) {
+        const nextDifficulty = (await difficultyResponse.json()) as { levels?: string[] };
+        setDifficultyOptions(nextDifficulty.levels ?? []);
       }
 
       const nextPapers = ((await papersResponse.json()) as ApiExamPaper[]).map((paper) => examPaperFromApi(paper));
@@ -7980,11 +8032,43 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
     });
   }
 
+  function addPrize() {
+    setDraft((current) => ({
+      ...current,
+      prizes: [
+        ...current.prizes,
+        {
+          rank: current.prizes.length + 1,
+          prizeType: "item",
+          description: ""
+        }
+      ]
+    }));
+  }
+
+  function updatePrize(index: number, updates: Partial<AdminCompetitionPrize>) {
+    setDraft((current) => ({
+      ...current,
+      prizes: current.prizes.map((prize, prizeIndex) =>
+        prizeIndex === index ? { ...prize, ...updates } : prize
+      )
+    }));
+  }
+
+  function removePrize(index: number) {
+    setDraft((current) => ({
+      ...current,
+      prizes: current.prizes
+        .filter((_, prizeIndex) => prizeIndex !== index)
+        .map((prize, prizeIndex) => ({ ...prize, rank: prizeIndex + 1 }))
+    }));
+  }
+
   async function savePaper() {
     setIsSaving(true);
     try {
       const isNew = draft.id < 0;
-      const response = await fetch(`${API_BASE_URL}/admin/exam-papers${isNew ? "" : `/${draft.id}`}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${apiPath}${isNew ? "" : `/${draft.id}`}`, {
         method: isNew ? "POST" : "PUT",
         headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(examPaperToApiPayload(draft))
@@ -8018,7 +8102,7 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
       return;
     }
     try {
-      const response = await fetch(`${API_BASE_URL}/admin/exam-papers/${draft.id}`, {
+      const response = await fetch(`${API_BASE_URL}/admin/${apiPath}/${draft.id}`, {
         method: "DELETE",
         headers: getAdminRequestHeaders()
       });
@@ -8142,27 +8226,48 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
               ))}
             </select>
           </label>
-          <label className="block">
-            <span className="text-sm font-black text-slate-700">试卷类型</span>
-            <select
-              value={draft.sourceType}
-              onChange={(event) => updateDraft({ sourceType: event.target.value as ExamPaperSourceType })}
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
-            >
-              <option value="mock">{examPaperSourceLabels.mock}</option>
-              <option value="past_paper">{examPaperSourceLabels.past_paper}</option>
-            </select>
-          </label>
-          <label className="block">
-            <span className="text-sm font-black text-slate-700">真题年份</span>
-            <input
-              value={draft.pastYear}
-              disabled={draft.sourceType !== "past_paper"}
-              onChange={(event) => updateDraft({ pastYear: event.target.value })}
-              placeholder="例如 2025"
-              className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
-            />
-          </label>
+          {!isCompetition ? (
+            <>
+              <label className="block">
+                <span className="text-sm font-black text-slate-700">试卷类型</span>
+                <select
+                  value={draft.sourceType}
+                  onChange={(event) => updateDraft({ sourceType: event.target.value as ExamPaperSourceType })}
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+                >
+                  <option value="mock">{examPaperSourceLabels.mock}</option>
+                  <option value="past_paper">{examPaperSourceLabels.past_paper}</option>
+                </select>
+              </label>
+              <label className="block">
+                <span className="text-sm font-black text-slate-700">真题年份</span>
+                <input
+                  value={draft.pastYear}
+                  disabled={draft.sourceType !== "past_paper"}
+                  onChange={(event) => updateDraft({ pastYear: event.target.value })}
+                  placeholder="例如 2025"
+                  className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none disabled:bg-slate-100 disabled:text-slate-400"
+                />
+              </label>
+            </>
+          ) : null}
+          {isCompetition ? (
+            <label className="block">
+              <span className="text-sm font-black text-slate-700">难度级别</span>
+              <select
+                value={draft.difficulty}
+                onChange={(event) => updateDraft({ difficulty: event.target.value })}
+                className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-bold text-slate-800 focus:border-mint focus:outline-none"
+              >
+                <option value="">请选择难度级别</option>
+                {difficultyOptions.map((level) => (
+                  <option key={level} value={level}>
+                    {level}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label className="block">
             <span className="text-sm font-black text-slate-700">答题时长（分钟）</span>
             <input
@@ -8247,6 +8352,80 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
             className="mt-2 w-full rounded-lg border border-slate-200 px-3 py-3 text-sm font-semibold text-slate-700 focus:border-mint focus:outline-none"
           />
         </label>
+
+        {isCompetition ? (
+          <div className="mt-6 rounded-lg border border-amber-100 bg-amber-50/60 p-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-black text-ink">优胜者奖金/奖品</h3>
+                <p className="mt-1 text-sm font-semibold text-slate-500">
+                  可以按名次设置奖金、奖品或荣誉，保存后会显示到前台竞赛详情。
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={addPrize}
+                className="inline-flex items-center gap-2 rounded-lg bg-white px-4 py-2 text-sm font-black text-amber-700 shadow-sm ring-1 ring-amber-200 transition hover:bg-amber-50"
+              >
+                <Plus size={16} />
+                添加奖项
+              </button>
+            </div>
+            <div className="mt-4 space-y-3">
+              {draft.prizes.map((prize, index) => (
+                <div
+                  key={`${prize.rank}-${index}`}
+                  className="grid gap-3 rounded-lg border border-amber-100 bg-white p-3 md:grid-cols-[110px_140px_minmax(0,1fr)_auto]"
+                >
+                  <label className="block">
+                    <span className="text-xs font-black text-slate-500">名次</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={prize.rank}
+                      onChange={(event) => updatePrize(index, { rank: Number(event.target.value) })}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold focus:border-mint focus:outline-none"
+                    />
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-black text-slate-500">类型</span>
+                    <select
+                      value={prize.prizeType}
+                      onChange={(event) => updatePrize(index, { prizeType: event.target.value })}
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold focus:border-mint focus:outline-none"
+                    >
+                      <option value="cash">奖金</option>
+                      <option value="item">奖品</option>
+                      <option value="certificate">证书/荣誉</option>
+                    </select>
+                  </label>
+                  <label className="block">
+                    <span className="text-xs font-black text-slate-500">奖金/奖品说明</span>
+                    <input
+                      value={prize.description}
+                      onChange={(event) => updatePrize(index, { description: event.target.value })}
+                      placeholder="例如 第 1 名 100 欧元 / 荣誉证书"
+                      className="mt-1 w-full rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold focus:border-mint focus:outline-none"
+                    />
+                  </label>
+                  <button
+                    type="button"
+                    onClick={() => removePrize(index)}
+                    className="self-end rounded-lg border border-coral/30 px-3 py-2 text-sm font-black text-coral transition hover:bg-coral/5"
+                    aria-label="删除奖项"
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                </div>
+              ))}
+              {!draft.prizes.length ? (
+                <div className="rounded-lg border border-dashed border-amber-200 bg-white/70 p-4 text-sm font-semibold text-slate-500">
+                  暂未设置奖项。没有奖项时前台不会显示奖金/奖品说明。
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-6 rounded-lg border border-slate-200 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">

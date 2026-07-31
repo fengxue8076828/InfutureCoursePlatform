@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.models import Course, CourseChapter, Enrollment, LessonItem, Subscription, User
 
 
@@ -105,3 +106,42 @@ def activate_course_subscription(
         course.students_count = (course.students_count or 0) + 1
 
     return enrollment, subscription, created_enrollment
+
+
+def stop_course_subscription_renewal_after_completion(db: Session, enrollment: Enrollment) -> Subscription | None:
+    subscription = db.scalar(
+        select(Subscription)
+        .where(
+            Subscription.user_id == enrollment.user_id,
+            Subscription.course_id == enrollment.course_id,
+            Subscription.status.in_(("active", "past_due", "trialing")),
+        )
+        .order_by(Subscription.created_at.desc())
+    )
+    if not subscription:
+        return None
+
+    if subscription.payment_provider == "stripe" and subscription.stripe_subscription_id:
+        settings = get_settings()
+        if not settings.stripe_secret_key:
+            print(f"[stripe-subscription-cancel-skipped] subscription={subscription.id}: Stripe is not configured")
+            return subscription
+        try:
+            import stripe
+
+            stripe.api_key = settings.stripe_secret_key
+            stripe_subscription = stripe.Subscription.modify(
+                subscription.stripe_subscription_id,
+                cancel_at_period_end=True,
+            )
+            current_period_end = getattr(stripe_subscription, "current_period_end", None)
+            if current_period_end:
+                subscription.current_period_end = datetime.utcfromtimestamp(int(current_period_end))
+            subscription.status = "ending"
+        except Exception as exc:
+            print(f"[stripe-subscription-cancel-error] subscription={subscription.id}: {exc}")
+            return subscription
+    else:
+        subscription.status = "completed"
+
+    return subscription

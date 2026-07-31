@@ -23,7 +23,10 @@ from app.models import (
     CourseChapter,
     CourseStatus,
     Enrollment,
+    Competition,
+    CompetitionQuestion,
     CompetitionRegistration,
+    CompetitionSubmission,
     ExamPaper,
     ExamPaperKind,
     ExamPaperQuestion,
@@ -74,12 +77,17 @@ from app.schemas import (
     CourseCreate,
     CourseDetailOut,
     CourseUpdate,
+    CompetitionCreate,
+    CompetitionOut,
+    CompetitionQuestionOut,
     ExamPaperCreate,
     ExamPaperOut,
     ExamPaperQuestionOut,
     ExamPaperSubmissionOut,
     ExamPaperUpdate,
     CompetitionRegistrationOut,
+    CompetitionSubmissionOut,
+    CompetitionUpdate,
     GradeSubmissionIn,
     InstitutionFinanceOut,
     InstitutionOut,
@@ -99,6 +107,7 @@ from app.schemas import (
     TeacherCreate,
     TeacherOut,
 )
+from app.services.subscriptions import stop_course_subscription_renewal_after_completion
 from app.services.code_runner import run_python_code
 
 router = APIRouter()
@@ -977,6 +986,8 @@ def validate_exam_questions(question_inputs: list, institution_id: int, db: Sess
 
 def normalize_exam_paper_payload(payload: ExamPaperCreate | ExamPaperUpdate, institution_id: int, db: Session) -> dict:
     data = payload.model_dump(exclude={"questions"})
+    if data.get("kind") == ExamPaperKind.competition:
+        raise HTTPException(status_code=422, detail="Use /admin/competitions for competitions")
     data["title"] = data["title"].strip()
     data["description"] = data.get("description", "").strip()
     data["cover_url"] = data.get("cover_url", "").strip()
@@ -989,14 +1000,8 @@ def normalize_exam_paper_payload(payload: ExamPaperCreate | ExamPaperUpdate, ins
     if data["source_type"] == ExamPaperSourceType.mock:
         data["past_year"] = None
 
-    if data["kind"] == ExamPaperKind.competition:
-        if not data.get("starts_at") or not data.get("ends_at"):
-            raise HTTPException(status_code=422, detail="Competition start and end time are required")
-        if data["ends_at"] <= data["starts_at"]:
-            raise HTTPException(status_code=422, detail="Competition end time must be after start time")
-    else:
-        data["starts_at"] = None
-        data["ends_at"] = None
+    data["starts_at"] = None
+    data["ends_at"] = None
 
     if data["status"] == ExamPaperStatus.published and not payload.questions:
         raise HTTPException(status_code=422, detail="Published papers must include at least one question")
@@ -1010,6 +1015,156 @@ def sync_exam_paper_questions(paper: ExamPaper, question_inputs: list, db: Sessi
     for index, question_input in enumerate(question_inputs, start=1):
         paper.question_links.append(
             ExamPaperQuestion(
+                question_id=question_input.question_id,
+                position=index,
+                points_override=question_input.points_override,
+            )
+        )
+
+
+def unique_competition_slug(db: Session, title: str, institution_id: int, competition_id: int | None = None) -> str:
+    base_slug = make_slug(title)
+    if base_slug == "category":
+        base_slug = f"competition-{institution_id}"
+    slug = base_slug
+    index = 2
+    while True:
+        stmt = select(Competition).where(Competition.slug == slug)
+        if competition_id is not None:
+            stmt = stmt.where(Competition.id != competition_id)
+        exists = db.scalar(stmt)
+        if not exists:
+            return slug
+        slug = f"{base_slug}-{index}"
+        index += 1
+
+
+def competition_detail_stmt():
+    return select(Competition).options(
+        joinedload(Competition.institution),
+        joinedload(Competition.category),
+        selectinload(Competition.question_links)
+        .joinedload(CompetitionQuestion.question)
+        .selectinload(Question.options),
+        selectinload(Competition.question_links)
+        .joinedload(CompetitionQuestion.question)
+        .selectinload(Question.media_assets),
+        selectinload(Competition.registrations),
+        selectinload(Competition.submissions),
+    )
+
+
+def competition_to_out(competition: Competition) -> CompetitionOut:
+    links = sorted(competition.question_links, key=lambda link: link.position)
+    registrations = sorted(competition.registrations, key=lambda item: item.created_at, reverse=True)
+    submissions = sorted(competition.submissions, key=lambda item: item.submitted_at, reverse=True)
+    return CompetitionOut(
+        id=competition.id,
+        institution_id=competition.institution_id,
+        slug=competition.slug,
+        title=competition.title,
+        description=competition.description,
+        cover_url=competition.cover_url,
+        instructions=competition.instructions,
+        audience=competition.audience,
+        difficulty=competition.difficulty,
+        prizes=competition.prizes or [],
+        duration_minutes=competition.duration_minutes,
+        status=competition.status,
+        starts_at=competition.starts_at,
+        ends_at=competition.ends_at,
+        institution=InstitutionOut.model_validate(competition.institution),
+        category=CourseCategoryOut.model_validate(competition.category) if competition.category else None,
+        questions_count=len(links),
+        registrations_count=len(registrations),
+        submissions_count=len(submissions),
+        questions=[
+            CompetitionQuestionOut(
+                id=link.id,
+                position=link.position,
+                points=link.points_override if link.points_override is not None else link.question.points,
+                question=QuestionOut.model_validate(link.question),
+            )
+            for link in links
+            if link.question
+        ],
+        registrations=[CompetitionRegistrationOut.model_validate(registration) for registration in registrations],
+        submissions=[CompetitionSubmissionOut.model_validate(submission) for submission in submissions],
+        created_at=competition.created_at,
+        updated_at=competition.updated_at,
+    )
+
+
+def get_competition_or_404(competition_id: int, current_user: User, db: Session) -> Competition:
+    institution_id = get_current_institution_id_or_403(current_user)
+    competition = db.scalar(
+        competition_detail_stmt().where(
+            Competition.id == competition_id,
+            Competition.institution_id == institution_id,
+            Competition.status != ExamPaperStatus.archived,
+        )
+    )
+    if not competition:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    return competition
+
+
+def validate_competition_difficulty(difficulty: str | None, institution_id: int, db: Session) -> str:
+    institution = db.get(Institution, institution_id)
+    levels = difficulty_levels_for_category(institution.category if institution else None)
+    value = (difficulty or "").strip() or levels[0]
+    if value not in levels:
+        raise HTTPException(status_code=422, detail="Competition difficulty is not valid for this institution")
+    return value
+
+
+def normalize_competition_prizes(prizes: list) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    seen_ranks: set[int] = set()
+    for index, prize in enumerate(prizes or [], start=1):
+        data = prize.model_dump() if hasattr(prize, "model_dump") else dict(prize)
+        rank = int(data.get("rank") or index)
+        description = str(data.get("description") or "").strip()
+        prize_type = str(data.get("prize_type") or "item").strip() or "item"
+        if rank < 1 or rank in seen_ranks or not description:
+            continue
+        seen_ranks.add(rank)
+        normalized.append(
+            {
+                "rank": rank,
+                "prize_type": prize_type[:40],
+                "description": description[:500],
+            }
+        )
+    return sorted(normalized, key=lambda item: int(item["rank"]))
+
+
+def normalize_competition_payload(payload: CompetitionCreate | CompetitionUpdate, institution_id: int, db: Session) -> dict:
+    data = payload.model_dump(exclude={"questions"})
+    data["title"] = data["title"].strip()
+    data["description"] = data.get("description", "").strip()
+    data["cover_url"] = data.get("cover_url", "").strip()
+    data["instructions"] = data.get("instructions", "").strip()
+    data["audience"] = data.get("audience", "").strip()
+    data["category_id"] = validate_exam_category(data.get("category_id"), institution_id, db)
+    data["difficulty"] = validate_competition_difficulty(data.get("difficulty"), institution_id, db)
+    data["prizes"] = normalize_competition_prizes(data.get("prizes") or [])
+    if not data.get("starts_at") or not data.get("ends_at"):
+        raise HTTPException(status_code=422, detail="Competition start and end time are required")
+    if data["ends_at"] <= data["starts_at"]:
+        raise HTTPException(status_code=422, detail="Competition end time must be after start time")
+    if data["status"] == ExamPaperStatus.published and not payload.questions:
+        raise HTTPException(status_code=422, detail="Published competitions must include at least one question")
+    return data
+
+
+def sync_competition_questions(competition: Competition, question_inputs: list, db: Session) -> None:
+    competition.question_links.clear()
+    if competition.id is not None:
+        db.flush()
+    for index, question_input in enumerate(question_inputs, start=1):
+        competition.question_links.append(
+            CompetitionQuestion(
                 question_id=question_input.question_id,
                 position=index,
                 points_override=question_input.points_override,
@@ -1773,6 +1928,8 @@ def admin_exam_papers(
     db: Session = Depends(get_db),
 ) -> list[ExamPaperOut]:
     ensure_course_staff(current_user)
+    if kind == ExamPaperKind.competition:
+        return []
     institution_id = get_current_institution_id_or_403(current_user)
     stmt = (
         exam_paper_detail_stmt()
@@ -1781,6 +1938,8 @@ def admin_exam_papers(
     )
     if kind is not None:
         stmt = stmt.where(ExamPaper.kind == kind)
+    else:
+        stmt = stmt.where(ExamPaper.kind != ExamPaperKind.competition)
     return [exam_paper_to_out(paper) for paper in db.scalars(stmt).unique()]
 
 
@@ -1840,6 +1999,79 @@ def delete_exam_paper(
     db.delete(paper)
     db.commit()
     return {"id": paper_id, "deleted": True}
+
+
+@router.get("/competitions", response_model=list[CompetitionOut])
+def admin_competitions(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[CompetitionOut]:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = (
+        competition_detail_stmt()
+        .where(Competition.institution_id == institution_id, Competition.status != ExamPaperStatus.archived)
+        .order_by(Competition.updated_at.desc())
+    )
+    return [competition_to_out(competition) for competition in db.scalars(stmt).unique()]
+
+
+@router.post("/competitions", response_model=CompetitionOut, status_code=201)
+def create_competition(
+    payload: CompetitionCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CompetitionOut:
+    ensure_course_staff(current_user)
+    if payload.status == ExamPaperStatus.published:
+        ensure_institution_can_publish(current_user, db)
+    institution_id = get_current_institution_id_or_403(current_user)
+    data = normalize_competition_payload(payload, institution_id, db)
+    question_inputs = validate_exam_questions(payload.questions, institution_id, db)
+    competition = Competition(
+        institution_id=institution_id,
+        slug=unique_competition_slug(db, data["title"], institution_id),
+        **data,
+    )
+    db.add(competition)
+    sync_competition_questions(competition, question_inputs, db)
+    db.commit()
+    return competition_to_out(get_competition_or_404(competition.id, current_user, db))
+
+
+@router.put("/competitions/{competition_id}", response_model=CompetitionOut)
+def update_competition(
+    competition_id: int,
+    payload: CompetitionUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> CompetitionOut:
+    ensure_course_staff(current_user)
+    if payload.status == ExamPaperStatus.published:
+        ensure_institution_can_publish(current_user, db)
+    institution_id = get_current_institution_id_or_403(current_user)
+    competition = get_competition_or_404(competition_id, current_user, db)
+    data = normalize_competition_payload(payload, institution_id, db)
+    question_inputs = validate_exam_questions(payload.questions, institution_id, db)
+    for field, value in data.items():
+        setattr(competition, field, value)
+    competition.slug = unique_competition_slug(db, competition.title, institution_id, competition.id)
+    sync_competition_questions(competition, question_inputs, db)
+    db.commit()
+    return competition_to_out(get_competition_or_404(competition.id, current_user, db))
+
+
+@router.delete("/competitions/{competition_id}")
+def delete_competition(
+    competition_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    ensure_course_staff(current_user)
+    competition = get_competition_or_404(competition_id, current_user, db)
+    db.delete(competition)
+    db.commit()
+    return {"id": competition_id, "deleted": True}
 
 
 @router.get("/courses", response_model=list[CourseCardOut])
@@ -2224,6 +2456,7 @@ def grading_lesson_item_question_ids(item: LessonItem) -> list[int]:
 
 
 def recalculate_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
+    previous_status = enrollment.status
     total_items = db.scalar(
         select(func.count(LessonItem.id))
         .join(LessonItem.chapter)
@@ -2237,6 +2470,8 @@ def recalculate_enrollment_progress(db: Session, enrollment: Enrollment) -> None
     )
     enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
     enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
+    if enrollment.status == "completed" and previous_status != "completed":
+        stop_course_subscription_renewal_after_completion(db, enrollment)
 
 
 def recalculate_quiz_progress_after_grading(db: Session, item: LessonItem, enrollment: Enrollment) -> None:

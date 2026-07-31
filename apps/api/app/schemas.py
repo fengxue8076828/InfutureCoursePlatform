@@ -934,11 +934,44 @@ class ExamPaperUpdate(ExamPaperCreate):
     pass
 
 
+class CompetitionPrize(BaseModel):
+    rank: int = Field(ge=1, le=100)
+    prize_type: str = Field(default="item", max_length=40)
+    description: str = Field(default="", max_length=500)
+
+
+class CompetitionBase(BaseModel):
+    title: str = Field(min_length=1, max_length=220)
+    description: str = ""
+    cover_url: str = Field(default="", max_length=500)
+    instructions: str = ""
+    audience: str = Field(default="", max_length=260)
+    difficulty: str = Field(default="", max_length=80)
+    prizes: list[CompetitionPrize] = Field(default_factory=list)
+    duration_minutes: int = Field(default=60, ge=1, le=600)
+    status: ExamPaperStatus = ExamPaperStatus.draft
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    category_id: int | None = None
+
+
+class CompetitionCreate(CompetitionBase):
+    questions: list[ExamPaperQuestionInput] = Field(default_factory=list)
+
+
+class CompetitionUpdate(CompetitionCreate):
+    pass
+
+
 class ExamPaperQuestionOut(BaseModel):
     id: int
     position: int
     points: int
     question: QuestionOut
+
+
+class CompetitionQuestionOut(ExamPaperQuestionOut):
+    pass
 
 
 class PublicExamPaperQuestionOut(BaseModel):
@@ -948,9 +981,14 @@ class PublicExamPaperQuestionOut(BaseModel):
     question: StudentQuestionOut
 
 
+class PublicCompetitionQuestionOut(PublicExamPaperQuestionOut):
+    pass
+
+
 class CompetitionRegistrationOut(OrmModel):
     id: int
-    paper_id: int
+    paper_id: int | None = None
+    competition_id: int | None = None
     student_name: str
     student_email: EmailStr
     phone: str | None = None
@@ -962,6 +1000,19 @@ class CompetitionRegistrationOut(OrmModel):
 class ExamPaperSubmissionOut(OrmModel):
     id: int
     paper_id: int
+    student_name: str
+    student_email: EmailStr
+    answers: dict[str, Any]
+    score: float
+    total_score: float
+    status: ExamSubmissionStatus
+    started_at: datetime | None = None
+    submitted_at: datetime
+
+
+class CompetitionSubmissionOut(OrmModel):
+    id: int
+    competition_id: int
     student_name: str
     student_email: EmailStr
     answers: dict[str, Any]
@@ -1000,6 +1051,34 @@ class ExamPaperOut(BaseModel):
     updated_at: datetime
 
 
+class CompetitionOut(BaseModel):
+    id: int
+    institution_id: int
+    slug: str
+    title: str
+    description: str
+    cover_url: str
+    instructions: str
+    audience: str
+    kind: ExamPaperKind = ExamPaperKind.competition
+    difficulty: str = ""
+    prizes: list[CompetitionPrize] = Field(default_factory=list)
+    duration_minutes: int
+    status: ExamPaperStatus
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    institution: InstitutionOut
+    category: CourseCategoryOut | None = None
+    questions_count: int = 0
+    registrations_count: int = 0
+    submissions_count: int = 0
+    questions: list[CompetitionQuestionOut] = Field(default_factory=list)
+    registrations: list[CompetitionRegistrationOut] = Field(default_factory=list)
+    submissions: list[CompetitionSubmissionOut] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
 class PublicExamPaperOut(BaseModel):
     id: int
     institution_id: int
@@ -1021,6 +1100,29 @@ class PublicExamPaperOut(BaseModel):
     questions_count: int = 0
     registrations_count: int = 0
     questions: list[PublicExamPaperQuestionOut] = Field(default_factory=list)
+
+
+class PublicCompetitionOut(BaseModel):
+    id: int
+    institution_id: int
+    slug: str
+    title: str
+    description: str
+    cover_url: str
+    instructions: str
+    audience: str
+    kind: ExamPaperKind = ExamPaperKind.competition
+    difficulty: str = ""
+    prizes: list[CompetitionPrize] = Field(default_factory=list)
+    duration_minutes: int
+    status: ExamPaperStatus
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    institution: InstitutionOut
+    category: CourseCategoryOut | None = None
+    questions_count: int = 0
+    registrations_count: int = 0
+    questions: list[PublicCompetitionQuestionOut] = Field(default_factory=list)
 
 
 class PublicInstitutionCardOut(BaseModel):
@@ -1049,7 +1151,7 @@ class PublicInstitutionProfileOut(BaseModel):
     learning_paths: list[LearningPathOut]
     activities: list[PublicActivityOut]
     mock_exams: list[PublicExamPaperOut]
-    competitions: list[PublicExamPaperOut]
+    competitions: list[PublicCompetitionOut]
     question_count: int
 
 

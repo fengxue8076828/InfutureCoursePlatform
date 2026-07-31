@@ -11,7 +11,10 @@ from app.models import (
     ActivityRegistration,
     ActivityRegistrationStatus,
     BlogPost,
+    Competition,
+    CompetitionQuestion,
     CompetitionRegistration,
+    CompetitionSubmission,
     Course,
     CourseCategory,
     CourseChapter,
@@ -51,8 +54,11 @@ from app.schemas import (
     PublicActivityRegistrationOut,
     PublicCompetitionRegistrationCreate,
     CompetitionRegistrationOut,
+    CompetitionSubmissionOut,
     PublicExamPaperOut,
     PublicExamPaperQuestionOut,
+    PublicCompetitionOut,
+    PublicCompetitionQuestionOut,
     PublicExamSubmissionCreate,
     ExamPaperSubmissionOut,
     PublicInstitutionCardOut,
@@ -206,6 +212,54 @@ def public_exam_paper_to_out(paper: ExamPaper, include_questions: bool = False) 
     )
 
 
+def public_competition_stmt():
+    return select(Competition).options(
+        joinedload(Competition.institution),
+        joinedload(Competition.category),
+        selectinload(Competition.registrations),
+        selectinload(Competition.question_links)
+        .joinedload(CompetitionQuestion.question)
+        .selectinload(Question.options),
+        selectinload(Competition.question_links)
+        .joinedload(CompetitionQuestion.question)
+        .selectinload(Question.media_assets),
+    )
+
+
+def public_competition_to_out(competition: Competition, include_questions: bool = False) -> PublicCompetitionOut:
+    links = sorted(competition.question_links, key=lambda link: link.position)
+    return PublicCompetitionOut(
+        id=competition.id,
+        institution_id=competition.institution_id,
+        slug=competition.slug,
+        title=competition.title,
+        description=competition.description,
+        cover_url=competition.cover_url,
+        instructions=competition.instructions,
+        audience=competition.audience,
+        difficulty=competition.difficulty,
+        prizes=competition.prizes or [],
+        duration_minutes=competition.duration_minutes,
+        status=competition.status,
+        starts_at=competition.starts_at,
+        ends_at=competition.ends_at,
+        institution=InstitutionOut.model_validate(competition.institution),
+        category=CourseCategoryOut.model_validate(competition.category) if competition.category else None,
+        questions_count=len(links),
+        registrations_count=len(competition.registrations),
+        questions=[
+            PublicCompetitionQuestionOut(
+                id=link.id,
+                position=link.position,
+                points=link.points_override if link.points_override is not None else link.question.points,
+                question=StudentQuestionOut.model_validate(link.question),
+            )
+            for link in links
+            if include_questions and link.question
+        ],
+    )
+
+
 def normalized_text(value: object) -> str:
     return str(value or "").strip().lower()
 
@@ -251,11 +305,11 @@ def is_question_correct(question, answer: object) -> bool:
     return False
 
 
-def score_exam_submission(paper: ExamPaper, answers: dict) -> tuple[float, float, ExamSubmissionStatus]:
+def score_question_links(question_links: list, answers: dict) -> tuple[float, float, ExamSubmissionStatus]:
     score = 0.0
     total_score = 0.0
     has_manual = False
-    for link in sorted(paper.question_links, key=lambda item: item.position):
+    for link in sorted(question_links, key=lambda item: item.position):
         question = link.question
         if not question:
             continue
@@ -271,6 +325,14 @@ def score_exam_submission(paper: ExamPaper, answers: dict) -> tuple[float, float
     return score, total_score, status
 
 
+def score_exam_submission(paper: ExamPaper, answers: dict) -> tuple[float, float, ExamSubmissionStatus]:
+    return score_question_links(list(paper.question_links), answers)
+
+
+def score_competition_submission(competition: Competition, answers: dict) -> tuple[float, float, ExamSubmissionStatus]:
+    return score_question_links(list(competition.question_links), answers)
+
+
 def get_public_exam_paper_or_404(slug: str, kind: ExamPaperKind, db: Session) -> ExamPaper:
     paper = db.scalar(
         public_exam_paper_stmt().where(
@@ -284,6 +346,18 @@ def get_public_exam_paper_or_404(slug: str, kind: ExamPaperKind, db: Session) ->
     return paper
 
 
+def get_public_competition_or_404(slug: str, db: Session) -> Competition:
+    competition = db.scalar(
+        public_competition_stmt().where(
+            Competition.slug == slug,
+            Competition.status == ExamPaperStatus.published,
+        )
+    )
+    if not competition:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    return competition
+
+
 def institution_directory_stmt():
     return select(Institution).options(
         selectinload(Institution.courses),
@@ -291,6 +365,7 @@ def institution_directory_stmt():
         selectinload(Institution.activities),
         selectinload(Institution.learning_paths),
         selectinload(Institution.exam_papers),
+        selectinload(Institution.competitions),
     )
 
 
@@ -298,8 +373,9 @@ def public_institution_card_to_out(institution: Institution) -> PublicInstitutio
     courses = [course for course in institution.courses if course.status == CourseStatus.published]
     learning_paths = [path for path in institution.learning_paths if path.status == LearningPathStatus.published]
     exam_papers = [paper for paper in institution.exam_papers if paper.status == ExamPaperStatus.published]
+    competitions = [competition for competition in institution.competitions if competition.status == ExamPaperStatus.published]
     students_count = sum(course.students_count for course in courses)
-    resources_count = len(courses) + len(learning_paths) + len(exam_papers) + len(institution.activities)
+    resources_count = len(courses) + len(learning_paths) + len(exam_papers) + len(competitions) + len(institution.activities)
     rating = min(5.0, 4.2 + min(0.45, students_count / 1000) + min(0.25, resources_count * 0.025))
     return PublicInstitutionCardOut(
         institution=InstitutionOut.model_validate(institution),
@@ -409,13 +485,12 @@ def get_institution_profile(slug: str, db: Session = Depends(get_db)) -> PublicI
     )
     competitions = list(
         db.scalars(
-            public_exam_paper_stmt()
+            public_competition_stmt()
             .where(
-                ExamPaper.institution_id == institution.id,
-                ExamPaper.status == ExamPaperStatus.published,
-                ExamPaper.kind == ExamPaperKind.competition,
+                Competition.institution_id == institution.id,
+                Competition.status == ExamPaperStatus.published,
             )
-            .order_by(ExamPaper.updated_at.desc())
+            .order_by(Competition.updated_at.desc())
         ).unique()
     )
     question_count = db.scalar(
@@ -433,7 +508,7 @@ def get_institution_profile(slug: str, db: Session = Depends(get_db)) -> PublicI
         learning_paths=[public_learning_path_to_out(path) for path in learning_paths],
         activities=[public_activity_to_out(activity) for activity in activities],
         mock_exams=[public_exam_paper_to_out(paper) for paper in mock_exams],
-        competitions=[public_exam_paper_to_out(paper) for paper in competitions],
+        competitions=[public_competition_to_out(competition) for competition in competitions],
         question_count=question_count,
     )
 
@@ -630,6 +705,79 @@ def submit_public_exam_paper(
     return submission
 
 
+def list_public_competitions(
+    query: str | None,
+    category_id: int | None,
+    db: Session,
+) -> list[PublicCompetitionOut]:
+    stmt = (
+        public_competition_stmt()
+        .where(Competition.status == ExamPaperStatus.published)
+        .order_by(Competition.updated_at.desc())
+    )
+    if category_id:
+        stmt = stmt.where(Competition.category_id == category_id)
+    if query and query.strip():
+        like_query = f"%{query.strip()}%"
+        stmt = stmt.where(
+            Competition.title.ilike(like_query)
+            | Competition.description.ilike(like_query)
+            | Competition.audience.ilike(like_query)
+            | Competition.difficulty.ilike(like_query)
+        )
+    return [public_competition_to_out(competition) for competition in db.scalars(stmt).unique()]
+
+
+def get_public_competition_or_404(slug: str, db: Session) -> Competition:
+    competition = db.scalar(
+        public_competition_stmt().where(
+            Competition.slug == slug,
+            Competition.status == ExamPaperStatus.published,
+        )
+    )
+    if not competition:
+        raise HTTPException(status_code=404, detail="Competition not found")
+    return competition
+
+
+def submit_public_competition(
+    competition: Competition,
+    payload: PublicExamSubmissionCreate,
+    db: Session,
+) -> CompetitionSubmission:
+    email = str(payload.student_email).strip().lower()
+    now = aware_now()
+    started_at = normalize_started_at(payload.started_at)
+    if not competition.starts_at or not competition.ends_at or now < competition.starts_at or now > competition.ends_at:
+        raise HTTPException(status_code=422, detail="Competition is not open for submission")
+    registration = db.scalar(
+        select(CompetitionRegistration).where(
+            CompetitionRegistration.competition_id == competition.id,
+            CompetitionRegistration.student_email == email,
+        )
+    )
+    if not registration:
+        raise HTTPException(status_code=403, detail="Competition registration is required")
+
+    score, total_score, status = score_competition_submission(competition, payload.answers)
+    user = db.scalar(select(User).where(User.email == email))
+    submission = CompetitionSubmission(
+        competition_id=competition.id,
+        user_id=user.id if user else None,
+        student_name=payload.student_name.strip(),
+        student_email=email,
+        answers=payload.answers,
+        score=score,
+        total_score=total_score,
+        status=status,
+        started_at=started_at,
+    )
+    db.add(submission)
+    db.commit()
+    db.refresh(submission)
+    return submission
+
+
 @router.get("/mock-exams", response_model=list[PublicExamPaperOut])
 def list_mock_exams(
     query: str | None = Query(default=None),
@@ -655,19 +803,19 @@ def submit_mock_exam(
     return submit_public_exam_paper(paper, payload, db)
 
 
-@router.get("/competitions", response_model=list[PublicExamPaperOut])
+@router.get("/competitions", response_model=list[PublicCompetitionOut])
 def list_competitions(
     query: str | None = Query(default=None),
     category_id: int | None = Query(default=None),
     db: Session = Depends(get_db),
-) -> list[PublicExamPaperOut]:
-    return list_public_exam_papers(ExamPaperKind.competition, query, category_id, db)
+) -> list[PublicCompetitionOut]:
+    return list_public_competitions(query, category_id, db)
 
 
-@router.get("/competitions/{slug}", response_model=PublicExamPaperOut)
-def get_competition(slug: str, db: Session = Depends(get_db)) -> PublicExamPaperOut:
-    paper = get_public_exam_paper_or_404(slug, ExamPaperKind.competition, db)
-    return public_exam_paper_to_out(paper, include_questions=True)
+@router.get("/competitions/{slug}", response_model=PublicCompetitionOut)
+def get_competition(slug: str, db: Session = Depends(get_db)) -> PublicCompetitionOut:
+    competition = get_public_competition_or_404(slug, db)
+    return public_competition_to_out(competition, include_questions=True)
 
 
 @router.post("/competitions/{slug}/register", response_model=CompetitionRegistrationOut)
@@ -676,14 +824,14 @@ def register_competition(
     payload: PublicCompetitionRegistrationCreate,
     db: Session = Depends(get_db),
 ) -> CompetitionRegistration:
-    paper = get_public_exam_paper_or_404(slug, ExamPaperKind.competition, db)
+    competition = get_public_competition_or_404(slug, db)
     now = aware_now()
-    if paper.starts_at and now >= paper.starts_at:
+    if competition.starts_at and now >= competition.starts_at:
         raise HTTPException(status_code=422, detail="Competition registration is closed")
     email = str(payload.student_email).strip().lower()
     existing = db.scalar(
         select(CompetitionRegistration).where(
-            CompetitionRegistration.paper_id == paper.id,
+            CompetitionRegistration.competition_id == competition.id,
             CompetitionRegistration.student_email == email,
         )
     )
@@ -691,7 +839,8 @@ def register_competition(
         raise HTTPException(status_code=409, detail="This email has already registered")
     user = db.scalar(select(User).where(User.email == email))
     registration = CompetitionRegistration(
-        paper_id=paper.id,
+        paper_id=None,
+        competition_id=competition.id,
         user_id=user.id if user else None,
         student_name=payload.student_name.strip(),
         student_email=email,
@@ -704,14 +853,14 @@ def register_competition(
     return registration
 
 
-@router.post("/competitions/{slug}/submit", response_model=ExamPaperSubmissionOut)
+@router.post("/competitions/{slug}/submit", response_model=CompetitionSubmissionOut)
 def submit_competition(
     slug: str,
     payload: PublicExamSubmissionCreate,
     db: Session = Depends(get_db),
-) -> ExamPaperSubmission:
-    paper = get_public_exam_paper_or_404(slug, ExamPaperKind.competition, db)
-    return submit_public_exam_paper(paper, payload, db)
+) -> CompetitionSubmission:
+    competition = get_public_competition_or_404(slug, db)
+    return submit_public_competition(competition, payload, db)
 
 
 @router.get("/courses", response_model=list[CourseCardOut])

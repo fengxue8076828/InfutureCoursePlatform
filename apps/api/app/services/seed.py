@@ -235,6 +235,173 @@ def ensure_schema_extensions(db: Session) -> None:
         if "intro_video_url" not in learning_path_columns:
             db.execute(text("ALTER TABLE learning_paths ADD COLUMN intro_video_url VARCHAR(500) NOT NULL DEFAULT ''"))
 
+    table_names = set(inspector.get_table_names())
+    if "competition_registrations" in table_names:
+        competition_registration_columns = {
+            column["name"] for column in inspector.get_columns("competition_registrations")
+        }
+        if "competition_id" not in competition_registration_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE competition_registrations "
+                    "ADD COLUMN competition_id INTEGER REFERENCES competitions(id)"
+                )
+            )
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_competition_registrations_competition_id "
+                    "ON competition_registrations(competition_id)"
+                )
+            )
+        if "paper_id" in competition_registration_columns:
+            db.execute(text("ALTER TABLE competition_registrations ALTER COLUMN paper_id DROP NOT NULL"))
+
+    if {"exam_papers", "competitions"}.issubset(table_names):
+        db.execute(
+            text(
+                """
+                INSERT INTO competitions (
+                    institution_id,
+                    category_id,
+                    slug,
+                    title,
+                    description,
+                    cover_url,
+                    instructions,
+                    audience,
+                    difficulty,
+                    prizes,
+                    duration_minutes,
+                    status,
+                    starts_at,
+                    ends_at,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    paper.institution_id,
+                    paper.category_id,
+                    paper.slug,
+                    paper.title,
+                    paper.description,
+                    paper.cover_url,
+                    paper.instructions,
+                    paper.audience,
+                    '',
+                    '[]'::jsonb,
+                    paper.duration_minutes,
+                    paper.status,
+                    paper.starts_at,
+                    paper.ends_at,
+                    paper.created_at,
+                    paper.updated_at
+                FROM exam_papers paper
+                WHERE paper.kind::text = 'competition'
+                  AND NOT EXISTS (
+                      SELECT 1
+                      FROM competitions competition
+                      WHERE competition.slug = paper.slug
+                  )
+                """
+            )
+        )
+    if {"exam_papers", "exam_paper_questions", "competitions", "competition_questions"}.issubset(table_names):
+        db.execute(
+            text(
+                """
+                INSERT INTO competition_questions (
+                    competition_id,
+                    question_id,
+                    position,
+                    points_override,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    competition.id,
+                    link.question_id,
+                    link.position,
+                    link.points_override,
+                    link.created_at,
+                    link.updated_at
+                FROM exam_paper_questions link
+                JOIN exam_papers paper
+                  ON paper.id = link.paper_id
+                 AND paper.kind::text = 'competition'
+                JOIN competitions competition
+                  ON competition.slug = paper.slug
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM competition_questions existing
+                    WHERE existing.competition_id = competition.id
+                      AND existing.question_id = link.question_id
+                )
+                """
+            )
+        )
+    if {"competition_registrations", "exam_papers", "competitions"}.issubset(table_names):
+        db.execute(
+            text(
+                """
+                UPDATE competition_registrations registration
+                SET competition_id = competition.id
+                FROM exam_papers paper
+                JOIN competitions competition
+                  ON competition.slug = paper.slug
+                WHERE registration.paper_id = paper.id
+                  AND paper.kind::text = 'competition'
+                  AND registration.competition_id IS NULL
+                """
+            )
+        )
+    if {"exam_paper_submissions", "exam_papers", "competitions", "competition_submissions"}.issubset(table_names):
+        db.execute(
+            text(
+                """
+                INSERT INTO competition_submissions (
+                    competition_id,
+                    user_id,
+                    student_name,
+                    student_email,
+                    answers,
+                    score,
+                    total_score,
+                    status,
+                    started_at,
+                    submitted_at,
+                    created_at,
+                    updated_at
+                )
+                SELECT
+                    competition.id,
+                    submission.user_id,
+                    submission.student_name,
+                    submission.student_email,
+                    submission.answers,
+                    submission.score,
+                    submission.total_score,
+                    submission.status,
+                    submission.started_at,
+                    submission.submitted_at,
+                    submission.created_at,
+                    submission.updated_at
+                FROM exam_paper_submissions submission
+                JOIN exam_papers paper
+                  ON paper.id = submission.paper_id
+                 AND paper.kind::text = 'competition'
+                JOIN competitions competition
+                  ON competition.slug = paper.slug
+                WHERE NOT EXISTS (
+                    SELECT 1
+                    FROM competition_submissions existing
+                    WHERE existing.competition_id = competition.id
+                      AND existing.student_email = submission.student_email
+                      AND existing.submitted_at = submission.submitted_at
+                )
+                """
+            )
+        )
+
     if "subscriptions" in inspector.get_table_names():
         subscription_columns = {column["name"] for column in inspector.get_columns("subscriptions")}
         subscription_column_sql = {
