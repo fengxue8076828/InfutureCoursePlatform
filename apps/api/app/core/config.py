@@ -9,7 +9,12 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+psycopg://postgres:postgres@localhost:5432/online_classroom"
     redis_url: str = "redis://localhost:6379/0"
     auto_seed: bool = True
-    cors_origins: list[str] = ["http://localhost:3000", "http://127.0.0.1:3000"]
+    cors_origins: list[str] = [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        "https://infuture.world",
+        "https://www.infuture.world",
+    ]
     cors_origin_regex: str | None = (
         r"^https?://(localhost|127\.0\.0\.1|\[::1\]|"
         r"192\.168\.\d+\.\d+|10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?$"

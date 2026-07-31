@@ -14,6 +14,7 @@ __pycache__/
 .pip-cache/
 .npm-cache/
 .docker-config/
+.tools/
 coverage/
 .DS_Store
 *.log
