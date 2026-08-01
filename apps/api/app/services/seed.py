@@ -61,6 +61,7 @@ def ensure_schema_extensions(db: Session) -> None:
         "agreements_accepted_at": "ALTER TABLE institutions ADD COLUMN agreements_accepted_at TIMESTAMP WITH TIME ZONE",
         "verification_status": "ALTER TABLE institutions ADD COLUMN verification_status VARCHAR(32) NOT NULL DEFAULT 'not_required'",
         "stripe_account_id": "ALTER TABLE institutions ADD COLUMN stripe_account_id VARCHAR(120)",
+        "stripe_legacy_account_id": "ALTER TABLE institutions ADD COLUMN stripe_legacy_account_id VARCHAR(120)",
         "stripe_charges_enabled": "ALTER TABLE institutions ADD COLUMN stripe_charges_enabled BOOLEAN NOT NULL DEFAULT FALSE",
         "stripe_payouts_enabled": "ALTER TABLE institutions ADD COLUMN stripe_payouts_enabled BOOLEAN NOT NULL DEFAULT FALSE",
         "stripe_details_submitted": "ALTER TABLE institutions ADD COLUMN stripe_details_submitted BOOLEAN NOT NULL DEFAULT FALSE",
@@ -77,6 +78,7 @@ def ensure_schema_extensions(db: Session) -> None:
 
     db.execute(text("ALTER TABLE institutions ALTER COLUMN logo_url TYPE TEXT"))
     db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ix_institutions_stripe_account_id ON institutions(stripe_account_id) WHERE stripe_account_id IS NOT NULL"))
+    db.execute(text("CREATE INDEX IF NOT EXISTS ix_institutions_stripe_legacy_account_id ON institutions(stripe_legacy_account_id) WHERE stripe_legacy_account_id IS NOT NULL"))
     db.execute(
         text(
             """

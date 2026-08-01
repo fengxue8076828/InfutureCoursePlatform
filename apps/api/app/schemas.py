@@ -38,6 +38,7 @@ class InstitutionOut(OrmModel):
     agreements_accepted_at: datetime | None = None
     verification_status: str = "not_required"
     stripe_account_id: str | None = None
+    stripe_legacy_account_id: str | None = None
     stripe_charges_enabled: bool = False
     stripe_payouts_enabled: bool = False
     stripe_details_submitted: bool = False
@@ -112,6 +113,7 @@ class InstitutionFinanceOut(BaseModel):
     account_mode: str
     stripe_connected: bool
     stripe_account_id: str | None = None
+    stripe_account_type: str | None = None
     charges_enabled: bool
     payouts_enabled: bool
     details_submitted: bool

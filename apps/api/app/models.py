@@ -137,6 +137,7 @@ class Institution(Base, TimestampMixin):
         String(32), default="not_required", server_default="not_required", index=True
     )
     stripe_account_id: Mapped[str | None] = mapped_column(String(120), unique=True, index=True)
+    stripe_legacy_account_id: Mapped[str | None] = mapped_column(String(120), index=True)
     stripe_charges_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     stripe_payouts_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     stripe_details_submitted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")

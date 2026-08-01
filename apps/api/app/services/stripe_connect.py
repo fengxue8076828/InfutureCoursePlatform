@@ -47,8 +47,28 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     }
 
 
+def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
+    """Build the payload for a Stripe Standard connected account."""
+    settings = get_settings()
+    return {
+        "type": "standard",
+        "country": settings.stripe_default_country,
+        "email": institution.email,
+        "business_type": "company" if institution.institution_type == "organization" else "individual",
+        "capabilities": {
+            "card_payments": {"requested": True},
+            "transfers": {"requested": True},
+        },
+        "metadata": {
+            "institution_slug": institution.slug,
+            "institution_id": str(institution.id or ""),
+        },
+        **stripe_account_profile_payload(institution),
+    }
+
+
 def create_connect_account_for_institution(institution: Institution) -> str | None:
-    """Create a Stripe Express account for a partner institution if possible.
+    """Create a Stripe Standard account for a partner institution if possible.
 
     This is intentionally non-blocking for registration callers: missing Stripe
     config or a transient Stripe failure should not prevent account creation in
@@ -62,18 +82,7 @@ def create_connect_account_for_institution(institution: Institution) -> str | No
         import stripe
 
         stripe.api_key = settings.stripe_secret_key
-        account = stripe.Account.create(
-            type="express",
-            country=settings.stripe_default_country,
-            email=institution.email,
-            business_type="company" if institution.institution_type == "organization" else "individual",
-            capabilities={
-                "card_payments": {"requested": True},
-                "transfers": {"requested": True},
-            },
-            metadata={"institution_slug": institution.slug},
-            **stripe_account_profile_payload(institution),
-        )
+        account = stripe.Account.create(**stripe_account_create_payload(institution))
     except Exception:
         return None
 

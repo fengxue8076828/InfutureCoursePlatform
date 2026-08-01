@@ -752,6 +752,7 @@ type InstitutionFinance = {
   account_mode: "partner" | "platform" | string;
   stripe_connected: boolean;
   stripe_account_id: string | null;
+  stripe_account_type: string | null;
   charges_enabled: boolean;
   payouts_enabled: boolean;
   details_submitted: boolean;
@@ -3607,6 +3608,8 @@ function InstitutionPanel() {
   const institutionTypeLabel = draft.institutionType === "organization" ? "组织机构" : "个人机构";
   const accountModeLabel = isPlatformOwned ? "平台自营账户" : "合作机构账户";
   const financeSnapshot = finance;
+  const connectedAccountType = financeSnapshot?.stripe_account_type ?? null;
+  const hasLegacyStripeAccount = !isPlatformOwned && Boolean(connectedAccountType && connectedAccountType !== "standard");
   const stripeRequirements = financeSnapshot?.requirements;
   const missingRequirements = [
     ...(stripeRequirements?.currently_due ?? []),
@@ -3619,6 +3622,7 @@ function InstitutionPanel() {
     (!financeSnapshot
       ? !draft.stripeDetailsSubmitted
       : !financeSnapshot.stripe_connected ||
+        hasLegacyStripeAccount ||
         !financeSnapshot.details_submitted ||
         Boolean(financeSnapshot.requirements.disabled_reason) ||
         financeSnapshot.requirements.currently_due.length > 0 ||
@@ -3761,7 +3765,7 @@ function InstitutionPanel() {
 
   async function handleStripeOnboarding() {
     setStripeBusy(true);
-    setFinanceStatus("正在创建 Stripe 验证入口...");
+    setFinanceStatus(hasLegacyStripeAccount ? "正在切换到 Stripe Standard 收款账户..." : "正在创建 Stripe 验证入口...");
     const result = await startStripeConnectOnboarding();
     if (result.draft) {
       setDraft(result.draft);
@@ -4138,13 +4142,13 @@ function InstitutionPanel() {
                     disabled={!agreementReady || stripeBusy}
                     className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    {stripeBusy ? "处理中..." : "继续完成验证"}
+                    {stripeBusy ? "处理中..." : hasLegacyStripeAccount ? "切换到 Standard 账户" : "继续完成验证"}
                   </button>
                 ) : null}
                 <button
                   type="button"
                   onClick={handleStripeDashboard}
-                  disabled={stripeBusy || (!isPlatformOwned && !draft.stripeAccountId)}
+                  disabled={stripeBusy || (!isPlatformOwned && (!draft.stripeAccountId || hasLegacyStripeAccount))}
                   className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   管理 Stripe 收款账户
@@ -4161,6 +4165,11 @@ function InstitutionPanel() {
               {!agreementReady ? (
                 <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
                   请先在基本信息中勾选服务协议、GDPR 协议和收费协议，再进入 Stripe 验证。
+                </p>
+              ) : null}
+              {hasLegacyStripeAccount ? (
+                <p className="mt-3 rounded-lg bg-amber-50 p-3 text-xs leading-5 text-amber-700">
+                  当前连接的是旧 Express 账户。请切换到 Standard 账户后，再进入机构自己的 Stripe Dashboard。
                 </p>
               ) : null}
             </div>

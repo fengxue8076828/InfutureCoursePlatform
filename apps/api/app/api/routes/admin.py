@@ -250,6 +250,25 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     }
 
 
+def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
+    settings = get_settings()
+    return {
+        "type": "standard",
+        "country": settings.stripe_default_country,
+        "email": institution.email,
+        "business_type": "company" if institution.institution_type == "organization" else "individual",
+        "capabilities": {
+            "card_payments": {"requested": True},
+            "transfers": {"requested": True},
+        },
+        "metadata": {
+            "institution_id": str(institution.id or ""),
+            "institution_slug": institution.slug,
+        },
+        **stripe_account_profile_payload(institution),
+    }
+
+
 def sync_stripe_account_display_name(stripe_client: object, institution: Institution, account: object) -> object:
     if institution.payout_mode == "platform" or not institution.stripe_account_id:
         return account
@@ -349,6 +368,7 @@ def build_institution_finance_out(
         account_mode=institution.payout_mode,
         stripe_connected=bool(get_settings().stripe_secret_key and (institution.payout_mode == "platform" or institution.stripe_account_id)),
         stripe_account_id=None if institution.payout_mode == "platform" else institution.stripe_account_id,
+        stripe_account_type=str(stripe_value(account, "type", "") or "") or None,
         charges_enabled=bool(institution.stripe_charges_enabled),
         payouts_enabled=bool(institution.stripe_payouts_enabled),
         details_submitted=bool(institution.stripe_details_submitted),
@@ -1646,19 +1666,23 @@ def start_stripe_connect_onboarding(
         return StripeConnectOnboardingOut(url="https://dashboard.stripe.com/settings/account", institution=institution)
 
     try:
+        account = None
         if institution.stripe_account_id:
             account = stripe.Account.retrieve(institution.stripe_account_id)
-            account = sync_stripe_account_display_name(stripe, institution, account)
-        else:
-            account = stripe.Account.create(
-                type="express",
-                country=settings.stripe_default_country,
-                email=institution.email,
-                business_type="company" if institution.institution_type == "organization" else "individual",
-                capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
-                metadata={"institution_id": str(institution.id)},
-                **stripe_account_profile_payload(institution),
-            )
+            if stripe_value(account, "type") == "standard":
+                account = sync_stripe_account_display_name(stripe, institution, account)
+            else:
+                institution.stripe_legacy_account_id = institution.stripe_account_id
+                institution.stripe_account_id = None
+                institution.stripe_charges_enabled = False
+                institution.stripe_payouts_enabled = False
+                institution.stripe_details_submitted = False
+                institution.stripe_onboarding_completed_at = None
+                institution.verification_status = "pending"
+                account = None
+
+        if account is None:
+            account = stripe.Account.create(**stripe_account_create_payload(institution))
             account_id = stripe_value(account, "id")
             if not account_id:
                 raise RuntimeError("Stripe did not return a connected account id")
@@ -1710,15 +1734,18 @@ def create_stripe_dashboard_login_link(
         account = stripe.Account.retrieve(institution.stripe_account_id)
         account = sync_stripe_account_display_name(stripe, institution, account)
         update_institution_stripe_state(institution, account)
-        try:
-            login_link = stripe.Account.create_login_link(institution.stripe_account_id)
-        except AttributeError:
-            login_link = stripe.LoginLink.create(account=institution.stripe_account_id)
         db.commit()
         db.refresh(institution)
-        url = stripe_value(login_link, "url", "")
-        if not url:
-            raise RuntimeError("Stripe did not return a dashboard login URL")
+        if stripe_value(account, "type") == "standard":
+            url = "https://dashboard.stripe.com"
+        else:
+            try:
+                login_link = stripe.Account.create_login_link(institution.stripe_account_id)
+            except AttributeError:
+                login_link = stripe.LoginLink.create(account=institution.stripe_account_id)
+            url = stripe_value(login_link, "url", "")
+            if not url:
+                raise RuntimeError("Stripe did not return a dashboard login URL")
     except HTTPException:
         raise
     except Exception as exc:
