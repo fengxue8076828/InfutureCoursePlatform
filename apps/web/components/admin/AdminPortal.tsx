@@ -3776,6 +3776,10 @@ function InstitutionPanel() {
   }
 
   async function handleStripeDashboard() {
+    const dashboardWindow = window.open("about:blank", "_blank");
+    if (dashboardWindow) {
+      dashboardWindow.opener = null;
+    }
     setStripeBusy(true);
     setFinanceStatus("正在创建 Stripe 收款账户管理入口...");
     const result = await createStripeDashboardLink();
@@ -3783,9 +3787,14 @@ function InstitutionPanel() {
       setDraft(result.draft);
     }
     if (result.url) {
-      setFinanceStatus("正在打开 Stripe 收款账户管理页...");
-      window.location.assign(result.url);
+      setFinanceStatus("已在新标签页打开 Stripe 收款账户管理页。");
+      if (dashboardWindow) {
+        dashboardWindow.location.href = result.url;
+      } else {
+        setFinanceStatus("浏览器阻止了新标签页，请允许弹窗后重试。");
+      }
     } else {
+      dashboardWindow?.close();
       setFinanceStatus(result.error ?? "Stripe 收款账户管理入口创建失败。");
     }
     setStripeBusy(false);
