@@ -244,10 +244,7 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     website = str(institution.website or "").strip()
     if website.startswith(("http://", "https://")):
         business_profile["url"] = website
-    return {
-        "business_profile": business_profile,
-        "settings": {"dashboard": {"display_name": display_name}},
-    }
+    return {"business_profile": business_profile}
 
 
 def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
@@ -274,12 +271,7 @@ def sync_stripe_account_display_name(stripe_client: object, institution: Institu
         return account
     display_name = stripe_account_display_name(institution)
     business_profile = stripe_value(account, "business_profile", {}) or {}
-    settings = stripe_value(account, "settings", {}) or {}
-    dashboard = stripe_value(settings, "dashboard", {}) or {}
-    if (
-        stripe_value(business_profile, "name") == display_name
-        and stripe_value(dashboard, "display_name") == display_name
-    ):
+    if stripe_value(business_profile, "name") == display_name:
         return account
     try:
         return stripe_client.Account.modify(

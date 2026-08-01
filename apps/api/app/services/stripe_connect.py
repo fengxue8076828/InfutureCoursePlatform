@@ -41,10 +41,7 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     website = str(institution.website or "").strip()
     if website.startswith(("http://", "https://")):
         business_profile["url"] = website
-    return {
-        "business_profile": business_profile,
-        "settings": {"dashboard": {"display_name": display_name}},
-    }
+    return {"business_profile": business_profile}
 
 
 def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
