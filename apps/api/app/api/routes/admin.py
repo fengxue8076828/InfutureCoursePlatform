@@ -233,6 +233,45 @@ def update_institution_stripe_state(institution: Institution, account: object) -
         )
 
 
+def stripe_account_display_name(institution: Institution) -> str:
+    name = (institution.name or institution.slug or f"Institution {institution.id}").strip()
+    return name[:80] or f"Institution {institution.id}"
+
+
+def stripe_account_profile_payload(institution: Institution) -> dict[str, object]:
+    display_name = stripe_account_display_name(institution)
+    business_profile: dict[str, object] = {"name": display_name}
+    website = str(institution.website or "").strip()
+    if website.startswith(("http://", "https://")):
+        business_profile["url"] = website
+    return {
+        "business_profile": business_profile,
+        "settings": {"dashboard": {"display_name": display_name}},
+    }
+
+
+def sync_stripe_account_display_name(stripe_client: object, institution: Institution, account: object) -> object:
+    if institution.payout_mode == "platform" or not institution.stripe_account_id:
+        return account
+    display_name = stripe_account_display_name(institution)
+    business_profile = stripe_value(account, "business_profile", {}) or {}
+    settings = stripe_value(account, "settings", {}) or {}
+    dashboard = stripe_value(settings, "dashboard", {}) or {}
+    if (
+        stripe_value(business_profile, "name") == display_name
+        and stripe_value(dashboard, "display_name") == display_name
+    ):
+        return account
+    try:
+        return stripe_client.Account.modify(
+            institution.stripe_account_id,
+            **stripe_account_profile_payload(institution),
+        )
+    except Exception as exc:
+        print(f"[stripe-account-display-name-sync-error] institution={institution.id}: {exc}")
+        return account
+
+
 def stripe_sequence_value(obj: object, key: str) -> list[str]:
     value = stripe_value(obj, key, [])
     if value is None:
@@ -1543,6 +1582,7 @@ def admin_institution_finance(
                 balance = stripe.Balance.retrieve()
             elif institution.stripe_account_id:
                 account = stripe.Account.retrieve(institution.stripe_account_id)
+                account = sync_stripe_account_display_name(stripe, institution, account)
                 balance = stripe.Balance.retrieve(stripe_account=institution.stripe_account_id)
             if account:
                 update_institution_stripe_state(institution, account)
@@ -1608,6 +1648,7 @@ def start_stripe_connect_onboarding(
     try:
         if institution.stripe_account_id:
             account = stripe.Account.retrieve(institution.stripe_account_id)
+            account = sync_stripe_account_display_name(stripe, institution, account)
         else:
             account = stripe.Account.create(
                 type="express",
@@ -1616,6 +1657,7 @@ def start_stripe_connect_onboarding(
                 business_type="company" if institution.institution_type == "organization" else "individual",
                 capabilities={"card_payments": {"requested": True}, "transfers": {"requested": True}},
                 metadata={"institution_id": str(institution.id)},
+                **stripe_account_profile_payload(institution),
             )
             account_id = stripe_value(account, "id")
             if not account_id:
@@ -1666,6 +1708,7 @@ def create_stripe_dashboard_login_link(
         if not institution.stripe_account_id:
             raise HTTPException(status_code=409, detail="Stripe account is not connected")
         account = stripe.Account.retrieve(institution.stripe_account_id)
+        account = sync_stripe_account_display_name(stripe, institution, account)
         update_institution_stripe_state(institution, account)
         try:
             login_link = stripe.Account.create_login_link(institution.stripe_account_id)
@@ -1699,6 +1742,8 @@ def sync_stripe_connect_status(
     stripe = get_stripe_client()
     try:
         account = stripe.Account.retrieve() if institution.payout_mode == "platform" else stripe.Account.retrieve(institution.stripe_account_id)
+        if institution.payout_mode != "platform":
+            account = sync_stripe_account_display_name(stripe, institution, account)
         update_institution_stripe_state(institution, account)
         db.commit()
         db.refresh(institution)

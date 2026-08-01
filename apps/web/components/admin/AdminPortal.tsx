@@ -3614,6 +3614,15 @@ function InstitutionPanel() {
     ...(stripeRequirements?.eventually_due ?? []),
     ...(stripeRequirements?.pending_verification ?? [])
   ].filter((item, index, items) => item && items.indexOf(item) === index);
+  const stripeNeedsOnboarding =
+    !isPlatformOwned &&
+    (!financeSnapshot
+      ? !draft.stripeDetailsSubmitted
+      : !financeSnapshot.stripe_connected ||
+        !financeSnapshot.details_submitted ||
+        Boolean(financeSnapshot.requirements.disabled_reason) ||
+        financeSnapshot.requirements.currently_due.length > 0 ||
+        financeSnapshot.requirements.past_due.length > 0);
 
   useEffect(() => {
     let isMounted = true;
@@ -4113,14 +4122,16 @@ function InstitutionPanel() {
                 <div className="flex items-start justify-between gap-3"><span className="text-slate-500">Stripe 账户</span><span className="max-w-44 break-all text-right font-bold text-ink">{isPlatformOwned ? "平台主账户" : draft.stripeAccountId || "未连接"}</span></div>
               </div>
               <div className="mt-5 grid gap-2">
-                <button
-                  type="button"
-                  onClick={handleStripeOnboarding}
-                  disabled={!agreementReady || stripeBusy}
-                  className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {stripeBusy ? "处理中..." : "继续完成验证"}
-                </button>
+                {stripeNeedsOnboarding ? (
+                  <button
+                    type="button"
+                    onClick={handleStripeOnboarding}
+                    disabled={!agreementReady || stripeBusy}
+                    className="focus-ring rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {stripeBusy ? "处理中..." : "继续完成验证"}
+                  </button>
+                ) : null}
                 <button
                   type="button"
                   onClick={handleStripeDashboard}

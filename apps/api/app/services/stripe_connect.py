@@ -30,6 +30,23 @@ def update_institution_stripe_state(institution: Institution, account: object) -
         )
 
 
+def stripe_account_display_name(institution: Institution) -> str:
+    name = (institution.name or institution.slug or f"Institution {institution.id}").strip()
+    return name[:80] or f"Institution {institution.id}"
+
+
+def stripe_account_profile_payload(institution: Institution) -> dict[str, object]:
+    display_name = stripe_account_display_name(institution)
+    business_profile: dict[str, object] = {"name": display_name}
+    website = str(institution.website or "").strip()
+    if website.startswith(("http://", "https://")):
+        business_profile["url"] = website
+    return {
+        "business_profile": business_profile,
+        "settings": {"dashboard": {"display_name": display_name}},
+    }
+
+
 def create_connect_account_for_institution(institution: Institution) -> str | None:
     """Create a Stripe Express account for a partner institution if possible.
 
@@ -55,6 +72,7 @@ def create_connect_account_for_institution(institution: Institution) -> str | No
                 "transfers": {"requested": True},
             },
             metadata={"institution_slug": institution.slug},
+            **stripe_account_profile_payload(institution),
         )
     except Exception:
         return None
