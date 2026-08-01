@@ -247,10 +247,14 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     return {"business_profile": business_profile}
 
 
+def expected_stripe_account_type(institution: Institution) -> str:
+    return "standard" if institution.institution_type == "organization" else "express"
+
+
 def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
     settings = get_settings()
     return {
-        "type": "standard",
+        "type": expected_stripe_account_type(institution),
         "country": settings.stripe_default_country,
         "email": institution.email,
         "business_type": "company" if institution.institution_type == "organization" else "individual",
@@ -1659,12 +1663,15 @@ def start_stripe_connect_onboarding(
 
     try:
         account = None
+        expected_account_type = expected_stripe_account_type(institution)
         if institution.stripe_account_id:
             account = stripe.Account.retrieve(institution.stripe_account_id)
-            if stripe_value(account, "type") == "standard":
+            account_type = str(stripe_value(account, "type", "") or "")
+            if not account_type or account_type == expected_account_type:
                 account = sync_stripe_account_display_name(stripe, institution, account)
             else:
-                institution.stripe_legacy_account_id = institution.stripe_account_id
+                if not institution.stripe_legacy_account_id:
+                    institution.stripe_legacy_account_id = institution.stripe_account_id
                 institution.stripe_account_id = None
                 institution.stripe_charges_enabled = False
                 institution.stripe_payouts_enabled = False

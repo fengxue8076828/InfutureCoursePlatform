@@ -44,11 +44,15 @@ def stripe_account_profile_payload(institution: Institution) -> dict[str, object
     return {"business_profile": business_profile}
 
 
+def expected_stripe_account_type(institution: Institution) -> str:
+    return "standard" if institution.institution_type == "organization" else "express"
+
+
 def stripe_account_create_payload(institution: Institution) -> dict[str, object]:
-    """Build the payload for a Stripe Standard connected account."""
+    """Build the payload for a Stripe connected account based on institution type."""
     settings = get_settings()
     return {
-        "type": "standard",
+        "type": expected_stripe_account_type(institution),
         "country": settings.stripe_default_country,
         "email": institution.email,
         "business_type": "company" if institution.institution_type == "organization" else "individual",
@@ -65,7 +69,7 @@ def stripe_account_create_payload(institution: Institution) -> dict[str, object]
 
 
 def create_connect_account_for_institution(institution: Institution) -> str | None:
-    """Create a Stripe Standard account for a partner institution if possible.
+    """Create a Stripe connected account for a partner institution if possible.
 
     This is intentionally non-blocking for registration callers: missing Stripe
     config or a transient Stripe failure should not prevent account creation in
