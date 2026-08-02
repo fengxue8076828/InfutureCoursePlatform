@@ -261,6 +261,7 @@ class CourseCardOut(OrmModel):
     category: str
     level: str
     price_eur_monthly: float
+    expected_duration_days: int = 30
     hero_image_url: str
     is_hot: bool
     students_count: int
@@ -550,6 +551,7 @@ class EnrollmentOut(OrmModel):
     id: int
     status: str
     progress_percent: float
+    completed_at: datetime | None = None
     progress_records: list[LessonProgressOut] = []
     course: CourseDetailOut
 
@@ -1294,6 +1296,7 @@ class CourseCreate(BaseModel):
     institution_id: int
     teacher_id: int
     price_eur_monthly: float = Field(default=39, gt=0, le=9999)
+    expected_duration_days: int = Field(default=30, ge=1, le=3650)
 
 
 class LessonItemUpsert(BaseModel):
@@ -1325,6 +1328,7 @@ class CourseUpdate(BaseModel):
     intro_video_url: str | None = None
     teacher_id: int | None = None
     price_eur_monthly: float | None = Field(default=None, gt=0, le=9999)
+    expected_duration_days: int | None = Field(default=None, ge=1, le=3650)
     status: CourseStatus | None = None
     chapters: list[ChapterUpsert] | None = None
 
@@ -1376,11 +1380,73 @@ class QuestionUpdate(BaseModel):
     media_assets: list[QuestionMediaCreate] | None = None
 
 
+class AdminMetricChangeOut(BaseModel):
+    current: int
+    previous: int
+    growth_percent: float
+
+
+class AdminCourseRankingOut(BaseModel):
+    course_id: int
+    title: str
+    category: str = ""
+    level: str = ""
+    teacher_name: str = ""
+    value: float
+    secondary_value: float | None = None
+    label: str = ""
+
+
 class AdminOverviewOut(BaseModel):
     total_courses: int
     active_subscriptions: int
     monthly_recurring_revenue_eur: float
     pending_manual_grading: int
-    subscription_growth: list[dict[str, Any]]
+    subscription_growth: list[dict[str, Any]] = Field(default_factory=list)
+    total_subscriptions: int = 0
+    monthly_subscription_growth: AdminMetricChangeOut = Field(
+        default_factory=lambda: AdminMetricChangeOut(current=0, previous=0, growth_percent=0)
+    )
+    weekly_subscription_growth: AdminMetricChangeOut = Field(
+        default_factory=lambda: AdminMetricChangeOut(current=0, previous=0, growth_percent=0)
+    )
+    total_revenue_eur: float = 0
+    current_month_revenue_eur: float = 0
+    average_monthly_learning_minutes: float = 0
+    on_time_completion_rate: float = 0
+    average_cancellation_rate: float = 0
+    published_courses: int = 0
+    draft_courses: int = 0
+    total_questions: int = 0
+    total_teachers: int = 0
+    total_exam_papers: int = 0
+    total_competitions: int = 0
+    pending_cancellations: int = 0
+    subscription_rankings: list[AdminCourseRankingOut] = Field(default_factory=list)
+    revenue_rankings: list[AdminCourseRankingOut] = Field(default_factory=list)
+    monthly_growth_rankings: list[AdminCourseRankingOut] = Field(default_factory=list)
+    satisfaction_rankings: list[AdminCourseRankingOut] = Field(default_factory=list)
+
+
+class SubscriptionCancellationRequestCreate(BaseModel):
+    reason: str = Field(min_length=3, max_length=2000)
+
+
+class SubscriptionCancellationReview(BaseModel):
+    admin_note: str = Field(default="", max_length=2000)
+
+
+class SubscriptionCancellationRequestOut(BaseModel):
+    id: int
+    subscription_id: int
+    course_id: int
+    course_title: str
+    student_name: str
+    student_email: str
+    reason: str
+    status: str
+    admin_note: str = ""
+    created_at: datetime
+    reviewed_at: datetime | None = None
 
 

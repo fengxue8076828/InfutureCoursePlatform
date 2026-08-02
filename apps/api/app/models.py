@@ -263,6 +263,7 @@ class Course(Base, TimestampMixin):
     level: Mapped[str] = mapped_column(String(40), index=True)
     language: Mapped[str] = mapped_column(String(40), default="涓枃")
     price_eur_monthly: Mapped[float] = mapped_column(Numeric(8, 2), default=39.00)
+    expected_duration_days: Mapped[int] = mapped_column(Integer, default=30, server_default="30")
     hero_image_url: Mapped[str] = mapped_column(String(500))
     intro_video_url: Mapped[str] = mapped_column(String(500))
     syllabus: Mapped[dict] = mapped_column(JSONB, default=dict)
@@ -563,6 +564,7 @@ class Enrollment(Base, TimestampMixin):
     current_item_id: Mapped[int | None] = mapped_column(ForeignKey("lesson_items.id"))
     progress_percent: Mapped[float] = mapped_column(Float, default=0)
     started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     user: Mapped[User] = relationship(back_populates="enrollments")
     course: Mapped[Course] = relationship(back_populates="enrollments")
@@ -733,6 +735,32 @@ class Subscription(Base, TimestampMixin):
     platform_fee_percent: Mapped[float] = mapped_column(Numeric(5, 2), default=15.00)
 
     course: Mapped[Course] = relationship(back_populates="subscriptions")
+    cancellation_requests: Mapped[list["SubscriptionCancellationRequest"]] = relationship(
+        back_populates="subscription", cascade="all, delete-orphan", order_by="SubscriptionCancellationRequest.created_at.desc()"
+    )
+
+
+class SubscriptionCancellationRequest(Base, TimestampMixin):
+    __tablename__ = "subscription_cancellation_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    subscription_id: Mapped[int] = mapped_column(
+        ForeignKey("subscriptions.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    course_id: Mapped[int] = mapped_column(ForeignKey("courses.id"), index=True)
+    institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id"), index=True)
+    reason: Mapped[str] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(String(40), default="pending", server_default="pending", index=True)
+    admin_note: Mapped[str] = mapped_column(Text, default="", server_default="")
+    reviewed_by_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True)
+    reviewed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    subscription: Mapped[Subscription] = relationship(back_populates="cancellation_requests")
+    user: Mapped[User] = relationship(foreign_keys=[user_id])
+    course: Mapped[Course] = relationship()
+    institution: Mapped[Institution] = relationship()
+    reviewer: Mapped[User | None] = relationship(foreign_keys=[reviewed_by_user_id])
 
 
 class StudentPost(Base, TimestampMixin):

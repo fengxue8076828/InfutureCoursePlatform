@@ -32,6 +32,7 @@ from app.models import (
     QuestionType,
     Submission,
     Subscription,
+    SubscriptionCancellationRequest,
     StudentFollow,
     StudentPost,
     StudentPostComment,
@@ -69,6 +70,8 @@ from app.schemas import (
     QuizSubmissionOut,
     SubscribeCourseIn,
     SubscribeCourseOut,
+    SubscriptionCancellationRequestCreate,
+    SubscriptionCancellationRequestOut,
     SubmissionIn,
     SubmissionOut,
     StudentLearningNoteOut,
@@ -1536,6 +1539,141 @@ def learning_course(
     return course
 
 
+def cancellation_request_to_out(request: SubscriptionCancellationRequest) -> SubscriptionCancellationRequestOut:
+    return SubscriptionCancellationRequestOut(
+        id=request.id,
+        subscription_id=request.subscription_id,
+        course_id=request.course_id,
+        course_title=request.course.title if request.course else "",
+        student_name=request.user.full_name if request.user else "",
+        student_email=request.user.email if request.user else "",
+        reason=request.reason,
+        status=request.status,
+        admin_note=request.admin_note or "",
+        created_at=request.created_at,
+        reviewed_at=request.reviewed_at,
+    )
+
+
+def course_enrollment_and_subscription(
+    slug: str,
+    current_user: User,
+    db: Session,
+) -> tuple[Course, Enrollment, Subscription | None]:
+    course = db.scalar(select(Course).where(Course.slug == slug).options(joinedload(Course.institution)))
+    if not course:
+        raise HTTPException(status_code=404, detail="Course not found")
+    enrollment = db.scalar(
+        select(Enrollment).where(Enrollment.user_id == current_user.id, Enrollment.course_id == course.id)
+    )
+    if not enrollment:
+        raise HTTPException(status_code=403, detail="You are not enrolled in this course")
+    subscription = db.scalar(
+        select(Subscription)
+        .where(
+            Subscription.user_id == current_user.id,
+            Subscription.course_id == course.id,
+            Subscription.status.in_(("active", "trialing", "past_due", "ending")),
+        )
+        .order_by(Subscription.created_at.desc())
+    )
+    return course, enrollment, subscription
+
+
+@router.get("/courses/{slug}/cancellation-request", response_model=SubscriptionCancellationRequestOut | None)
+def get_cancellation_request(
+    slug: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionCancellationRequestOut | None:
+    course, _enrollment, _subscription = course_enrollment_and_subscription(slug, current_user, db)
+    request = db.scalar(
+        select(SubscriptionCancellationRequest)
+        .options(
+            joinedload(SubscriptionCancellationRequest.user),
+            joinedload(SubscriptionCancellationRequest.course),
+        )
+        .where(
+            SubscriptionCancellationRequest.user_id == current_user.id,
+            SubscriptionCancellationRequest.course_id == course.id,
+            SubscriptionCancellationRequest.status.in_(("pending", "approved")),
+        )
+        .order_by(SubscriptionCancellationRequest.created_at.desc())
+    )
+    return cancellation_request_to_out(request) if request else None
+
+
+@router.post("/courses/{slug}/cancellation-request", response_model=SubscriptionCancellationRequestOut, status_code=201)
+def create_cancellation_request(
+    slug: str,
+    payload: SubscriptionCancellationRequestCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionCancellationRequestOut:
+    course, enrollment, subscription = course_enrollment_and_subscription(slug, current_user, db)
+    if enrollment.status == "completed":
+        raise HTTPException(status_code=422, detail="Completed courses cannot be cancelled")
+    if not subscription:
+        raise HTTPException(status_code=404, detail="Active subscription not found")
+    existing = db.scalar(
+        select(SubscriptionCancellationRequest)
+        .options(
+            joinedload(SubscriptionCancellationRequest.user),
+            joinedload(SubscriptionCancellationRequest.course),
+        )
+        .where(
+            SubscriptionCancellationRequest.subscription_id == subscription.id,
+            SubscriptionCancellationRequest.status.in_(("pending", "approved")),
+        )
+        .order_by(SubscriptionCancellationRequest.created_at.desc())
+    )
+    if existing:
+        return cancellation_request_to_out(existing)
+    request = SubscriptionCancellationRequest(
+        subscription_id=subscription.id,
+        user_id=current_user.id,
+        course_id=course.id,
+        institution_id=course.institution_id,
+        reason=payload.reason.strip(),
+        status="pending",
+    )
+    db.add(request)
+    db.commit()
+    db.refresh(request)
+    request.user = current_user
+    request.course = course
+    return cancellation_request_to_out(request)
+
+
+@router.delete("/courses/{slug}/cancellation-request", response_model=SubscriptionCancellationRequestOut)
+def withdraw_cancellation_request(
+    slug: str,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionCancellationRequestOut:
+    course, _enrollment, _subscription = course_enrollment_and_subscription(slug, current_user, db)
+    request = db.scalar(
+        select(SubscriptionCancellationRequest)
+        .options(
+            joinedload(SubscriptionCancellationRequest.user),
+            joinedload(SubscriptionCancellationRequest.course),
+        )
+        .where(
+            SubscriptionCancellationRequest.user_id == current_user.id,
+            SubscriptionCancellationRequest.course_id == course.id,
+            SubscriptionCancellationRequest.status == "pending",
+        )
+        .order_by(SubscriptionCancellationRequest.created_at.desc())
+    )
+    if not request:
+        raise HTTPException(status_code=404, detail="Pending cancellation request not found")
+    request.status = "withdrawn"
+    request.reviewed_at = datetime.utcnow()
+    db.commit()
+    db.refresh(request)
+    return cancellation_request_to_out(request)
+
+
 def course_and_enrollment_for_review(
     slug: str,
     current_user: User,
@@ -1916,7 +2054,10 @@ def update_enrollment_progress(db: Session, enrollment: Enrollment) -> None:
     enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
     enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
     if enrollment.status == "completed" and previous_status != "completed":
+        enrollment.completed_at = datetime.utcnow()
         stop_course_subscription_renewal_after_completion(db, enrollment)
+    elif enrollment.status != "completed":
+        enrollment.completed_at = None
 
 
 def latest_submission_by_question_id(

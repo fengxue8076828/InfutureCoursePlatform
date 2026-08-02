@@ -114,6 +114,14 @@ type SubmissionRecord = {
   created_at: string;
 };
 
+type CancellationRequest = {
+  id: number;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn" | string;
+  created_at: string;
+  admin_note?: string | null;
+};
+
 type ItemSubmissionState = {
   item_id: number;
   enrollment_id: number;
@@ -223,6 +231,11 @@ export function LearnConsole({
   const [courseReview, setCourseReview] = useState<CourseReview | null>(null);
   const [courseReviewStatus, setCourseReviewStatus] = useState("");
   const [courseReviewLoading, setCourseReviewLoading] = useState(false);
+  const [cancellationRequest, setCancellationRequest] = useState<CancellationRequest | null>(null);
+  const [cancellationReason, setCancellationReason] = useState("");
+  const [cancellationOpen, setCancellationOpen] = useState(false);
+  const [cancellationBusy, setCancellationBusy] = useState(false);
+  const [cancellationStatus, setCancellationStatus] = useState("");
   const activeItem = items.find((item) => item.id === itemId) ?? items[0];
   const activeItemId = activeItem?.id;
   const activeItemType = activeItem?.item_type;
@@ -458,6 +471,45 @@ export function LearnConsole({
   }, [course?.slug, selectedEnrollment?.id]);
 
   useEffect(() => {
+    if (!course?.slug || isCourseCompleted) {
+      setCancellationRequest(null);
+      setCancellationReason("");
+      setCancellationOpen(false);
+      setCancellationStatus("");
+      return;
+    }
+
+    let ignore = false;
+    async function loadCancellationRequest() {
+      try {
+        const response = await fetch(`${API_BASE_URL}/learn/courses/${course.slug}/cancellation-request`, {
+          headers: getStudentRequestHeaders(),
+          cache: "no-store"
+        });
+        if (!response.ok) {
+          throw new Error("load cancellation request failed");
+        }
+        const payload = (await response.json()) as CancellationRequest | null;
+        if (!ignore) {
+          setCancellationRequest(payload);
+          setCancellationReason(payload?.reason ?? "");
+          setCancellationOpen(false);
+          setCancellationStatus("");
+        }
+      } catch {
+        if (!ignore) {
+          setCancellationStatus("\u9000\u8ba2\u7533\u8bf7\u72b6\u6001\u8bfb\u53d6\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002");
+        }
+      }
+    }
+
+    void loadCancellationRequest();
+    return () => {
+      ignore = true;
+    };
+  }, [course?.slug, isCourseCompleted]);
+
+  useEffect(() => {
     if (!activeItemId || (activeItemType !== "exercise" && activeItemType !== "quiz")) {
       return;
     }
@@ -612,6 +664,63 @@ export function LearnConsole({
     resizeStateRef.current = { panel, startX: event.clientX, startY: event.clientY, sidebarWidth, notesWidth, noteEditorHeight };
     setResizingPanel(panel);
     event.currentTarget.setPointerCapture?.(event.pointerId);
+  }
+
+  async function submitCancellationRequest() {
+    if (!course?.slug || cancellationBusy) {
+      return;
+    }
+    const reason = cancellationReason.trim();
+    if (reason.length < 3) {
+      setCancellationStatus("\u8bf7\u586b\u5199\u9000\u8ba2\u539f\u56e0\uff0c\u81f3\u5c11 3 \u4e2a\u5b57\u7b26\u3002");
+      return;
+    }
+    setCancellationBusy(true);
+    setCancellationStatus("\u6b63\u5728\u63d0\u4ea4\u9000\u8ba2\u7533\u8bf7...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/learn/courses/${course.slug}/cancellation-request`, {
+        method: "POST",
+        headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({ reason })
+      });
+      if (!response.ok) {
+        throw new Error("submit cancellation request failed");
+      }
+      const payload = (await response.json()) as CancellationRequest;
+      setCancellationRequest(payload);
+      setCancellationReason(payload.reason ?? reason);
+      setCancellationOpen(false);
+      setCancellationStatus("\u9000\u8ba2\u7533\u8bf7\u5df2\u63d0\u4ea4\uff0c\u7b49\u5f85\u673a\u6784\u5ba1\u6279\u3002");
+    } catch {
+      setCancellationStatus("\u9000\u8ba2\u7533\u8bf7\u63d0\u4ea4\u5931\u8d25\uff0c\u8bf7\u786e\u8ba4\u540e\u7aef\u670d\u52a1\u6b63\u5e38\u3002");
+    } finally {
+      setCancellationBusy(false);
+    }
+  }
+
+  async function withdrawCancellationRequest() {
+    if (!course?.slug || cancellationBusy) {
+      return;
+    }
+    setCancellationBusy(true);
+    setCancellationStatus("\u6b63\u5728\u53d6\u6d88\u9000\u8ba2\u7533\u8bf7...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/learn/courses/${course.slug}/cancellation-request`, {
+        method: "DELETE",
+        headers: getStudentRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error("withdraw cancellation request failed");
+      }
+      setCancellationRequest(null);
+      setCancellationReason("");
+      setCancellationOpen(false);
+      setCancellationStatus("\u9000\u8ba2\u7533\u8bf7\u5df2\u53d6\u6d88\u3002");
+    } catch {
+      setCancellationStatus("\u53d6\u6d88\u9000\u8ba2\u7533\u8bf7\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002");
+    } finally {
+      setCancellationBusy(false);
+    }
   }
 
   async function saveChapterNote() {
@@ -779,6 +888,79 @@ export function LearnConsole({
             </div>
           </div>
           {completionStatus ? <p className="mt-3 text-sm font-semibold text-slate-500">{completionStatus}</p> : null}
+          {!isCourseCompleted ? (
+            <div className="mt-4 rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <p className="text-sm font-bold text-ink">{"\u8bfe\u7a0b\u9000\u8ba2"}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {cancellationRequest?.status === "pending"
+                      ? "\u9000\u8ba2\u7533\u8bf7\u5df2\u63d0\u4ea4\uff0c\u673a\u6784\u5ba1\u6279\u524d\u53ef\u4ee5\u53d6\u6d88\u7533\u8bf7\u3002"
+                      : cancellationRequest?.status === "approved"
+                        ? "\u9000\u8ba2\u7533\u8bf7\u5df2\u5ba1\u6279\u901a\u8fc7\uff0c\u5f53\u524d\u8ba2\u9605\u5468\u671f\u7ed3\u675f\u540e\u5c06\u505c\u6b62\u7eed\u8d39\u3002"
+                      : "\u5982\u9700\u9000\u8ba2\uff0c\u8bf7\u5148\u586b\u5199\u539f\u56e0\u5e76\u63d0\u4ea4\u7533\u8bf7\uff0c\u7531\u673a\u6784\u5ba1\u6279\u3002"}
+                  </p>
+                </div>
+                {cancellationRequest?.status === "pending" ? (
+                  <button
+                    type="button"
+                    onClick={() => void withdrawCancellationRequest()}
+                    disabled={cancellationBusy}
+                    className="focus-ring rounded-lg border border-coral/30 px-4 py-2 text-sm font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {"\u53d6\u6d88\u9000\u8ba2\u7533\u8bf7"}
+                  </button>
+                ) : cancellationRequest?.status === "approved" ? (
+                  <span className="rounded-full bg-mint/15 px-4 py-2 text-sm font-bold text-mint">
+                    {"\u5df2\u901a\u8fc7"}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setCancellationOpen((current) => !current)}
+                    disabled={cancellationBusy}
+                    className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {cancellationOpen ? "\u6536\u8d77" : "\u7533\u8bf7\u9000\u8ba2"}
+                  </button>
+                )}
+              </div>
+              {cancellationRequest?.status === "pending" || cancellationRequest?.status === "approved" ? (
+                <div className="mt-3 rounded-lg bg-white p-3 text-sm font-semibold text-slate-600">
+                  <span className="text-slate-400">{"\u7533\u8bf7\u539f\u56e0\uff1a"}</span>
+                  {cancellationRequest.reason || "\u672a\u586b\u5199"}
+                  {cancellationRequest.admin_note ? (
+                    <p className="mt-2 text-slate-500">
+                      <span className="text-slate-400">{"\u5ba1\u6279\u5907\u6ce8\uff1a"}</span>
+                      {cancellationRequest.admin_note}
+                    </p>
+                  ) : null}
+                </div>
+              ) : cancellationOpen ? (
+                <div className="mt-4 grid gap-3">
+                  <textarea
+                    value={cancellationReason}
+                    onChange={(event) => setCancellationReason(event.target.value)}
+                    rows={4}
+                    className="focus-ring w-full resize-none rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-semibold text-slate-700"
+                    placeholder={"\u8bf7\u8bf4\u660e\u9000\u8ba2\u539f\u56e0"}
+                  />
+                  <div className="flex justify-end">
+                    <button
+                      type="button"
+                      onClick={() => void submitCancellationRequest()}
+                      disabled={cancellationBusy}
+                      className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Send size={16} />
+                      {"\u63d0\u4ea4\u9000\u8ba2\u7533\u8bf7"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+              {cancellationStatus ? <p className="mt-3 text-sm font-semibold text-slate-500">{cancellationStatus}</p> : null}
+            </div>
+          ) : null}
 
           {activeItem.item_type === "video" ? (
             <div className="mt-5 overflow-hidden rounded-lg bg-ink">

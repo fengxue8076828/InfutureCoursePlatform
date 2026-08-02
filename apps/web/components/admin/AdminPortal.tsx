@@ -75,6 +75,7 @@ type ModuleKey =
   | "learningPaths"
   | "mockExams"
   | "competitions"
+  | "cancellations"
   | "courses"
   | "questions"
   | "teachers"
@@ -91,6 +92,7 @@ const menuItems: Array<{ key: ModuleKey; label: string; icon: typeof LayoutDashb
   { key: "learningPaths", label: "学习路径管理", icon: List },
   { key: "mockExams", label: "模拟考试管理", icon: Timer },
   { key: "competitions", label: "竞赛管理", icon: Trophy },
+  { key: "cancellations", label: "退订管理", icon: ClipboardCheck },
   { key: "courses", label: "课程管理", icon: BookOpen },
   { key: "questions", label: "题库管理", icon: Database },
   { key: "teachers", label: "老师管理", icon: Users },
@@ -140,6 +142,7 @@ type CourseDraft = {
   category: string;
   level: string;
   priceEurMonthly: number;
+  expectedDurationDays: number;
   coverUrl: string;
   teacher: string;
   teacherId: number | null;
@@ -158,6 +161,7 @@ type AdminCourseSummary = {
   teacher: string;
   teacherId: number | null;
   priceEurMonthly: number;
+  expectedDurationDays: number;
   image: string;
   status: string;
   statusValue: CoursePublicationStatus;
@@ -502,12 +506,70 @@ type AdminUploadKind =
   | "logo"
   | "question_media";
 
+type AdminMetricChange = {
+  current: number;
+  previous: number;
+  growth_percent: number;
+};
+
+type AdminCourseRanking = {
+  course_id: number;
+  title: string;
+  teacher: string;
+  value: number;
+  revenue_eur: number;
+  growth_percent: number;
+  rating_average: number;
+  subscriptions: number;
+};
+
+type AdminOverview = {
+  total_courses: number;
+  active_subscriptions: number;
+  monthly_recurring_revenue_eur: number;
+  pending_manual_grading: number;
+  total_subscriptions: number;
+  monthly_subscription_growth: AdminMetricChange;
+  weekly_subscription_growth: AdminMetricChange;
+  total_revenue_eur: number;
+  current_month_revenue_eur: number;
+  average_monthly_learning_minutes: number;
+  on_time_completion_rate: number;
+  average_cancellation_rate: number;
+  published_courses: number;
+  draft_courses: number;
+  total_questions: number;
+  total_teachers: number;
+  total_exam_papers: number;
+  total_competitions: number;
+  pending_cancellations: number;
+  subscription_rankings: AdminCourseRanking[];
+  revenue_rankings: AdminCourseRanking[];
+  monthly_growth_rankings: AdminCourseRanking[];
+  satisfaction_rankings: AdminCourseRanking[];
+};
+
+type SubscriptionCancellationRequest = {
+  id: number;
+  subscription_id: number;
+  course_id: number;
+  course_title: string;
+  student_name: string;
+  student_email: string;
+  reason: string;
+  status: "pending" | "approved" | "rejected" | "withdrawn" | string;
+  admin_note: string;
+  created_at: string;
+  reviewed_at?: string | null;
+};
+
 type ApiCourseDetail = {
   id: number;
   title: string;
   category: string;
   level: string;
   price_eur_monthly?: number;
+  expected_duration_days?: number;
   status?: CoursePublicationStatus;
   description?: string;
   hero_image_url: string;
@@ -537,6 +599,7 @@ type ApiCourseCard = {
   category: string;
   level: string;
   price_eur_monthly?: number;
+  expected_duration_days?: number;
   status?: CoursePublicationStatus;
   hero_image_url: string;
   institution?: { id: number };
@@ -831,7 +894,7 @@ const managedUserRoleOptions: ManagedUserRole[] = ["super_admin", "institution_a
 
 const menuAccessByRole: Record<ManagedUserRole, ModuleKey[]> = {
   super_admin: menuItems.map((item) => item.key),
-  institution_admin: ["institution", "users", "activities", "learningPaths", "mockExams", "competitions"],
+  institution_admin: ["institution", "users", "activities", "learningPaths", "mockExams", "competitions", "cancellations"],
   teacher: ["dashboard", "learningPaths", "mockExams", "competitions", "courses", "questions", "grading", "blogs"]
 };
 
@@ -1674,6 +1737,14 @@ function normalizeCoursePrice(value: unknown, fallback = 39) {
   return Math.round(price * 100) / 100;
 }
 
+function normalizeCourseDuration(value: unknown, fallback = 30) {
+  const days = Math.round(Number(value));
+  if (!Number.isFinite(days) || days <= 0) {
+    return fallback;
+  }
+  return Math.min(3650, days);
+}
+
 function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
   const statusValue = normalizeCourseStatus(course.status, "draft");
   return {
@@ -1682,6 +1753,7 @@ function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
     category: course.category,
     level: course.level,
     priceEurMonthly: normalizeCoursePrice(course.price_eur_monthly),
+    expectedDurationDays: normalizeCourseDuration(course.expected_duration_days),
     teacher: course.teacher?.name ?? "未设置老师",
     teacherId: course.teacher?.id ?? null,
     image: course.hero_image_url,
@@ -1845,6 +1917,7 @@ const emptyCourseSummary: AdminCourseSummary = {
   category: "",
   level: "",
   priceEurMonthly: 39,
+  expectedDurationDays: 30,
   teacher: "",
   teacherId: null,
   image: "",
@@ -1951,6 +2024,7 @@ function createDefaultCourseDraft(
     category: course.category,
     level: course.level,
     priceEurMonthly: course.priceEurMonthly,
+    expectedDurationDays: course.expectedDurationDays,
     coverUrl: course.image,
     teacher: teacher?.name ?? course.teacher,
     teacherId: teacher?.id ?? course.teacherId ?? null,
@@ -1970,6 +2044,7 @@ function createNewCourseSummary(
     category: "",
     level: "",
     priceEurMonthly: 39,
+    expectedDurationDays: 30,
     teacher: teacher?.name ?? "未设置老师",
     teacherId: teacher?.id ?? null,
     image: "",
@@ -2063,6 +2138,7 @@ function normalizeCourseDraft(
     category: draft.category ?? fallback.category,
     level: draft.level ?? fallback.level,
     priceEurMonthly: normalizeCoursePrice(draft.priceEurMonthly, fallback.priceEurMonthly),
+    expectedDurationDays: normalizeCourseDuration(draft.expectedDurationDays, fallback.expectedDurationDays),
     coverUrl: draft.coverUrl || fallback.coverUrl,
     teacher: teacher?.name ?? draft.teacher ?? fallback.teacher,
     teacherId: teacher?.id ?? draft.teacherId ?? fallback.teacherId,
@@ -2374,6 +2450,7 @@ function courseDraftFromApi(
     category: course.category,
     level: course.level,
     priceEurMonthly: normalizeCoursePrice(course.price_eur_monthly),
+    expectedDurationDays: normalizeCourseDuration(course.expected_duration_days),
     coverUrl: course.hero_image_url,
     teacher: course.teacher?.name,
     teacherId: course.teacher?.id,
@@ -2425,6 +2502,7 @@ function courseDraftToApiPayload(
     hero_image_url: draft.coverUrl,
     intro_video_url: draft.introVideoUrl,
     price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly),
+    expected_duration_days: normalizeCourseDuration(draft.expectedDurationDays),
     status,
     teacher_id:
       getTeacherById(draft.teacherId, teachers)?.id ??
@@ -2474,7 +2552,8 @@ function courseDraftToCreatePayload(
     intro_video_url: draft.introVideoUrl,
     institution_id: course.institutionId ?? adminInstitution.id,
     teacher_id: teacherId,
-    price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly, course.priceEurMonthly)
+    price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly, course.priceEurMonthly),
+    expected_duration_days: normalizeCourseDuration(draft.expectedDurationDays, course.expectedDurationDays)
   };
 }
 
@@ -2944,7 +3023,7 @@ export function AdminPortal() {
             }}
           />
           <div className={effectiveActiveModule === "dashboard" ? "block" : "hidden"}>
-            <DashboardPanel />
+            <RealDashboardPanel />
           </div>
           <div className={effectiveActiveModule === "institution" ? "block" : "hidden"}>
             <InstitutionPanel />
@@ -2963,6 +3042,9 @@ export function AdminPortal() {
           </div>
           <div className={effectiveActiveModule === "competitions" ? "block" : "hidden"}>
             <ExamPaperManagement kind="competition" />
+          </div>
+          <div className={effectiveActiveModule === "cancellations" ? "block" : "hidden"}>
+            <CancellationManagementPanel isActive={effectiveActiveModule === "cancellations"} />
           </div>
           <div className={effectiveActiveModule === "courses" ? "block" : "hidden"}>
             <CourseManagement isActive={effectiveActiveModule === "courses"} />
@@ -3499,6 +3581,192 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
             </div>
           </div>
         </div>
+      </section>
+    </div>
+  );
+}
+
+function formatAdminNumber(value: number) {
+  return new Intl.NumberFormat("zh-CN").format(Math.round(Number(value) || 0));
+}
+
+function formatAdminEuro(value: number) {
+  return new Intl.NumberFormat("zh-CN", {
+    style: "currency",
+    currency: "EUR",
+    maximumFractionDigits: 2
+  }).format(Number(value) || 0);
+}
+
+function formatAdminPercent(value: number) {
+  return `${Number(value || 0).toFixed(1)}%`;
+}
+
+function AdminMetricCard({
+  label,
+  value,
+  hint,
+  tone = "mint"
+}: {
+  label: string;
+  value: string;
+  hint?: string;
+  tone?: "mint" | "coral" | "ink" | "amber";
+}) {
+  const toneClass =
+    tone === "coral"
+      ? "text-coral"
+      : tone === "amber"
+        ? "text-amber-600"
+        : tone === "ink"
+          ? "text-ink"
+          : "text-mint";
+  return (
+    <div className="panel rounded-lg p-5">
+      <p className="text-sm font-bold text-slate-500">{label}</p>
+      <p className="mt-3 text-3xl font-black text-ink">{value}</p>
+      {hint ? <p className={`mt-2 text-sm font-bold ${toneClass}`}>{hint}</p> : null}
+    </div>
+  );
+}
+
+function CourseRankingList({
+  title,
+  items,
+  valueFormatter
+}: {
+  title: string;
+  items: AdminCourseRanking[];
+  valueFormatter: (item: AdminCourseRanking) => string;
+}) {
+  return (
+    <section className="panel rounded-lg p-5">
+      <h3 className="text-lg font-black text-ink">{title}</h3>
+      <div className="mt-4 grid gap-3">
+        {items.length ? (
+          items.slice(0, 6).map((course, index) => (
+            <div key={`${title}-${course.course_id}`} className="flex items-center gap-3 rounded-lg bg-slate-50 p-3">
+              <span className="grid h-9 w-9 shrink-0 place-items-center rounded-lg bg-white font-black text-coral">
+                {index + 1}
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="truncate font-bold text-ink">{course.title}</p>
+                <p className="mt-0.5 truncate text-xs font-semibold text-slate-500">{course.teacher || "未设置老师"}</p>
+              </div>
+              <p className="shrink-0 text-sm font-black text-mint">{valueFormatter(course)}</p>
+            </div>
+          ))
+        ) : (
+          <p className="rounded-lg border border-dashed border-slate-200 p-4 text-sm font-semibold text-slate-500">
+            暂无排行数据。
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function RealDashboardPanel() {
+  const [overview, setOverview] = useState<AdminOverview | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState("正在读取后台数据...");
+
+  async function loadOverview() {
+    setLoading(true);
+    setStatus("正在读取后台数据...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/overview`, {
+        headers: getAdminRequestHeaders(),
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error(await readAdminApiErrorMessage(response, "后台数据读取失败"));
+      }
+      setOverview((await response.json()) as AdminOverview);
+      setStatus("");
+    } catch (error) {
+      setOverview(null);
+      setStatus(error instanceof Error ? error.message : apiConnectionErrorMessage("后台数据读取失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadOverview();
+  }, []);
+
+  if (!overview) {
+    return (
+      <section className="panel rounded-lg p-6">
+        <div className="flex items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-ink">主页面板</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">{status || "暂无数据。"}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadOverview()}
+            disabled={loading}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-60"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} /> 刷新
+          </button>
+        </div>
+      </section>
+    );
+  }
+
+  return (
+    <div className="grid gap-5">
+      <section className="panel rounded-lg p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-xl font-black text-ink">主页面板</h2>
+            <p className="mt-1 text-sm font-semibold text-slate-500">
+              统计当前机构的订阅、收入、学习和资源数据。
+            </p>
+            {status ? <p className="mt-1 text-sm font-semibold text-coral">{status}</p> : null}
+          </div>
+          <button
+            type="button"
+            onClick={() => void loadOverview()}
+            disabled={loading}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-60"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} /> 刷新
+          </button>
+        </div>
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <AdminMetricCard label="总学生订阅量" value={formatAdminNumber(overview.total_subscriptions)} hint={`当前活跃 ${formatAdminNumber(overview.active_subscriptions)}`} />
+        <AdminMetricCard label="月订阅量增长" value={formatAdminNumber(overview.monthly_subscription_growth.current)} hint={`较上月 ${formatAdminPercent(overview.monthly_subscription_growth.growth_percent)}`} tone="coral" />
+        <AdminMetricCard label="周订阅量增长" value={formatAdminNumber(overview.weekly_subscription_growth.current)} hint={`较上周 ${formatAdminPercent(overview.weekly_subscription_growth.growth_percent)}`} tone="amber" />
+        <AdminMetricCard label="待处理退订" value={formatAdminNumber(overview.pending_cancellations)} hint={`平均退订率 ${formatAdminPercent(overview.average_cancellation_rate)}`} />
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <AdminMetricCard label="累计总收入" value={formatAdminEuro(overview.total_revenue_eur)} hint="已确认订阅收入" tone="ink" />
+        <AdminMetricCard label="本月总收入" value={formatAdminEuro(overview.current_month_revenue_eur)} hint={`MRR ${formatAdminEuro(overview.monthly_recurring_revenue_eur)}`} />
+        <AdminMetricCard label="学生平均月学习时间" value={`${formatAdminNumber(overview.average_monthly_learning_minutes)} 分钟`} hint="按学习记录估算" tone="amber" />
+        <AdminMetricCard label="按时完课率" value={formatAdminPercent(overview.on_time_completion_rate)} hint="按课程时长计算" tone="coral" />
+      </section>
+
+      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+        <AdminMetricCard label="课程总数" value={formatAdminNumber(overview.total_courses)} hint={`已发布 ${overview.published_courses} / 草稿 ${overview.draft_courses}`} />
+        <AdminMetricCard label="题目总数" value={formatAdminNumber(overview.total_questions)} />
+        <AdminMetricCard label="教师总数" value={formatAdminNumber(overview.total_teachers)} />
+        <AdminMetricCard label="模拟试卷" value={formatAdminNumber(overview.total_exam_papers)} />
+        <AdminMetricCard label="竞赛" value={formatAdminNumber(overview.total_competitions)} />
+        <AdminMetricCard label="待人工批改" value={formatAdminNumber(overview.pending_manual_grading)} tone="amber" />
+      </section>
+
+      <section className="grid gap-5 xl:grid-cols-2">
+        <CourseRankingList title="课程订阅量排行" items={overview.subscription_rankings} valueFormatter={(item) => `${item.subscriptions} 人`} />
+        <CourseRankingList title="课程收入排行" items={overview.revenue_rankings} valueFormatter={(item) => formatAdminEuro(item.revenue_eur)} />
+        <CourseRankingList title="课程订阅月增长率排行" items={overview.monthly_growth_rankings} valueFormatter={(item) => formatAdminPercent(item.growth_percent)} />
+        <CourseRankingList title="课程学生满意度排行" items={overview.satisfaction_rankings} valueFormatter={(item) => `${Number(item.rating_average || 0).toFixed(1)} 分`} />
       </section>
     </div>
   );
@@ -6207,7 +6475,7 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
           ) : null}
           {shouldShowCourseEditor ? (
             <>
-          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_15rem_12rem_12rem_18rem]">
+          <div className="mt-5 grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_15rem_10rem_10rem_10rem_18rem]">
             <label className="grid gap-2 text-sm font-semibold text-slate-700">
               课程标题
               <input
@@ -6265,6 +6533,21 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
                 step={0.01}
                 value={courseDraft.priceEurMonthly}
                 onChange={(event) => updateCourseDraft("priceEurMonthly", normalizeCoursePrice(event.target.value))}
+                disabled={!canModifyCourseContent}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-semibold text-slate-700">
+              课程时长（天）
+              <input
+                className="focus-ring w-full min-w-0 rounded-lg border border-slate-200 px-3 py-2"
+                type="number"
+                min={1}
+                max={3650}
+                step={1}
+                value={courseDraft.expectedDurationDays}
+                onChange={(event) =>
+                  updateCourseDraft("expectedDurationDays", normalizeCourseDuration(event.target.value, courseDraft.expectedDurationDays))
+                }
                 disabled={!canModifyCourseContent}
               />
             </label>
@@ -7614,6 +7897,186 @@ function TeacherManagement() {
         )}
       </section>
     </div>
+  );
+}
+
+const cancellationStatusLabels: Record<string, string> = {
+  pending: "待审批",
+  approved: "已通过",
+  rejected: "已拒绝",
+  withdrawn: "已撤回"
+};
+
+function CancellationManagementPanel({ isActive }: { isActive: boolean }) {
+  const [requests, setRequests] = useState<SubscriptionCancellationRequest[]>([]);
+  const [statusFilter, setStatusFilter] = useState("pending");
+  const [expandedId, setExpandedId] = useState<number | null>(null);
+  const [notes, setNotes] = useState<Record<number, string>>({});
+  const [loading, setLoading] = useState(false);
+  const [busyId, setBusyId] = useState<number | null>(null);
+  const [status, setStatus] = useState("正在读取退订申请...");
+
+  async function loadRequests(nextStatus = statusFilter) {
+    setLoading(true);
+    setStatus("正在读取退订申请...");
+    try {
+      const query = nextStatus === "all" ? "" : `?status=${encodeURIComponent(nextStatus)}`;
+      const response = await fetch(`${API_BASE_URL}/admin/cancellations${query}`, {
+        headers: getAdminRequestHeaders(),
+        cache: "no-store"
+      });
+      if (!response.ok) {
+        throw new Error(await readAdminApiErrorMessage(response, "退订申请读取失败"));
+      }
+      const payload = (await response.json()) as SubscriptionCancellationRequest[];
+      setRequests(payload);
+      setStatus(payload.length ? "" : "当前没有符合条件的退订申请。");
+    } catch (error) {
+      setRequests([]);
+      setStatus(error instanceof Error ? error.message : apiConnectionErrorMessage("退订申请读取失败"));
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    if (isActive) {
+      void loadRequests();
+    }
+  }, [isActive, statusFilter]);
+
+  async function reviewRequest(requestId: number, action: "approve" | "reject") {
+    setBusyId(requestId);
+    setStatus(action === "approve" ? "正在通过退订申请..." : "正在拒绝退订申请...");
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/cancellations/${requestId}/${action}`, {
+        method: "POST",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ admin_note: notes[requestId] ?? "" })
+      });
+      if (!response.ok) {
+        throw new Error(await readAdminApiErrorMessage(response, "退订申请处理失败"));
+      }
+      const updated = (await response.json()) as SubscriptionCancellationRequest;
+      setRequests((current) => current.map((item) => (item.id === updated.id ? updated : item)));
+      setStatus(action === "approve" ? "退订申请已通过。" : "退订申请已拒绝。");
+    } catch (error) {
+      setStatus(error instanceof Error ? error.message : apiConnectionErrorMessage("退订申请处理失败"));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <section className="panel rounded-lg p-5">
+      <div className="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 className="text-2xl font-black text-ink">退订管理</h2>
+          <p className="mt-1 text-sm font-semibold text-slate-500">
+            学生提交退订理由后在这里审批。通过后系统会停止该课程后续订阅。
+          </p>
+          {status ? <p className="mt-2 text-sm font-semibold text-slate-500">{status}</p> : null}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <select
+            className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm font-bold text-slate-700"
+            value={statusFilter}
+            onChange={(event) => setStatusFilter(event.target.value)}
+          >
+            <option value="pending">待审批</option>
+            <option value="approved">已通过</option>
+            <option value="rejected">已拒绝</option>
+            <option value="withdrawn">已撤回</option>
+            <option value="all">全部</option>
+          </select>
+          <button
+            type="button"
+            onClick={() => void loadRequests()}
+            disabled={loading}
+            className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700 disabled:opacity-60"
+          >
+            <RefreshCw size={16} className={loading ? "animate-spin" : ""} /> 刷新
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-5 grid gap-3">
+        {requests.map((request) => {
+          const expanded = expandedId === request.id;
+          const isPending = request.status === "pending";
+          return (
+            <article key={request.id} className="rounded-lg border border-slate-200 bg-white p-4">
+              <button
+                type="button"
+                onClick={() => setExpandedId(expanded ? null : request.id)}
+                className="focus-ring flex w-full items-center justify-between gap-4 rounded-lg text-left"
+              >
+                <div className="min-w-0">
+                  <p className="truncate text-lg font-black text-ink">{request.course_title}</p>
+                  <p className="mt-1 text-sm font-semibold text-slate-500">
+                    {request.student_name} · {request.student_email}
+                  </p>
+                </div>
+                <div className="flex shrink-0 items-center gap-3">
+                  <span className="rounded-full bg-amber-50 px-3 py-1 text-sm font-bold text-amber-700">
+                    {cancellationStatusLabels[request.status] ?? request.status}
+                  </span>
+                  <ChevronRight size={18} className={`transition ${expanded ? "rotate-90" : ""}`} />
+                </div>
+              </button>
+
+              {expanded ? (
+                <div className="mt-4 grid gap-4 border-t border-slate-100 pt-4">
+                  <div className="rounded-lg bg-slate-50 p-4">
+                    <p className="text-sm font-bold text-slate-500">学生退订理由</p>
+                    <p className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-700">
+                      {request.reason || "学生没有填写理由。"}
+                    </p>
+                  </div>
+                  {request.admin_note ? (
+                    <div className="rounded-lg bg-mint/10 p-4">
+                      <p className="text-sm font-bold text-mint">审批备注</p>
+                      <p className="mt-2 whitespace-pre-wrap text-sm font-semibold text-slate-700">{request.admin_note}</p>
+                    </div>
+                  ) : null}
+                  {isPending ? (
+                    <div className="grid gap-3">
+                      <label className="grid gap-2 text-sm font-bold text-slate-700">
+                        审批备注
+                        <textarea
+                          className="focus-ring min-h-24 rounded-lg border border-slate-200 px-3 py-2"
+                          value={notes[request.id] ?? ""}
+                          onChange={(event) => setNotes((current) => ({ ...current, [request.id]: event.target.value }))}
+                          placeholder="可选：填写给学生看的处理说明"
+                        />
+                      </label>
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void reviewRequest(request.id, "reject")}
+                          disabled={busyId === request.id}
+                          className="focus-ring rounded-lg border border-coral/30 px-4 py-2 text-sm font-bold text-coral disabled:opacity-60"
+                        >
+                          拒绝申请
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void reviewRequest(request.id, "approve")}
+                          disabled={busyId === request.id}
+                          className="focus-ring rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:opacity-60"
+                        >
+                          通过退订
+                        </button>
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </article>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

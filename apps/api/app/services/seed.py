@@ -243,6 +243,47 @@ def ensure_schema_extensions(db: Session) -> None:
             db.execute(text("ALTER TABLE learning_paths ADD COLUMN intro_video_url VARCHAR(500) NOT NULL DEFAULT ''"))
 
     table_names = set(inspector.get_table_names())
+    if "courses" in table_names:
+        course_columns = {column["name"] for column in inspector.get_columns("courses")}
+        if "expected_duration_days" not in course_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE courses "
+                    "ADD COLUMN expected_duration_days INTEGER NOT NULL DEFAULT 30"
+                )
+            )
+
+    if "enrollments" in table_names:
+        enrollment_columns = {column["name"] for column in inspector.get_columns("enrollments")}
+        if "completed_at" not in enrollment_columns:
+            db.execute(text("ALTER TABLE enrollments ADD COLUMN completed_at TIMESTAMP WITH TIME ZONE"))
+        if "progress_records" in table_names:
+            db.execute(
+                text(
+                    """
+                    UPDATE enrollments enrollment
+                    SET completed_at = COALESCE(enrollment.completed_at, progress.completed_at, enrollment.updated_at)
+                    FROM (
+                        SELECT enrollment_id, MAX(completed_at) AS completed_at
+                        FROM progress_records
+                        WHERE completed_at IS NOT NULL
+                        GROUP BY enrollment_id
+                    ) progress
+                    WHERE enrollment.id = progress.enrollment_id
+                      AND enrollment.status = 'completed'
+                      AND enrollment.completed_at IS NULL
+                    """
+                )
+            )
+
+    if "subscription_cancellation_requests" in table_names:
+        db.execute(
+            text(
+                "CREATE INDEX IF NOT EXISTS ix_subscription_cancellation_requests_status "
+                "ON subscription_cancellation_requests(status)"
+            )
+        )
+
     if "competition_registrations" in table_names:
         competition_registration_columns = {
             column["name"] for column in inspector.get_columns("competition_registrations")

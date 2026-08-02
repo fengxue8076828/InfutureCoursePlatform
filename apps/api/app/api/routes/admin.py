@@ -21,6 +21,7 @@ from app.models import (
     Course,
     CourseCategory,
     CourseChapter,
+    CourseReview,
     CourseStatus,
     Enrollment,
     Competition,
@@ -47,6 +48,7 @@ from app.models import (
     QuestionType,
     Submission,
     Subscription,
+    SubscriptionCancellationRequest,
     Teacher,
     AdminLoginVerificationCode,
     User,
@@ -100,6 +102,8 @@ from app.schemas import (
     QuestionOut,
     QuestionUpdate,
     SubmissionOut,
+    SubscriptionCancellationRequestOut,
+    SubscriptionCancellationReview,
     StripeBalanceAmountOut,
     StripeConnectOnboardingOut,
     StripeDashboardLinkOut,
@@ -1507,35 +1511,413 @@ def delete_admin_user(
     return {"id": user_id, "deleted": True}
 
 
+ACTIVE_SUBSCRIPTION_STATUSES = ("active", "trialing", "past_due", "ending")
+PAID_SUBSCRIPTION_STATUSES = ("active", "trialing", "past_due", "ending", "completed", "canceled")
+
+
+def growth_percent(current: int, previous: int) -> float:
+    if previous == 0:
+        return 100.0 if current > 0 else 0.0
+    return round((current - previous) / previous * 100, 1)
+
+
+def month_start(value: datetime) -> datetime:
+    return value.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+
+
+def previous_month_start(value: datetime) -> datetime:
+    return month_start(value - timedelta(days=1))
+
+
+def subscription_count_between(
+    db: Session,
+    institution_id: int,
+    start: datetime | None = None,
+    end: datetime | None = None,
+) -> int:
+    stmt = select(func.count(Subscription.id)).join(Course, Subscription.course_id == Course.id).where(
+        Course.institution_id == institution_id
+    )
+    if start:
+        stmt = stmt.where(Subscription.created_at >= start)
+    if end:
+        stmt = stmt.where(Subscription.created_at < end)
+    return db.scalar(stmt) or 0
+
+
+def subscription_amount_sum(
+    db: Session,
+    institution_id: int,
+    start: datetime | None = None,
+) -> float:
+    stmt = (
+        select(func.coalesce(func.sum(Subscription.amount_eur_monthly), 0))
+        .join(Course, Subscription.course_id == Course.id)
+        .where(Course.institution_id == institution_id, Subscription.status.in_(PAID_SUBSCRIPTION_STATUSES))
+    )
+    if start:
+        stmt = stmt.where(Subscription.created_at >= start)
+    return round(float(db.scalar(stmt) or 0), 2)
+
+
+def ranking_row(course: Course, value: float, secondary_value: float | None = None, label: str = "") -> dict[str, object]:
+    return {
+        "course_id": course.id,
+        "title": course.title,
+        "category": course.category,
+        "level": course.level,
+        "teacher_name": course.teacher.name if course.teacher else "",
+        "value": round(float(value or 0), 2),
+        "secondary_value": round(float(secondary_value), 2) if secondary_value is not None else None,
+        "label": label,
+    }
+
+
+def cancellation_request_out(request: SubscriptionCancellationRequest) -> SubscriptionCancellationRequestOut:
+    return SubscriptionCancellationRequestOut(
+        id=request.id,
+        subscription_id=request.subscription_id,
+        course_id=request.course_id,
+        course_title=request.course.title if request.course else "",
+        student_name=request.user.full_name if request.user else "",
+        student_email=request.user.email if request.user else "",
+        reason=request.reason,
+        status=request.status,
+        admin_note=request.admin_note or "",
+        created_at=request.created_at,
+        reviewed_at=request.reviewed_at,
+    )
+
+
 @router.get("/overview", response_model=AdminOverviewOut)
 def overview(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> AdminOverviewOut:
-    ensure_admin(current_user)
-    total_courses = db.scalar(select(func.count(Course.id))) or 0
-    active_subscription_rows = list(db.scalars(select(Subscription).where(Subscription.status == "active")))
-    active_subscriptions = len(active_subscription_rows)
-    pending_manual = (
+    ensure_course_staff(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+
+    now = datetime.now(timezone.utc)
+    current_month_start = month_start(now)
+    prev_month_start = previous_month_start(current_month_start)
+    week_start = now - timedelta(days=7)
+    prev_week_start = now - timedelta(days=14)
+
+    total_courses = db.scalar(select(func.count(Course.id)).where(Course.institution_id == institution.id)) or 0
+    published_courses = (
         db.scalar(
-            select(func.count(Submission.id)).where(
-                Submission.status == SubmissionStatus.pending_manual
+            select(func.count(Course.id)).where(
+                Course.institution_id == institution.id,
+                Course.status == CourseStatus.published,
             )
         )
         or 0
     )
+    draft_courses = (
+        db.scalar(
+            select(func.count(Course.id)).where(
+                Course.institution_id == institution.id,
+                Course.status == CourseStatus.draft,
+            )
+        )
+        or 0
+    )
+    active_subscriptions = (
+        db.scalar(
+            select(func.count(Subscription.id))
+            .join(Course, Subscription.course_id == Course.id)
+            .where(Course.institution_id == institution.id, Subscription.status.in_(ACTIVE_SUBSCRIPTION_STATUSES))
+        )
+        or 0
+    )
+    total_subscriptions = subscription_count_between(db, institution.id)
+    current_month_subscriptions = subscription_count_between(db, institution.id, current_month_start)
+    previous_month_subscriptions = subscription_count_between(
+        db, institution.id, prev_month_start, current_month_start
+    )
+    current_week_subscriptions = subscription_count_between(db, institution.id, week_start)
+    previous_week_subscriptions = subscription_count_between(db, institution.id, prev_week_start, week_start)
+    monthly_recurring_revenue = (
+        db.scalar(
+            select(func.coalesce(func.sum(Subscription.amount_eur_monthly), 0))
+            .join(Course, Subscription.course_id == Course.id)
+            .where(Course.institution_id == institution.id, Subscription.status.in_(ACTIVE_SUBSCRIPTION_STATUSES))
+        )
+        or 0
+    )
+    total_revenue = subscription_amount_sum(db, institution.id)
+    current_month_revenue = subscription_amount_sum(db, institution.id, current_month_start)
+    pending_manual = (
+        db.scalar(
+            select(func.count(Submission.id)).where(
+                Submission.status == SubmissionStatus.pending_manual,
+                Submission.question.has(Question.institution_id == institution.id),
+            )
+        )
+        or 0
+    )
+    pending_cancellations = (
+        db.scalar(
+            select(func.count(SubscriptionCancellationRequest.id)).where(
+                SubscriptionCancellationRequest.institution_id == institution.id,
+                SubscriptionCancellationRequest.status == "pending",
+            )
+        )
+        or 0
+    )
+    approved_cancellations = (
+        db.scalar(
+            select(func.count(SubscriptionCancellationRequest.id)).where(
+                SubscriptionCancellationRequest.institution_id == institution.id,
+                SubscriptionCancellationRequest.status == "approved",
+            )
+        )
+        or 0
+    )
+
+    monthly_learning_rows = db.execute(
+        select(Enrollment.user_id, func.coalesce(func.sum(LessonItem.required_minutes), 0))
+        .join(ProgressRecord, ProgressRecord.enrollment_id == Enrollment.id)
+        .join(LessonItem, ProgressRecord.lesson_item_id == LessonItem.id)
+        .join(Course, Enrollment.course_id == Course.id)
+        .where(Course.institution_id == institution.id, ProgressRecord.completed_at >= now - timedelta(days=30))
+        .group_by(Enrollment.user_id)
+    ).all()
+    average_learning_minutes = (
+        round(sum(float(row[1] or 0) for row in monthly_learning_rows) / len(monthly_learning_rows), 1)
+        if monthly_learning_rows
+        else 0
+    )
+
+    completed_enrollments = list(
+        db.scalars(
+            select(Enrollment)
+            .options(joinedload(Enrollment.course))
+            .join(Course, Enrollment.course_id == Course.id)
+            .where(Course.institution_id == institution.id, Enrollment.status == "completed")
+        )
+    )
+    on_time_count = 0
+    for enrollment in completed_enrollments:
+        completed_at = enrollment.completed_at or enrollment.updated_at
+        expected_days = enrollment.course.expected_duration_days or 30
+        if completed_at and enrollment.started_at and completed_at <= enrollment.started_at + timedelta(days=expected_days):
+            on_time_count += 1
+    on_time_rate = round(on_time_count / len(completed_enrollments) * 100, 1) if completed_enrollments else 0
+    cancellation_rate = round(approved_cancellations / max(total_subscriptions, 1) * 100, 1)
+
+    subscription_rows = db.execute(
+        select(Course, func.count(Subscription.id))
+        .outerjoin(Subscription, Subscription.course_id == Course.id)
+        .options(joinedload(Course.teacher))
+        .where(Course.institution_id == institution.id)
+        .group_by(Course.id)
+        .order_by(func.count(Subscription.id).desc(), Course.updated_at.desc())
+        .limit(10)
+    ).all()
+    revenue_rows = db.execute(
+        select(Course, func.coalesce(func.sum(Subscription.amount_eur_monthly), 0))
+        .outerjoin(Subscription, Subscription.course_id == Course.id)
+        .options(joinedload(Course.teacher))
+        .where(Course.institution_id == institution.id)
+        .group_by(Course.id)
+        .order_by(func.coalesce(func.sum(Subscription.amount_eur_monthly), 0).desc(), Course.updated_at.desc())
+        .limit(10)
+    ).all()
+    satisfaction_rows = db.execute(
+        select(Course, func.coalesce(func.avg(CourseReview.rating), 0), func.count(CourseReview.id))
+        .outerjoin(CourseReview, CourseReview.course_id == Course.id)
+        .options(joinedload(Course.teacher))
+        .where(Course.institution_id == institution.id)
+        .group_by(Course.id)
+        .order_by(func.coalesce(func.avg(CourseReview.rating), 0).desc(), func.count(CourseReview.id).desc())
+        .limit(10)
+    ).all()
+
+    courses = list(
+        db.scalars(
+            select(Course)
+            .options(joinedload(Course.teacher))
+            .where(Course.institution_id == institution.id, Course.status != CourseStatus.archived)
+        )
+    )
+    current_counts = dict(
+        db.execute(
+            select(Subscription.course_id, func.count(Subscription.id))
+            .join(Course, Subscription.course_id == Course.id)
+            .where(Course.institution_id == institution.id, Subscription.created_at >= current_month_start)
+            .group_by(Subscription.course_id)
+        ).all()
+    )
+    previous_counts = dict(
+        db.execute(
+            select(Subscription.course_id, func.count(Subscription.id))
+            .join(Course, Subscription.course_id == Course.id)
+            .where(
+                Course.institution_id == institution.id,
+                Subscription.created_at >= prev_month_start,
+                Subscription.created_at < current_month_start,
+            )
+            .group_by(Subscription.course_id)
+        ).all()
+    )
+    monthly_growth_rankings = sorted(
+        [
+            ranking_row(
+                course,
+                growth_percent(int(current_counts.get(course.id, 0)), int(previous_counts.get(course.id, 0))),
+                float(current_counts.get(course.id, 0)),
+                "%",
+            )
+            for course in courses
+        ],
+        key=lambda item: (float(item["value"]), float(item["secondary_value"] or 0)),
+        reverse=True,
+    )[:10]
+
+    growth_series = []
+    cursor = current_month_start - timedelta(days=150)
+    for _ in range(6):
+        start = month_start(cursor)
+        end = month_start((start + timedelta(days=32)))
+        growth_series.append(
+            {
+                "month": start.strftime("%Y-%m"),
+                "subscriptions": subscription_count_between(db, institution.id, start, end),
+            }
+        )
+        cursor = end
+
     return AdminOverviewOut(
         total_courses=total_courses,
         active_subscriptions=active_subscriptions,
-        monthly_recurring_revenue_eur=round(sum(float(subscription.amount_eur_monthly or 0) for subscription in active_subscription_rows), 2),
+        monthly_recurring_revenue_eur=round(float(monthly_recurring_revenue or 0), 2),
         pending_manual_grading=pending_manual,
-        subscription_growth=[
-            {"month": "2026-02", "subscriptions": 42},
-            {"month": "2026-03", "subscriptions": 58},
-            {"month": "2026-04", "subscriptions": 76},
-            {"month": "2026-05", "subscriptions": 94},
-            {"month": "2026-06", "subscriptions": active_subscriptions},
+        subscription_growth=growth_series,
+        total_subscriptions=total_subscriptions,
+        monthly_subscription_growth={
+            "current": current_month_subscriptions,
+            "previous": previous_month_subscriptions,
+            "growth_percent": growth_percent(current_month_subscriptions, previous_month_subscriptions),
+        },
+        weekly_subscription_growth={
+            "current": current_week_subscriptions,
+            "previous": previous_week_subscriptions,
+            "growth_percent": growth_percent(current_week_subscriptions, previous_week_subscriptions),
+        },
+        total_revenue_eur=total_revenue,
+        current_month_revenue_eur=current_month_revenue,
+        average_monthly_learning_minutes=average_learning_minutes,
+        on_time_completion_rate=on_time_rate,
+        average_cancellation_rate=cancellation_rate,
+        published_courses=published_courses,
+        draft_courses=draft_courses,
+        total_questions=db.scalar(select(func.count(Question.id)).where(Question.institution_id == institution.id)) or 0,
+        total_teachers=db.scalar(select(func.count(Teacher.id)).where(Teacher.institution_id == institution.id)) or 0,
+        total_exam_papers=db.scalar(select(func.count(ExamPaper.id)).where(ExamPaper.institution_id == institution.id)) or 0,
+        total_competitions=db.scalar(select(func.count(Competition.id)).where(Competition.institution_id == institution.id)) or 0,
+        pending_cancellations=pending_cancellations,
+        subscription_rankings=[ranking_row(course, value) for course, value in subscription_rows],
+        revenue_rankings=[ranking_row(course, float(value or 0), label="EUR") for course, value in revenue_rows],
+        monthly_growth_rankings=monthly_growth_rankings,
+        satisfaction_rankings=[
+            ranking_row(course, float(rating or 0), float(count or 0), "分") for course, rating, count in satisfaction_rows
         ],
     )
+
+
+@router.get("/cancellations", response_model=list[SubscriptionCancellationRequestOut])
+def list_cancellation_requests(
+    status: str | None = None,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> list[SubscriptionCancellationRequestOut]:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    stmt = (
+        select(SubscriptionCancellationRequest)
+        .options(
+            joinedload(SubscriptionCancellationRequest.user),
+            joinedload(SubscriptionCancellationRequest.course),
+            joinedload(SubscriptionCancellationRequest.subscription),
+        )
+        .where(SubscriptionCancellationRequest.institution_id == institution.id)
+        .order_by(SubscriptionCancellationRequest.created_at.desc())
+    )
+    if status:
+        stmt = stmt.where(SubscriptionCancellationRequest.status == status)
+    return [cancellation_request_out(request) for request in db.scalars(stmt)]
+
+
+def get_cancellation_request_or_404(
+    request_id: int,
+    current_user: User,
+    db: Session,
+) -> SubscriptionCancellationRequest:
+    ensure_admin(current_user)
+    institution = get_admin_institution(current_user, db)
+    request = db.scalar(
+        select(SubscriptionCancellationRequest)
+        .options(
+            joinedload(SubscriptionCancellationRequest.user),
+            joinedload(SubscriptionCancellationRequest.course),
+            joinedload(SubscriptionCancellationRequest.subscription),
+        )
+        .where(SubscriptionCancellationRequest.id == request_id)
+    )
+    if not request or not institution or request.institution_id != institution.id:
+        raise HTTPException(status_code=404, detail="Cancellation request not found")
+    return request
+
+
+@router.post("/cancellations/{request_id}/approve", response_model=SubscriptionCancellationRequestOut)
+def approve_cancellation_request(
+    request_id: int,
+    payload: SubscriptionCancellationReview,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionCancellationRequestOut:
+    request = get_cancellation_request_or_404(request_id, current_user, db)
+    if request.status != "pending":
+        raise HTTPException(status_code=422, detail="Cancellation request is not pending")
+    request.status = "approved"
+    request.admin_note = payload.admin_note
+    request.reviewed_by_user_id = current_user.id
+    request.reviewed_at = datetime.now(timezone.utc)
+    if request.subscription:
+        enrollment = db.scalar(
+            select(Enrollment)
+            .where(Enrollment.user_id == request.user_id, Enrollment.course_id == request.course_id)
+            .order_by(Enrollment.created_at.desc())
+        )
+        if enrollment:
+            stop_course_subscription_renewal_after_completion(db, enrollment)
+        request.subscription.status = "ending" if request.subscription.stripe_subscription_id else "canceled"
+    db.commit()
+    db.refresh(request)
+    return cancellation_request_out(request)
+
+
+@router.post("/cancellations/{request_id}/reject", response_model=SubscriptionCancellationRequestOut)
+def reject_cancellation_request(
+    request_id: int,
+    payload: SubscriptionCancellationReview,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> SubscriptionCancellationRequestOut:
+    request = get_cancellation_request_or_404(request_id, current_user, db)
+    if request.status != "pending":
+        raise HTTPException(status_code=422, detail="Cancellation request is not pending")
+    request.status = "rejected"
+    request.admin_note = payload.admin_note
+    request.reviewed_by_user_id = current_user.id
+    request.reviewed_at = datetime.now(timezone.utc)
+    db.commit()
+    db.refresh(request)
+    return cancellation_request_out(request)
 
 
 @router.get("/institution", response_model=InstitutionOut)
@@ -2572,7 +2954,10 @@ def recalculate_enrollment_progress(db: Session, enrollment: Enrollment) -> None
     enrollment.progress_percent = round((completed_items or 0) / max(total_items or 1, 1) * 100, 1)
     enrollment.status = "completed" if enrollment.progress_percent >= 100 else "active"
     if enrollment.status == "completed" and previous_status != "completed":
+        enrollment.completed_at = datetime.now(timezone.utc)
         stop_course_subscription_renewal_after_completion(db, enrollment)
+    elif enrollment.status != "completed":
+        enrollment.completed_at = None
 
 
 def recalculate_quiz_progress_after_grading(db: Session, item: LessonItem, enrollment: Enrollment) -> None:

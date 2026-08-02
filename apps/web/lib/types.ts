@@ -61,6 +61,7 @@ export type Course = {
   category: string;
   level: string;
   price_eur_monthly: number;
+  expected_duration_days?: number;
   hero_image_url: string;
   intro_video_url?: string;
   syllabus?: { items: string[] };
@@ -104,6 +105,7 @@ export type LessonProgress = {
 export type Enrollment = {
   id: number;
   status: "active" | "completed";
+  completed_at?: string | null;
   progress_percent: number;
   progress_records?: LessonProgress[];
   course: Course;
