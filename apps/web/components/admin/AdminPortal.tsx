@@ -3686,7 +3686,12 @@ function RealDashboardPanel() {
       setStatus("");
     } catch (error) {
       setOverview(null);
-      setStatus(error instanceof Error ? error.message : apiConnectionErrorMessage("后台数据读取失败"));
+      const message = error instanceof Error ? error.message : "";
+      setStatus(
+        message === "Failed to fetch" || !message
+          ? apiConnectionErrorMessage("后台数据读取失败")
+          : message
+      );
     } finally {
       setLoading(false);
     }

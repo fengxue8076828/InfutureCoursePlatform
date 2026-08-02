@@ -1710,7 +1710,7 @@ def overview(
     subscription_rows = db.execute(
         select(Course, func.count(Subscription.id))
         .outerjoin(Subscription, Subscription.course_id == Course.id)
-        .options(joinedload(Course.teacher))
+        .options(selectinload(Course.teacher))
         .where(Course.institution_id == institution.id)
         .group_by(Course.id)
         .order_by(func.count(Subscription.id).desc(), Course.updated_at.desc())
@@ -1719,7 +1719,7 @@ def overview(
     revenue_rows = db.execute(
         select(Course, func.coalesce(func.sum(Subscription.amount_eur_monthly), 0))
         .outerjoin(Subscription, Subscription.course_id == Course.id)
-        .options(joinedload(Course.teacher))
+        .options(selectinload(Course.teacher))
         .where(Course.institution_id == institution.id)
         .group_by(Course.id)
         .order_by(func.coalesce(func.sum(Subscription.amount_eur_monthly), 0).desc(), Course.updated_at.desc())
@@ -1728,7 +1728,7 @@ def overview(
     satisfaction_rows = db.execute(
         select(Course, func.coalesce(func.avg(CourseReview.rating), 0), func.count(CourseReview.id))
         .outerjoin(CourseReview, CourseReview.course_id == Course.id)
-        .options(joinedload(Course.teacher))
+        .options(selectinload(Course.teacher))
         .where(Course.institution_id == institution.id)
         .group_by(Course.id)
         .order_by(func.coalesce(func.avg(CourseReview.rating), 0).desc(), func.count(CourseReview.id).desc())
