@@ -39,7 +39,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
 import { API_BASE_URL, apiConnectionErrorMessage } from "@/lib/api-config";
 import { uploadFormDataWithProgress, type UploadProgress } from "@/lib/upload";
@@ -3606,12 +3606,14 @@ function AdminMetricCard({
   label,
   value,
   hint,
-  tone = "mint"
+  tone = "mint",
+  compact = false
 }: {
   label: string;
   value: string;
   hint?: string;
   tone?: "mint" | "coral" | "ink" | "amber";
+  compact?: boolean;
 }) {
   const toneClass =
     tone === "coral"
@@ -3622,11 +3624,44 @@ function AdminMetricCard({
           ? "text-ink"
           : "text-mint";
   return (
-    <div className="panel rounded-lg p-5">
-      <p className="text-sm font-bold text-slate-500">{label}</p>
-      <p className="mt-3 text-3xl font-black text-ink">{value}</p>
-      {hint ? <p className={`mt-2 text-sm font-bold ${toneClass}`}>{hint}</p> : null}
+    <div className={`panel rounded-lg ${compact ? "p-4" : "p-5"}`}>
+      <p className={`${compact ? "text-xs" : "text-sm"} font-bold text-slate-500`}>{label}</p>
+      <p className={`${compact ? "mt-2 text-2xl" : "mt-3 text-3xl"} font-black text-ink`}>{value}</p>
+      {hint ? <p className={`${compact ? "mt-1.5 text-xs" : "mt-2 text-sm"} font-bold ${toneClass}`}>{hint}</p> : null}
     </div>
+  );
+}
+
+function AdminMetricGroup({
+  title,
+  subtitle,
+  tone,
+  children
+}: {
+  title: string;
+  subtitle: string;
+  tone: "mint" | "coral" | "amber";
+  children: ReactNode;
+}) {
+  const toneClass =
+    tone === "coral"
+      ? "border-coral/20 bg-coral/5"
+      : tone === "amber"
+        ? "border-amber-200 bg-amber-50/60"
+        : "border-mint/20 bg-mint/5";
+  const dotClass = tone === "coral" ? "bg-coral" : tone === "amber" ? "bg-amber-500" : "bg-mint";
+
+  return (
+    <section className={`rounded-lg border p-4 shadow-sm ${toneClass}`}>
+      <div className="mb-3 flex items-start gap-2">
+        <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} />
+        <div>
+          <h3 className="text-base font-black text-ink">{title}</h3>
+          <p className="mt-0.5 text-xs font-semibold text-slate-500">{subtitle}</p>
+        </div>
+      </div>
+      <div className="grid gap-3 sm:grid-cols-2">{children}</div>
+    </section>
   );
 }
 
@@ -3744,27 +3779,32 @@ function RealDashboardPanel() {
         </div>
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <AdminMetricCard label="总学生订阅量" value={formatAdminNumber(overview.total_subscriptions)} hint={`当前活跃 ${formatAdminNumber(overview.active_subscriptions)}`} />
-        <AdminMetricCard label="月订阅量增长" value={formatAdminNumber(overview.monthly_subscription_growth.current)} hint={`较上月 ${formatAdminPercent(overview.monthly_subscription_growth.growth_percent)}`} tone="coral" />
-        <AdminMetricCard label="周订阅量增长" value={formatAdminNumber(overview.weekly_subscription_growth.current)} hint={`较上周 ${formatAdminPercent(overview.weekly_subscription_growth.growth_percent)}`} tone="amber" />
-        <AdminMetricCard label="待处理退订" value={formatAdminNumber(overview.pending_cancellations)} hint={`平均退订率 ${formatAdminPercent(overview.average_cancellation_rate)}`} />
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+        <AdminMetricCard compact label="课程总数" value={formatAdminNumber(overview.total_courses)} hint={`已发布 ${overview.published_courses} / 草稿 ${overview.draft_courses}`} />
+        <AdminMetricCard compact label="题目总数" value={formatAdminNumber(overview.total_questions)} />
+        <AdminMetricCard compact label="教师总数" value={formatAdminNumber(overview.total_teachers)} />
+        <AdminMetricCard compact label="模拟试卷" value={formatAdminNumber(overview.total_exam_papers)} />
+        <AdminMetricCard compact label="竞赛" value={formatAdminNumber(overview.total_competitions)} />
+        <AdminMetricCard compact label="待人工批改" value={formatAdminNumber(overview.pending_manual_grading)} tone="amber" />
       </section>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-        <AdminMetricCard label="累计总收入" value={formatAdminEuro(overview.total_revenue_eur)} hint="已确认订阅收入" tone="ink" />
-        <AdminMetricCard label="本月总收入" value={formatAdminEuro(overview.current_month_revenue_eur)} hint={`MRR ${formatAdminEuro(overview.monthly_recurring_revenue_eur)}`} />
-        <AdminMetricCard label="学生平均月学习时间" value={`${formatAdminNumber(overview.average_monthly_learning_minutes)} 分钟`} hint="按学习记录估算" tone="amber" />
-        <AdminMetricCard label="按时完课率" value={formatAdminPercent(overview.on_time_completion_rate)} hint="按课程时长计算" tone="coral" />
-      </section>
+      <section className="grid gap-4 xl:grid-cols-[1.25fr_0.9fr_0.9fr]">
+        <AdminMetricGroup title="订阅" subtitle="订阅增长、活跃状态和退订申请。" tone="mint">
+          <AdminMetricCard compact label="总学生订阅量" value={formatAdminNumber(overview.total_subscriptions)} hint={`当前活跃 ${formatAdminNumber(overview.active_subscriptions)}`} />
+          <AdminMetricCard compact label="待处理退订" value={formatAdminNumber(overview.pending_cancellations)} hint={`平均退订率 ${formatAdminPercent(overview.average_cancellation_rate)}`} />
+          <AdminMetricCard compact label="月订阅量增长" value={formatAdminNumber(overview.monthly_subscription_growth.current)} hint={`较上月 ${formatAdminPercent(overview.monthly_subscription_growth.growth_percent)}`} tone="coral" />
+          <AdminMetricCard compact label="周订阅量增长" value={formatAdminNumber(overview.weekly_subscription_growth.current)} hint={`较上周 ${formatAdminPercent(overview.weekly_subscription_growth.growth_percent)}`} tone="amber" />
+        </AdminMetricGroup>
 
-      <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
-        <AdminMetricCard label="课程总数" value={formatAdminNumber(overview.total_courses)} hint={`已发布 ${overview.published_courses} / 草稿 ${overview.draft_courses}`} />
-        <AdminMetricCard label="题目总数" value={formatAdminNumber(overview.total_questions)} />
-        <AdminMetricCard label="教师总数" value={formatAdminNumber(overview.total_teachers)} />
-        <AdminMetricCard label="模拟试卷" value={formatAdminNumber(overview.total_exam_papers)} />
-        <AdminMetricCard label="竞赛" value={formatAdminNumber(overview.total_competitions)} />
-        <AdminMetricCard label="待人工批改" value={formatAdminNumber(overview.pending_manual_grading)} tone="amber" />
+        <AdminMetricGroup title="收入" subtitle="订阅收入和经常性收入。" tone="coral">
+          <AdminMetricCard compact label="累计总收入" value={formatAdminEuro(overview.total_revenue_eur)} hint="已确认订阅收入" tone="ink" />
+          <AdminMetricCard compact label="本月总收入" value={formatAdminEuro(overview.current_month_revenue_eur)} hint={`MRR ${formatAdminEuro(overview.monthly_recurring_revenue_eur)}`} />
+        </AdminMetricGroup>
+
+        <AdminMetricGroup title="学生学习" subtitle="学习时长和按时完课质量。" tone="amber">
+          <AdminMetricCard compact label="学生平均月学习时间" value={`${formatAdminNumber(overview.average_monthly_learning_minutes)} 分钟`} hint="按学习记录估算" tone="amber" />
+          <AdminMetricCard compact label="按时完课率" value={formatAdminPercent(overview.on_time_completion_rate)} hint="按课程时长计算" tone="coral" />
+        </AdminMetricGroup>
       </section>
 
       <section className="grid gap-5 xl:grid-cols-2">
