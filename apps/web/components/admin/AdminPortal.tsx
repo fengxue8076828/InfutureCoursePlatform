@@ -3624,7 +3624,7 @@ function AdminMetricCard({
           ? "text-ink"
           : "text-mint";
   return (
-    <div className={`panel rounded-lg ${compact ? "p-4" : "p-5"}`}>
+    <div className={`panel h-full rounded-lg ${compact ? "p-4" : "p-5"}`}>
       <p className={`${compact ? "text-xs" : "text-sm"} font-bold text-slate-500`}>{label}</p>
       <p className={`${compact ? "mt-2 text-2xl" : "mt-3 text-3xl"} font-black text-ink`}>{value}</p>
       {hint ? <p className={`${compact ? "mt-1.5 text-xs" : "mt-2 text-sm"} font-bold ${toneClass}`}>{hint}</p> : null}
@@ -3636,11 +3636,13 @@ function AdminMetricGroup({
   title,
   subtitle,
   tone,
+  stacked = false,
   children
 }: {
   title: string;
   subtitle: string;
   tone: "mint" | "coral" | "amber";
+  stacked?: boolean;
   children: ReactNode;
 }) {
   const toneClass =
@@ -3652,7 +3654,7 @@ function AdminMetricGroup({
   const dotClass = tone === "coral" ? "bg-coral" : tone === "amber" ? "bg-amber-500" : "bg-mint";
 
   return (
-    <section className={`rounded-lg border p-4 shadow-sm ${toneClass}`}>
+    <section className={`flex h-full flex-col rounded-lg border p-4 shadow-sm ${toneClass}`}>
       <div className="mb-3 flex items-start gap-2">
         <span className={`mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full ${dotClass}`} />
         <div>
@@ -3660,7 +3662,7 @@ function AdminMetricGroup({
           <p className="mt-0.5 text-xs font-semibold text-slate-500">{subtitle}</p>
         </div>
       </div>
-      <div className="grid gap-3 sm:grid-cols-2">{children}</div>
+      <div className={`grid flex-1 gap-3 ${stacked ? "auto-rows-fr grid-cols-1" : "sm:grid-cols-2"}`}>{children}</div>
     </section>
   );
 }
@@ -3796,12 +3798,12 @@ function RealDashboardPanel() {
           <AdminMetricCard compact label="周订阅量增长" value={formatAdminNumber(overview.weekly_subscription_growth.current)} hint={`较上周 ${formatAdminPercent(overview.weekly_subscription_growth.growth_percent)}`} tone="amber" />
         </AdminMetricGroup>
 
-        <AdminMetricGroup title="收入" subtitle="订阅收入和经常性收入。" tone="coral">
+        <AdminMetricGroup stacked title="收入" subtitle="订阅收入和经常性收入。" tone="coral">
           <AdminMetricCard compact label="累计总收入" value={formatAdminEuro(overview.total_revenue_eur)} hint="已确认订阅收入" tone="ink" />
           <AdminMetricCard compact label="本月总收入" value={formatAdminEuro(overview.current_month_revenue_eur)} hint={`MRR ${formatAdminEuro(overview.monthly_recurring_revenue_eur)}`} />
         </AdminMetricGroup>
 
-        <AdminMetricGroup title="学生学习" subtitle="学习时长和按时完课质量。" tone="amber">
+        <AdminMetricGroup stacked title="学生学习" subtitle="学习时长和按时完课质量。" tone="amber">
           <AdminMetricCard compact label="学生平均月学习时间" value={`${formatAdminNumber(overview.average_monthly_learning_minutes)} 分钟`} hint="按学习记录估算" tone="amber" />
           <AdminMetricCard compact label="按时完课率" value={formatAdminPercent(overview.on_time_completion_rate)} hint="按课程时长计算" tone="coral" />
         </AdminMetricGroup>
