@@ -10,7 +10,6 @@ import {
   ChevronRight,
   ClipboardCheck,
   Database,
-  Edit3,
   FileText,
   GripVertical,
   HelpCircle,
@@ -47,7 +46,6 @@ import { uploadFormDataWithProgress, type UploadProgress } from "@/lib/upload";
 import { MathText } from "@/components/MathText";
 import {
   adminAccount,
-  adminBlogPosts,
   adminInstitution,
   courseRankings,
   dashboardRanges,
@@ -514,7 +512,40 @@ type AdminUploadKind =
   | "handout"
   | "logo"
   | "question_media"
+  | "blog_cover"
+  | "blog_image"
   | "teacher_certificate";
+
+
+type AdminBlogPost = {
+  id: number;
+  slug: string;
+  title: string;
+  excerpt: string;
+  coverUrl: string;
+  content: string;
+  authorName: string;
+  institutionId: number | null;
+  authorUserId: number | null;
+  isPublished: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type ApiAdminBlogPost = {
+  id: number;
+  slug: string;
+  title: string;
+  excerpt: string;
+  cover_url: string;
+  content: string;
+  author_name: string;
+  institution_id?: number | null;
+  author_user_id?: number | null;
+  is_published: boolean;
+  created_at: string;
+  updated_at: string;
+};
 
 type AdminMetricChange = {
   current: number;
@@ -2679,13 +2710,15 @@ function RichTextEditor({
   onChange,
   disabled,
   placeholder,
-  minHeightClass = "min-h-44"
+  minHeightClass = "min-h-44",
+  imageUploadKind = "question_media"
 }: {
   value: string;
   onChange: (value: string) => void;
   disabled?: boolean;
   placeholder: string;
   minHeightClass?: string;
+  imageUploadKind?: AdminUploadKind;
 }) {
   const editorRef = useRef<HTMLDivElement>(null);
   const [focused, setFocused] = useState(false);
@@ -2731,7 +2764,7 @@ function RichTextEditor({
     setUploading(mediaType);
     setUploadProgress(1);
     try {
-      const url = await uploadAdminFile(file, mediaType === "image" ? "question_media" : "lesson_video", (progress) => setUploadProgress(progress.percent));
+      const url = await uploadAdminFile(file, mediaType === "image" ? imageUploadKind : "lesson_video", (progress) => setUploadProgress(progress.percent));
       const safeName = file.name.replace(/[<>"']/g, "");
       insertHtml(
         mediaType === "image"
@@ -9837,47 +9870,410 @@ function ActivityManagement() {
   );
 }
 
-function BlogManagement() {
-  return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_24rem]">
-      <section className="panel rounded-lg p-5">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-xl font-bold text-ink">博客文章</h2>
-          <button className="focus-ring inline-flex items-center gap-2 rounded-lg bg-coral px-4 py-2 text-sm font-bold text-white">
-            <Plus size={16} /> 新增文章
-          </button>
-        </div>
-        <div className="mt-5 grid gap-4">
-          {adminBlogPosts.map((post) => (
-            <div key={post.id} className="grid gap-4 rounded-lg border border-slate-200 bg-white p-4 md:grid-cols-[9rem_1fr_auto]">
-              <img src={post.cover_url} alt={post.title} className="h-28 w-full rounded-lg object-cover" />
-              <div>
-                <p className="font-bold text-ink">{post.title}</p>
-                <p className="mt-2 line-clamp-2 text-sm leading-6 text-slate-600">{post.excerpt}</p>
-                <p className="mt-2 text-xs font-semibold text-slate-500">{post.channel} · {post.views} 浏览</p>
-              </div>
-              <div className="flex items-start gap-2">
-                <span className="rounded-full bg-mint/12 px-2.5 py-1 text-xs font-bold text-mint">{post.status}</span>
-                <button className="focus-ring grid h-9 w-9 place-items-center rounded-lg border border-slate-200">
-                  <Edit3 size={15} />
-                </button>
-              </div>
-            </div>
-          ))}
-        </div>
-      </section>
+const blogManagementText = {
+  untitled: "\u672a\u547d\u540d\u6587\u7ae0",
+  editorTitle: "\u6587\u7ae0\u7f16\u8f91",
+  editorHelp: "\u5c01\u9762\u548c\u6b63\u6587\u56fe\u7247\u901a\u8fc7\u6587\u4ef6\u4e0a\u4f20\u3002",
+  loaded: "\u5df2\u52a0\u8f7d\u6587\u7ae0\u5217\u8868\u3002",
+  noPosts: "\u6682\u65e0\u6587\u7ae0\u3002",
+  readFailed: "\u6587\u7ae0\u8bfb\u53d6\u5931\u8d25",
+  creating: "\u6b63\u5728\u521b\u5efa\u65b0\u6587\u7ae0\u3002",
+  editing: "\u6b63\u5728\u7f16\u8f91\u6587\u7ae0\u3002",
+  coverUploaded: "\u5c01\u9762\u56fe\u5df2\u4e0a\u4f20\u3002",
+  coverUploadFailed: "\u5c01\u9762\u56fe\u4e0a\u4f20\u5931\u8d25",
+  titleRequired: "\u8bf7\u5148\u586b\u5199\u6587\u7ae0\u6807\u9898\u3002",
+  saved: "\u6587\u7ae0\u5df2\u4fdd\u5b58\u3002",
+  saveFailed: "\u6587\u7ae0\u4fdd\u5b58\u5931\u8d25",
+  deleteTitle: "\u5220\u9664\u6587\u7ae0",
+  deleteDescription: "\u786e\u5b9a\u5220\u9664\u8fd9\u7bc7\u6587\u7ae0\u5417\uff1f",
+  deleted: "\u6587\u7ae0\u5df2\u5220\u9664\u3002",
+  deleteFailed: "\u6587\u7ae0\u5220\u9664\u5931\u8d25",
+  newPost: "\u65b0\u589e\u6587\u7ae0",
+  delete: "\u5220\u9664",
+  savePost: "\u4fdd\u5b58\u6587\u7ae0",
+  saving: "\u4fdd\u5b58\u4e2d",
+  title: "\u6587\u7ae0\u6807\u9898",
+  titlePlaceholder: "\u8f93\u5165\u6587\u7ae0\u6807\u9898",
+  publishStatus: "\u53d1\u5e03\u72b6\u6001",
+  draft: "\u8349\u7a3f",
+  published: "\u5df2\u53d1\u5e03",
+  cover: "\u5c01\u9762\u56fe",
+  noCoverUploaded: "\u5c1a\u672a\u4e0a\u4f20\u5c01\u9762",
+  selectCover: "\u9009\u62e9\u5c01\u9762\u56fe",
+  uploading: "\u4e0a\u4f20\u4e2d",
+  removeCover: "\u79fb\u9664\u5c01\u9762",
+  excerpt: "\u6587\u7ae0\u6458\u8981",
+  excerptPlaceholder: "\u7528\u4e8e\u5217\u8868\u5c55\u793a\u7684\u7b80\u77ed\u6458\u8981",
+  content: "\u6587\u7ae0\u6b63\u6587",
+  contentPlaceholder: "\u6587\u7ae0\u6b63\u6587",
+  listTitle: "\u6587\u7ae0\u5217\u8868",
+  loading: "\u6b63\u5728\u8bfb\u53d6\u6587\u7ae0...",
+  refresh: "\u5237\u65b0\u6587\u7ae0\u5217\u8868",
+  noCover: "\u65e0\u5c01\u9762",
+  currentTeacher: "\u5f53\u524d\u8001\u5e08",
+  noExcerpt: "\u6682\u65e0\u6458\u8981",
+  emptyList: "\u8fd8\u6ca1\u6709\u6587\u7ae0\uff0c\u70b9\u51fb\u201c\u65b0\u589e\u6587\u7ae0\u201d\u5f00\u59cb\u521b\u5efa\u3002",
+  articleUnit: "\u7bc7\u6587\u7ae0"
+};
 
-      <aside className="panel h-fit rounded-lg p-5">
-        <h3 className="font-bold text-ink">文章编辑</h3>
-        <div className="mt-4 grid gap-3">
-          <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="文章标题" defaultValue="海外中文学习方法" />
-          <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2 text-sm" placeholder="封面图 URL" />
-          <textarea className="focus-ring min-h-40 rounded-lg border border-slate-200 px-3 py-2 text-sm leading-6" placeholder="文章正文" />
-          <button className="focus-ring inline-flex items-center justify-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white">
-            <ImagePlus size={16} /> 保存文章
-          </button>
-        </div>
-      </aside>
-    </div>
+function createBlankAdminBlogPost(): AdminBlogPost {
+  const now = new Date().toISOString();
+  return {
+    id: -Date.now(),
+    slug: "",
+    title: "",
+    excerpt: "",
+    coverUrl: "",
+    content: "",
+    authorName: "",
+    institutionId: null,
+    authorUserId: null,
+    isPublished: false,
+    createdAt: now,
+    updatedAt: now
+  };
+}
+
+function adminBlogPostFromApi(post: ApiAdminBlogPost): AdminBlogPost {
+  return {
+    id: post.id,
+    slug: post.slug,
+    title: post.title || blogManagementText.untitled,
+    excerpt: post.excerpt || "",
+    coverUrl: post.cover_url || "",
+    content: post.content || "",
+    authorName: post.author_name || "",
+    institutionId: post.institution_id ?? null,
+    authorUserId: post.author_user_id ?? null,
+    isPublished: Boolean(post.is_published),
+    createdAt: post.created_at,
+    updatedAt: post.updated_at
+  };
+}
+
+function adminBlogPostPayload(post: AdminBlogPost) {
+  return {
+    title: post.title.trim(),
+    excerpt: post.excerpt.trim(),
+    cover_url: post.coverUrl.trim(),
+    content: post.content,
+    is_published: post.isPublished
+  };
+}
+
+function BlogManagement() {
+  const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
+  const [posts, setPosts] = useState<AdminBlogPost[]>([]);
+  const [draft, setDraft] = useState<AdminBlogPost>(() => createBlankAdminBlogPost());
+  const [selectedPostId, setSelectedPostId] = useState<number | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isSaving, setIsSaving] = useState(false);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [statusMessage, setStatusMessage] = useState("");
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
+
+  const isNewDraft = draft.id < 0;
+
+  async function loadPosts(options: { selectFirst?: boolean } = {}) {
+    setIsLoading(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/blog-posts`, {
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const payload = (await response.json()) as ApiAdminBlogPost[];
+      const mapped = payload.map(adminBlogPostFromApi);
+      setPosts(mapped);
+      setStatusMessage(mapped.length ? blogManagementText.loaded : blogManagementText.noPosts);
+      setDraft((current) => {
+        if (current.id < 0 && !options.selectFirst) {
+          return current;
+        }
+        const activeId = selectedPostId ?? current.id;
+        const next = mapped.find((post) => post.id === activeId) ?? (options.selectFirst ? mapped[0] : null);
+        if (next) {
+          setSelectedPostId(next.id);
+          return next;
+        }
+        setSelectedPostId(null);
+        return createBlankAdminBlogPost();
+      });
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : apiConnectionErrorMessage(blogManagementText.readFailed));
+    } finally {
+      setIsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    void loadPosts({ selectFirst: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  function startNewPost() {
+    setSelectedPostId(null);
+    setDraft(createBlankAdminBlogPost());
+    setStatusMessage(blogManagementText.creating);
+  }
+
+  function selectPost(post: AdminBlogPost) {
+    setSelectedPostId(post.id);
+    setDraft(post);
+    setStatusMessage(blogManagementText.editing);
+  }
+
+  async function handleCoverUpload(file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    setCoverUploadProgress(1);
+    try {
+      const url = await uploadAdminFile(file, "blog_cover", (progress) => setCoverUploadProgress(progress.percent));
+      setDraft((current) => ({ ...current, coverUrl: url }));
+      setStatusMessage(blogManagementText.coverUploaded);
+    } catch (error) {
+      setStatusMessage(uploadFailureMessage(error, apiConnectionErrorMessage(blogManagementText.coverUploadFailed)));
+    } finally {
+      setCoverUploadProgress(null);
+    }
+  }
+
+  async function savePost() {
+    const payload = adminBlogPostPayload(draft);
+    if (!payload.title) {
+      setStatusMessage(blogManagementText.titleRequired);
+      return;
+    }
+    setIsSaving(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/blog-posts${isNewDraft ? "" : `/${draft.id}`}`, {
+        method: isNewDraft ? "POST" : "PUT",
+        headers: getAdminRequestHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify(payload)
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      const saved = adminBlogPostFromApi((await response.json()) as ApiAdminBlogPost);
+      setDraft(saved);
+      setSelectedPostId(saved.id);
+      setPosts((current) => [saved, ...current.filter((post) => post.id !== saved.id)]);
+      setStatusMessage(blogManagementText.saved);
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : apiConnectionErrorMessage(blogManagementText.saveFailed));
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function deletePost() {
+    if (isNewDraft) {
+      startNewPost();
+      return;
+    }
+    const confirmed = await confirmDelete({
+      title: blogManagementText.deleteTitle,
+      description: blogManagementText.deleteDescription,
+      confirmLabel: blogManagementText.deleteTitle
+    });
+    if (!confirmed) {
+      return;
+    }
+    setIsDeleting(true);
+    try {
+      const response = await fetch(`${API_BASE_URL}/admin/blog-posts/${draft.id}`, {
+        method: "DELETE",
+        headers: getAdminRequestHeaders()
+      });
+      if (!response.ok) {
+        throw new Error(await response.text());
+      }
+      setPosts((current) => current.filter((post) => post.id !== draft.id));
+      setStatusMessage(blogManagementText.deleted);
+      startNewPost();
+    } catch (error) {
+      setStatusMessage(error instanceof Error ? error.message : apiConnectionErrorMessage(blogManagementText.deleteFailed));
+    } finally {
+      setIsDeleting(false);
+    }
+  }
+
+  return (
+    <>
+      <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_28rem]">
+        <section className="panel rounded-lg p-5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div>
+              <h2 className="text-xl font-bold text-ink">{blogManagementText.editorTitle}</h2>
+              <p className="mt-1 text-sm font-semibold text-slate-500">{blogManagementText.editorHelp}</p>
+              {statusMessage ? <p className="mt-2 text-sm font-semibold text-slate-500">{statusMessage}</p> : null}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={startNewPost}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink"
+              >
+                <Plus size={16} /> {blogManagementText.newPost}
+              </button>
+              <button
+                type="button"
+                onClick={() => void deletePost()}
+                disabled={isDeleting}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg border border-coral/30 bg-white px-4 py-2 text-sm font-bold text-coral disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Trash2 size={16} /> {blogManagementText.delete}
+              </button>
+              <button
+                type="button"
+                onClick={() => void savePost()}
+                disabled={isSaving}
+                className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                <Save size={16} /> {isSaving ? blogManagementText.saving : blogManagementText.savePost}
+              </button>
+            </div>
+          </div>
+
+          <div className="mt-5 grid gap-4 lg:grid-cols-[minmax(0,1fr)_16rem]">
+            <label className="grid gap-2 text-sm font-bold text-ink">
+              {blogManagementText.title}
+              <input
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+                value={draft.title}
+                placeholder={blogManagementText.titlePlaceholder}
+                onChange={(event) => setDraft((current) => ({ ...current, title: event.target.value }))}
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-bold text-ink">
+              {blogManagementText.publishStatus}
+              <select
+                className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+                value={draft.isPublished ? "published" : "draft"}
+                onChange={(event) => setDraft((current) => ({ ...current, isPublished: event.target.value === "published" }))}
+              >
+                <option value="draft">{blogManagementText.draft}</option>
+                <option value="published">{blogManagementText.published}</option>
+              </select>
+            </label>
+          </div>
+
+          <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_1fr]">
+            <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+              <p className="text-sm font-bold text-ink">{blogManagementText.cover}</p>
+              <div className="mt-3 grid h-40 place-items-center overflow-hidden rounded-lg border border-dashed border-slate-200 bg-white">
+                {draft.coverUrl ? (
+                  <img src={draft.coverUrl} alt={draft.title || blogManagementText.cover} className="h-full w-full object-cover" />
+                ) : (
+                  <span className="text-sm font-bold text-slate-400">{blogManagementText.noCoverUploaded}</span>
+                )}
+              </div>
+              <label className="focus-ring mt-3 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-ink">
+                {coverUploadProgress !== null ? <UploadProgressRing progress={coverUploadProgress} /> : <ImagePlus size={16} />}
+                {coverUploadProgress !== null ? blogManagementText.uploading : blogManagementText.selectCover}
+                <input
+                  type="file"
+                  accept="image/*"
+                  className="sr-only"
+                  onChange={(event) => {
+                    void handleCoverUpload(event.target.files?.[0]);
+                    event.currentTarget.value = "";
+                  }}
+                />
+              </label>
+              {draft.coverUrl ? (
+                <button
+                  type="button"
+                  onClick={() => setDraft((current) => ({ ...current, coverUrl: "" }))}
+                  className="focus-ring mt-2 w-full rounded-lg border border-coral/30 bg-white px-4 py-2 text-sm font-bold text-coral"
+                >
+                  {blogManagementText.removeCover}
+                </button>
+              ) : null}
+            </div>
+            <label className="grid gap-2 text-sm font-bold text-ink">
+              {blogManagementText.excerpt}
+              <textarea
+                className="focus-ring min-h-40 rounded-lg border border-slate-200 px-3 py-3 text-sm leading-6"
+                value={draft.excerpt}
+                placeholder={blogManagementText.excerptPlaceholder}
+                onChange={(event) => setDraft((current) => ({ ...current, excerpt: event.target.value }))}
+              />
+            </label>
+          </div>
+
+          <div className="mt-4">
+            <p className="mb-2 text-sm font-bold text-ink">{blogManagementText.content}</p>
+            <RichTextEditor
+              value={draft.content}
+              onChange={(content) => setDraft((current) => ({ ...current, content }))}
+              placeholder={blogManagementText.contentPlaceholder}
+              minHeightClass="min-h-[28rem]"
+              imageUploadKind="blog_image"
+            />
+          </div>
+        </section>
+
+        <aside className="panel h-fit rounded-lg p-5">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <h3 className="text-lg font-bold text-ink">{blogManagementText.listTitle}</h3>
+              <p className="mt-1 text-sm font-semibold text-slate-500">
+                {isLoading ? blogManagementText.loading : `${posts.length} ${blogManagementText.articleUnit}`}
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => void loadPosts()}
+              className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-slate-200 bg-white text-ink"
+              aria-label={blogManagementText.refresh}
+            >
+              <RefreshCw size={16} />
+            </button>
+          </div>
+
+          <div className="mt-4 grid gap-3">
+            {posts.map((post) => {
+              const isActive = post.id === selectedPostId;
+              return (
+                <button
+                  key={post.id}
+                  type="button"
+                  onClick={() => selectPost(post)}
+                  className={`focus-ring grid w-full grid-cols-[5rem_1fr] gap-3 rounded-lg border p-3 text-left transition ${
+                    isActive ? "border-mint bg-mint/5" : "border-slate-200 bg-white hover:border-mint/60"
+                  }`}
+                >
+                  <div className="grid h-20 place-items-center overflow-hidden rounded-lg bg-slate-100 text-xs font-bold text-slate-400">
+                    {post.coverUrl ? <img src={post.coverUrl} alt={post.title} className="h-full w-full object-cover" /> : blogManagementText.noCover}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-start justify-between gap-2">
+                      <p className="line-clamp-2 font-bold text-ink">{post.title}</p>
+                      <span className={`shrink-0 rounded-full px-2 py-1 text-xs font-bold ${post.isPublished ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"}`}>
+                        {post.isPublished ? blogManagementText.published : blogManagementText.draft}
+                      </span>
+                    </div>
+                    <p className="mt-2 line-clamp-2 text-xs leading-5 text-slate-500">{post.excerpt || stripRichText(post.content) || blogManagementText.noExcerpt}</p>
+                    <p className="mt-2 text-xs font-semibold text-slate-400">
+                      {post.authorName || blogManagementText.currentTeacher}{" - "}{formatAdminDateTime(post.updatedAt)}
+                    </p>
+                  </div>
+                </button>
+              );
+            })}
+            {!posts.length && !isLoading ? (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-white p-5 text-center text-sm font-semibold text-slate-500">
+                {blogManagementText.emptyList}
+              </div>
+            ) : null}
+          </div>
+        </aside>
+      </div>
+      {deleteConfirmDialog}
+    </>
   );
 }
+

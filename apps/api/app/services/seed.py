@@ -259,6 +259,35 @@ def ensure_schema_extensions(db: Session) -> None:
                 )
             )
 
+    if "blog_posts" in table_names:
+        blog_columns = {column["name"] for column in inspector.get_columns("blog_posts")}
+        if "institution_id" not in blog_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE blog_posts "
+                    "ADD COLUMN institution_id INTEGER REFERENCES institutions(id) ON DELETE CASCADE"
+                )
+            )
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_blog_posts_institution_id "
+                    "ON blog_posts(institution_id)"
+                )
+            )
+        if "author_user_id" not in blog_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE blog_posts "
+                    "ADD COLUMN author_user_id INTEGER REFERENCES users(id) ON DELETE SET NULL"
+                )
+            )
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_blog_posts_author_user_id "
+                    "ON blog_posts(author_user_id)"
+                )
+            )
+
     if "courses" in table_names:
         course_columns = {column["name"] for column in inspector.get_columns("courses")}
         if "expected_duration_days" not in course_columns:

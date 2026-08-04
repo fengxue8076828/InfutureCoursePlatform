@@ -363,7 +363,27 @@ class BlogPostOut(OrmModel):
     cover_url: str
     content: str
     author_name: str
+    is_published: bool = False
+    institution_id: int | None = None
+    author_user_id: int | None = None
     created_at: datetime
+    updated_at: datetime
+
+
+class AdminBlogPostCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=220)
+    excerpt: str = Field(default="", max_length=360)
+    cover_url: str = Field(default="", max_length=500)
+    content: str = ""
+    is_published: bool = False
+
+
+class AdminBlogPostUpdate(AdminBlogPostCreate):
+    pass
+
+
+class AdminBlogPostOut(BlogPostOut):
+    pass
 
 
 class StudentPointLevelOut(BaseModel):

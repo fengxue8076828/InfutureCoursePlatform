@@ -935,11 +935,16 @@ class BlogPost(Base, TimestampMixin):
     __tablename__ = "blog_posts"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    institution_id: Mapped[int | None] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
+    author_user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
     slug: Mapped[str] = mapped_column(String(160), unique=True, index=True)
     title: Mapped[str] = mapped_column(String(220))
-    excerpt: Mapped[str] = mapped_column(String(360))
-    cover_url: Mapped[str] = mapped_column(String(500))
-    content: Mapped[str] = mapped_column(Text)
-    author_name: Mapped[str] = mapped_column(String(120))
-    is_published: Mapped[bool] = mapped_column(Boolean, default=True, index=True)
+    excerpt: Mapped[str] = mapped_column(String(360), default="", server_default="")
+    cover_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    content: Mapped[str] = mapped_column(Text, default="", server_default="")
+    author_name: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    is_published: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
+
+    institution: Mapped[Institution | None] = relationship()
+    author_user: Mapped[User | None] = relationship()
 

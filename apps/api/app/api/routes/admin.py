@@ -18,6 +18,7 @@ from app.db.session import get_db
 from app.models import (
     ActivityRegistrationStatus,
     InstitutionActivity,
+    BlogPost,
     Course,
     CourseCategory,
     CourseChapter,
@@ -59,6 +60,9 @@ from app.schemas import (
     ActivityCreate,
     ActivityRegistrationOut,
     ActivityUpdate,
+    AdminBlogPostUpdate,
+    AdminBlogPostOut,
+    AdminBlogPostCreate,
     AdminOverviewOut,
     AdminSubscriptionPaymentOut,
     AdminActivityOut,
@@ -460,6 +464,47 @@ def normalize_activity_payload(data: dict, current_user: User, db: Session, inst
         data["meeting_url"] = None
     data["teacher_id"] = normalize_activity_teacher_id(data, current_user, db, institution_id)
     return data
+
+
+def blog_slug_base(title: str) -> str:
+    normalized = unicodedata.normalize("NFKD", title).encode("ascii", "ignore").decode("ascii")
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", normalized).strip("-").lower()
+    return (slug or f"post-{secrets.token_hex(4)}")[:140]
+
+
+def unique_blog_slug(db: Session, title: str, post_id: int | None = None) -> str:
+    base = blog_slug_base(title)
+    slug = base
+    index = 2
+    while True:
+        stmt = select(BlogPost.id).where(BlogPost.slug == slug)
+        if post_id is not None:
+            stmt = stmt.where(BlogPost.id != post_id)
+        if not db.scalar(stmt):
+            return slug
+        suffix = f"-{index}"
+        slug = f"{base[:160 - len(suffix)]}{suffix}"
+        index += 1
+
+
+def get_blog_post_or_404(post_id: int, current_user: User, db: Session) -> BlogPost:
+    institution_id = get_current_institution_id_or_403(current_user)
+    post = db.scalar(select(BlogPost).where(BlogPost.id == post_id, BlogPost.institution_id == institution_id))
+    if not post:
+        raise HTTPException(status_code=404, detail="Blog post not found")
+    if current_user.role == UserRole.teacher and post.author_user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Teachers can only edit their own blog posts")
+    return post
+
+
+def normalize_blog_payload(data: dict[str, object]) -> dict[str, object]:
+    return {
+        "title": str(data.get("title") or "").strip(),
+        "excerpt": str(data.get("excerpt") or "").strip(),
+        "cover_url": str(data.get("cover_url") or "").strip(),
+        "content": str(data.get("content") or "").strip(),
+        "is_published": bool(data.get("is_published")),
+    }
 
 
 def normalize_email(value: object) -> str:
@@ -2292,6 +2337,76 @@ def delete_activity(
     db.delete(activity)
     db.commit()
     return {"id": activity_id, "deleted": True}
+
+
+@router.get("/blog-posts", response_model=list[AdminBlogPostOut])
+def admin_blog_posts(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[BlogPost]:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = select(BlogPost).where(BlogPost.institution_id == institution_id)
+    if current_user.role == UserRole.teacher:
+        stmt = stmt.where(BlogPost.author_user_id == current_user.id)
+    return list(db.scalars(stmt.order_by(BlogPost.updated_at.desc(), BlogPost.created_at.desc())))
+
+
+@router.post("/blog-posts", response_model=AdminBlogPostOut, status_code=201)
+def create_blog_post(
+    payload: AdminBlogPostCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BlogPost:
+    ensure_course_staff(current_user)
+    institution_id = get_current_institution_id_or_403(current_user)
+    data = normalize_blog_payload(payload.model_dump())
+    title = str(data["title"])
+    post = BlogPost(
+        institution_id=institution_id,
+        author_user_id=current_user.id,
+        slug=unique_blog_slug(db, title),
+        author_name=current_user.full_name or current_user.email.split("@")[0],
+        **data,
+    )
+    db.add(post)
+    db.commit()
+    db.refresh(post)
+    return post
+
+
+@router.put("/blog-posts/{post_id}", response_model=AdminBlogPostOut)
+def update_blog_post(
+    post_id: int,
+    payload: AdminBlogPostUpdate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> BlogPost:
+    ensure_course_staff(current_user)
+    post = get_blog_post_or_404(post_id, current_user, db)
+    data = normalize_blog_payload(payload.model_dump())
+    title = str(data["title"])
+    if post.title != title:
+        post.slug = unique_blog_slug(db, title, post.id)
+    for field, value in data.items():
+        setattr(post, field, value)
+    if not post.author_name:
+        post.author_name = current_user.full_name or current_user.email.split("@")[0]
+    db.commit()
+    db.refresh(post)
+    return post
+
+
+@router.delete("/blog-posts/{post_id}")
+def delete_blog_post(
+    post_id: int,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict[str, int | bool]:
+    ensure_course_staff(current_user)
+    post = get_blog_post_or_404(post_id, current_user, db)
+    db.delete(post)
+    db.commit()
+    return {"id": post_id, "deleted": True}
 
 
 @router.get("/difficulty-levels")

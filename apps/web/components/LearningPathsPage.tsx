@@ -93,7 +93,7 @@ export function LearningPathsPage() {
               <Route size={16} /> 学习路径
             </p>
             <h1 className="mt-5 max-w-3xl text-4xl font-black leading-tight text-ink md:text-5xl">
-              像 Coursera 专项课程一样，按路径完成系统学习
+              从入门到高手，跟随我们的学习路径，一路学习，一路成长。
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-8 text-slate-600">
               每条学习路径由机构精选课程组成，帮助学生从入门到进阶逐步完成学习目标。
