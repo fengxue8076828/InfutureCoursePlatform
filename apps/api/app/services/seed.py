@@ -483,11 +483,13 @@ def ensure_schema_extensions(db: Session) -> None:
             "phone": "ALTER TABLE users ADD COLUMN phone VARCHAR(80)",
             "region": "ALTER TABLE users ADD COLUMN region VARCHAR(80)",
             "bio": "ALTER TABLE users ADD COLUMN bio TEXT",
+            "teacher_profile": "ALTER TABLE users ADD COLUMN teacher_profile JSONB NOT NULL DEFAULT '{}'::jsonb",
         }
         for column_name, statement in user_column_sql.items():
             if column_name not in user_columns:
                 db.execute(text(statement))
         db.execute(text("ALTER TABLE users ALTER COLUMN avatar_url TYPE TEXT"))
+        db.execute(text("UPDATE users SET teacher_profile = '{}'::jsonb WHERE teacher_profile IS NULL"))
 
     db.execute(
         text(

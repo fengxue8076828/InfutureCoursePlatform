@@ -7,6 +7,7 @@ import {
   Layers3,
   LibraryBig,
   PlayCircle,
+  Route,
   School,
   Sparkles,
   Users
@@ -78,6 +79,35 @@ function CourseMedia({ course }: { course: Course }) {
           <span className="rounded-full bg-white/18 px-3 py-1.5 backdrop-blur">{course.category}</span>
           <span className="rounded-full bg-white/18 px-3 py-1.5 backdrop-blur">{course.level}</span>
         </div>
+      </div>
+    </div>
+  );
+}
+
+
+function CourseLearningPathBadges({ course }: { course: Course }) {
+  const learningPaths = course.learning_paths ?? [];
+  if (!learningPaths.length) {
+    return null;
+  }
+
+  return (
+    <div className="mt-5 rounded-lg border border-mint/20 bg-emerald-50/70 p-4">
+      <p className="flex items-center gap-2 text-sm font-black text-ink">
+        <Route size={16} className="text-mint" />
+        所属学习路径
+      </p>
+      <div className="mt-3 flex flex-wrap gap-2">
+        {learningPaths.map((path) => (
+          <Link
+            key={`${path.id}-${path.position}`}
+            href={`/learning-paths/${path.slug}`}
+            className="inline-flex items-center gap-2 rounded-full border border-mint/20 bg-white px-3 py-1.5 text-sm font-bold text-slate-700 transition hover:border-mint hover:text-ink"
+          >
+            <span>{path.title}</span>
+            <span className="text-xs text-mint">第 {path.position} 门课程</span>
+          </Link>
+        ))}
       </div>
     </div>
   );
@@ -210,6 +240,8 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ s
                 约 {totalMinutes} 分钟
               </span>
             </div>
+
+            <CourseLearningPathBadges course={course} />
 
             <div className="mt-8 flex flex-wrap gap-3">
               <Link

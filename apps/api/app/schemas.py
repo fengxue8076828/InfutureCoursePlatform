@@ -253,6 +253,13 @@ class TeacherOut(OrmModel):
     institution: InstitutionOut | None = None
 
 
+class CourseLearningPathRefOut(BaseModel):
+    id: int
+    slug: str
+    title: str
+    position: int
+
+
 class CourseCardOut(OrmModel):
     id: int
     slug: str
@@ -268,6 +275,7 @@ class CourseCardOut(OrmModel):
     status: CourseStatus
     rating_average: float = 0.0
     rating_count: int = 0
+    learning_paths: list[CourseLearningPathRefOut] = Field(default_factory=list)
     institution: InstitutionOut
     teacher: TeacherOut
 
@@ -506,12 +514,21 @@ class AdminUserUpdate(BaseModel):
     bio: str | None = None
     is_active: bool = True
 
+class AdminTeacherProfile(BaseModel):
+    highest_education: str = Field(default="", max_length=160)
+    graduation_school: str = Field(default="", max_length=200)
+    current_position: str = Field(default="", max_length=160)
+    employment_history: str = ""
+    teaching_years: str = Field(default="", max_length=80)
+    professional_title: str = Field(default="", max_length=160)
+    certificates: list[str] = Field(default_factory=list)
 
 class AdminProfileOut(UserOut):
     title: str | None = None
     phone: str | None = None
     region: str | None = None
     bio: str | None = None
+    teacher_profile: AdminTeacherProfile = Field(default_factory=AdminTeacherProfile)
 
 
 class AdminProfileUpdate(BaseModel):
@@ -522,6 +539,7 @@ class AdminProfileUpdate(BaseModel):
     phone: str | None = Field(default=None, max_length=80)
     region: str | None = Field(default=None, max_length=80)
     bio: str | None = None
+    teacher_profile: AdminTeacherProfile = Field(default_factory=AdminTeacherProfile)
 
 
 class AdminPasswordCodeOut(BaseModel):
@@ -1448,5 +1466,3 @@ class SubscriptionCancellationRequestOut(BaseModel):
     admin_note: str = ""
     created_at: datetime
     reviewed_at: datetime | None = None
-
-

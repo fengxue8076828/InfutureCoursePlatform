@@ -158,12 +158,12 @@ function InstitutionLogo({ institution }: { institution: Institution }) {
   return (
     <Link
       href={`/institutions/${institution.slug}`}
-      className="flex min-w-0 items-center gap-3 rounded-lg px-2 py-1 transition hover:bg-white/70 hover:text-coral"
+      className="flex min-w-0 items-center gap-4 rounded-lg px-3 py-2 transition hover:bg-white/70 hover:text-coral"
     >
       {logoUrl ? (
-        <img src={logoUrl} alt={institution.name} className="h-12 w-12 rounded-lg object-contain" />
+        <img src={logoUrl} alt={institution.name} className="h-16 max-w-36 rounded-lg object-contain" />
       ) : (
-        <span className="grid h-12 w-12 place-items-center rounded-lg bg-mint/15 font-black text-mint">
+        <span className="grid h-16 w-16 place-items-center rounded-lg bg-mint/15 text-xl font-black text-mint">
           {institution.name.slice(0, 1)}
         </span>
       )}

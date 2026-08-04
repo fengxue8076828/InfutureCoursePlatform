@@ -119,6 +119,7 @@ pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
 
 CODE_QUESTION_TYPES = {QuestionType.coding.value}
 RETIRED_QUESTION_TYPES = {QuestionType.code_review.value}
+ADMIN_PORTAL_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
 MANAGER_ROLES = {UserRole.institution_admin, UserRole.super_admin}
 MANAGED_USER_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
 QUESTION_STAFF_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
@@ -138,6 +139,10 @@ DIFFICULTY_LEVELS_BY_CATEGORY = {
 def ensure_admin(current_user: User) -> None:
     if current_user.role not in {UserRole.institution_admin, UserRole.super_admin}:
         raise HTTPException(status_code=403, detail="Admin role required")
+
+def ensure_admin_portal_user(current_user: User) -> None:
+    if current_user.role not in ADMIN_PORTAL_ROLES:
+        raise HTTPException(status_code=403, detail="Admin portal role required")
 
 
 def ensure_user_manager(current_user: User) -> None:
@@ -864,6 +869,35 @@ def learning_path_to_out(path: LearningPath) -> LearningPathOut:
     )
 
 
+def attach_course_learning_paths(db: Session, courses: list[Course]) -> list[Course]:
+    if not courses:
+        return courses
+    course_ids = [course.id for course in courses]
+    rows = db.execute(
+        select(
+            LearningPathCourse.course_id,
+            LearningPath.id,
+            LearningPath.slug,
+            LearningPath.title,
+            LearningPathCourse.position,
+        )
+        .join(LearningPath, LearningPath.id == LearningPathCourse.learning_path_id)
+        .where(
+            LearningPathCourse.course_id.in_(course_ids),
+            LearningPath.status != LearningPathStatus.archived,
+        )
+        .order_by(LearningPath.title, LearningPathCourse.position)
+    ).all()
+    paths_by_course: dict[int, list[dict[str, int | str]]] = {course_id: [] for course_id in course_ids}
+    for course_id, path_id, slug, title, position in rows:
+        paths_by_course.setdefault(course_id, []).append(
+            {"id": path_id, "slug": slug, "title": title, "position": position}
+        )
+    for course in courses:
+        setattr(course, "learning_paths", paths_by_course.get(course.id, []))
+    return courses
+
+
 def get_learning_path_or_404(path_id: int, current_user: User, db: Session) -> LearningPath:
     institution_id = get_current_institution_id_or_403(current_user)
     path = db.scalar(
@@ -1360,7 +1394,9 @@ def sync_course_chapters(course: Course, chapters: list, db: Session) -> None:
 
 @router.get("/profile", response_model=AdminProfileOut)
 def admin_profile(current_user: User = Depends(get_current_user)) -> User:
-    ensure_admin(current_user)
+    ensure_admin_portal_user(current_user)
+    if current_user.teacher_profile is None:
+        current_user.teacher_profile = {}
     return current_user
 
 
@@ -1370,7 +1406,7 @@ def update_admin_profile(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> User:
-    ensure_admin(current_user)
+    ensure_admin_portal_user(current_user)
     if normalize_email(payload.email) != normalize_email(current_user.email):
         raise HTTPException(status_code=422, detail="Profile email cannot be changed")
 
@@ -1380,6 +1416,8 @@ def update_admin_profile(
     current_user.phone = payload.phone
     current_user.region = payload.region
     current_user.bio = payload.bio
+    if current_user.role in {UserRole.teacher, UserRole.super_admin}:
+        current_user.teacher_profile = payload.teacher_profile.model_dump()
     db.commit()
     db.refresh(current_user)
     return current_user
@@ -1390,7 +1428,7 @@ def request_admin_password_change_code(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdminPasswordCodeOut:
-    ensure_admin(current_user)
+    ensure_admin_portal_user(current_user)
     if not current_user.hashed_password:
         raise HTTPException(status_code=422, detail="Password login is not enabled for this account")
     email = normalize_email(current_user.email)
@@ -1413,7 +1451,7 @@ def update_admin_password(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> User:
-    ensure_admin(current_user)
+    ensure_admin_portal_user(current_user)
     verify_admin_password_change_code(current_user.email, payload.verification_code, db)
     current_user.hashed_password = pwd_context.hash(payload.new_password)
     db.commit()
@@ -1426,9 +1464,12 @@ def admin_users(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[User]:
     ensure_user_manager(current_user)
-    stmt = select(User).where(User.role.in_(MANAGED_USER_ROLES)).order_by(User.updated_at.desc())
-    if current_user.role == UserRole.institution_admin and current_user.institution_id:
-        stmt = stmt.where(User.institution_id == current_user.institution_id)
+    institution_id = get_current_institution_id_or_403(current_user)
+    stmt = (
+        select(User)
+        .where(User.role.in_(MANAGED_USER_ROLES), User.institution_id == institution_id)
+        .order_by(User.updated_at.desc())
+    )
     return list(db.scalars(stmt))
 
 
@@ -1446,13 +1487,13 @@ def create_admin_user(
     email = normalize_email(payload.email)
     ensure_global_email_available(email, db)
 
-    institution = get_admin_institution(current_user, db)
+    institution_id = get_current_institution_id_or_403(current_user)
     user = User(
         email=email,
         full_name=payload.full_name,
         role=payload.role,
         hashed_password=pwd_context.hash("888888"),
-        institution_id=institution.id if institution else None,
+        institution_id=institution_id,
         title=payload.title,
         phone=payload.phone,
         region=payload.region,
@@ -1476,11 +1517,11 @@ def update_admin_user(
     user = db.get(User, user_id)
     if not user or user.role not in MANAGED_USER_ROLES:
         raise HTTPException(status_code=404, detail="User not found")
-    if current_user.role == UserRole.institution_admin:
-        if user.institution_id != current_user.institution_id:
-            raise HTTPException(status_code=403, detail="User belongs to another institution")
-        if payload.role == UserRole.super_admin:
-            raise HTTPException(status_code=403, detail="Institution admins cannot assign super admin")
+    institution_id = get_current_institution_id_or_403(current_user)
+    if user.institution_id != institution_id:
+        raise HTTPException(status_code=403, detail="User belongs to another institution")
+    if current_user.role == UserRole.institution_admin and payload.role == UserRole.super_admin:
+        raise HTTPException(status_code=403, detail="Institution admins cannot assign super admin")
     # Personal identity fields are edited only from the user's own profile.
     user.role = payload.role
     user.title = payload.title
@@ -1504,7 +1545,8 @@ def delete_admin_user(
     user = db.get(User, user_id)
     if not user or user.role not in MANAGED_USER_ROLES:
         raise HTTPException(status_code=404, detail="User not found")
-    if current_user.role == UserRole.institution_admin and user.institution_id != current_user.institution_id:
+    institution_id = get_current_institution_id_or_403(current_user)
+    if user.institution_id != institution_id:
         raise HTTPException(status_code=403, detail="User belongs to another institution")
     db.delete(user)
     db.commit()
@@ -2573,7 +2615,8 @@ def admin_courses(
         stmt = stmt.where(Course.teacher_id == teacher.id)
     elif current_user.institution_id:
         stmt = stmt.where(Course.institution_id == current_user.institution_id)
-    return list(db.scalars(stmt))
+    courses = list(db.scalars(stmt))
+    return attach_course_learning_paths(db, courses)
 
 
 @router.get("/courses/{course_id}", response_model=CourseDetailOut)
@@ -2583,7 +2626,9 @@ def admin_course_detail(
     db: Session = Depends(get_db),
 ) -> Course:
     ensure_course_staff(current_user)
-    return get_course_or_404(course_id, current_user, db)
+    course = get_course_or_404(course_id, current_user, db)
+    attach_course_learning_paths(db, [course])
+    return course
 
 
 @router.post("/courses", response_model=CourseCardOut)
@@ -2639,7 +2684,9 @@ def update_course(
     if "chapters" in payload.model_fields_set:
         sync_course_chapters(course, payload.chapters or [], db)
     db.commit()
-    return get_course_or_404(course.id, current_user, db)
+    course = get_course_or_404(course.id, current_user, db)
+    attach_course_learning_paths(db, [course])
+    return course
 
 
 @router.delete("/courses/{course_id}")

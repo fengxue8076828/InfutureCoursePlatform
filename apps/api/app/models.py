@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import enum
 from datetime import date, datetime
@@ -187,6 +187,7 @@ class User(Base, TimestampMixin):
     phone: Mapped[str | None] = mapped_column(String(80))
     region: Mapped[str | None] = mapped_column(String(80))
     bio: Mapped[str | None] = mapped_column(Text)
+    teacher_profile: Mapped[dict] = mapped_column(JSONB, default=dict)
     institution_id: Mapped[int | None] = mapped_column(ForeignKey("institutions.id"))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 

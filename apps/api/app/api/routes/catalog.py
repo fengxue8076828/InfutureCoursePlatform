@@ -98,6 +98,35 @@ def attach_course_ratings(db: Session, courses: list[Course]) -> list[Course]:
     return courses
 
 
+def attach_course_learning_paths(db: Session, courses: list[Course]) -> list[Course]:
+    if not courses:
+        return courses
+    course_ids = [course.id for course in courses]
+    rows = db.execute(
+        select(
+            LearningPathCourse.course_id,
+            LearningPath.id,
+            LearningPath.slug,
+            LearningPath.title,
+            LearningPathCourse.position,
+        )
+        .join(LearningPath, LearningPath.id == LearningPathCourse.learning_path_id)
+        .where(
+            LearningPathCourse.course_id.in_(course_ids),
+            LearningPath.status == LearningPathStatus.published,
+        )
+        .order_by(LearningPath.title, LearningPathCourse.position)
+    ).all()
+    paths_by_course: dict[int, list[dict[str, int | str]]] = {course_id: [] for course_id in course_ids}
+    for course_id, path_id, slug, title, position in rows:
+        paths_by_course.setdefault(course_id, []).append(
+            {"id": path_id, "slug": slug, "title": title, "position": position}
+        )
+    for course in courses:
+        setattr(course, "learning_paths", paths_by_course.get(course.id, []))
+    return courses
+
+
 def public_activity_to_out(activity: InstitutionActivity) -> PublicActivityOut:
     return PublicActivityOut(
         id=activity.id,
@@ -886,7 +915,8 @@ def list_courses(
     if institution:
         stmt = stmt.join(Course.institution).where(Institution.slug == institution)
     courses = list(db.scalars(stmt))
-    return attach_course_ratings(db, courses)
+    courses = attach_course_ratings(db, courses)
+    return attach_course_learning_paths(db, courses)
 
 
 @router.get("/courses/{slug}", response_model=CourseDetailOut)
@@ -903,6 +933,7 @@ def get_course(slug: str, db: Session = Depends(get_db)) -> Course:
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
     attach_course_ratings(db, [course])
+    attach_course_learning_paths(db, [course])
     return course
 
 

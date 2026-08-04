@@ -52,6 +52,13 @@ export type Chapter = {
   items: LessonItem[];
 };
 
+export type CourseLearningPathRef = {
+  id: number;
+  slug: string;
+  title: string;
+  position: number;
+};
+
 export type Course = {
   id: number;
   slug: string;
@@ -70,6 +77,7 @@ export type Course = {
   students_count: number;
   rating_average?: number;
   rating_count?: number;
+  learning_paths?: CourseLearningPathRef[];
   institution: Institution;
   teacher: Teacher;
   chapters?: Chapter[];
@@ -476,5 +484,3 @@ export type ExamPaper = {
   created_at?: string;
   updated_at?: string;
 };
-
-

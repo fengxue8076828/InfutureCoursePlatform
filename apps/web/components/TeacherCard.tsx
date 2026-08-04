@@ -5,7 +5,7 @@ import type { Teacher } from "@/lib/types";
 
 export function TeacherCard({ teacher }: { teacher: Teacher }) {
   const specialty =
-    Array.isArray(teacher.specialties.items) && teacher.specialties.items.length > 0
+    Array.isArray(teacher.specialties?.items) && teacher.specialties.items.length > 0
       ? teacher.specialties.items[0]
       : teacher.title;
   const avatarUrl = teacher.avatar_url?.trim();

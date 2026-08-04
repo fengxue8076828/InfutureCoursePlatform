@@ -656,7 +656,27 @@ type ApiTeacher = {
 
 type AdminRoleValue = "super_admin" | "institution_admin" | "teacher" | "student";
 
+type AdminTeacherProfile = {
+  highestEducation: string;
+  graduationSchool: string;
+  currentPosition: string;
+  employmentHistory: string;
+  teachingYears: string;
+  professionalTitle: string;
+  certificates: string[];
+};
+
+type ApiAdminTeacherProfile = {
+  highest_education?: string | null;
+  graduation_school?: string | null;
+  current_position?: string | null;
+  employment_history?: string | null;
+  teaching_years?: string | null;
+  professional_title?: string | null;
+  certificates?: string[] | null;
+};
 type AdminProfile = {
+  id: number | null;
   institutionId: number | null;
   name: string;
   email: string;
@@ -667,6 +687,7 @@ type AdminProfile = {
   region: string;
   bio: string;
   avatar: string;
+  teacherProfile: AdminTeacherProfile;
 };
 
 type ApiAdminProfile = {
@@ -680,6 +701,7 @@ type ApiAdminProfile = {
   phone: string | null;
   region: string | null;
   bio: string | null;
+  teacher_profile?: ApiAdminTeacherProfile | null;
 };
 
 type ManagedUserRole = "super_admin" | "institution_admin" | "teacher";
@@ -829,17 +851,28 @@ type InstitutionFinance = {
   subscription_payments: AdminSubscriptionPayment[];
 };
 
+const emptyAdminTeacherProfile: AdminTeacherProfile = {
+  highestEducation: "",
+  graduationSchool: "",
+  currentPosition: "",
+  employmentHistory: "",
+  teachingYears: "",
+  professionalTitle: "",
+  certificates: []
+};
 const defaultAdminProfile: AdminProfile = {
+  id: null,
   institutionId: adminInstitution.id,
   name: adminAccount.name,
   email: teacherUsers[0]?.email ?? "admin@example.com",
   role: adminAccount.role,
   roleValue: "super_admin",
-  title: teacherUsers[0]?.title ?? "机构管理员",
-  phone: "+49 30 0000 3939",
+  title: teacherUsers[0]?.title ?? "",
+  phone: "",
   region: normalizeProfileRegion(adminInstitution.region),
-  bio: "负责机构课程、题库和教学运营管理。",
-  avatar: DEFAULT_ADMIN_AVATAR
+  bio: "",
+  avatar: DEFAULT_ADMIN_AVATAR,
+  teacherProfile: emptyAdminTeacherProfile
 };
 
 const defaultInstitutionDraft: InstitutionDraft = {
@@ -1390,6 +1423,7 @@ async function syncStripeConnectStatus(): Promise<{ draft?: InstitutionDraft; er
 function profileFromApi(profile: ApiAdminProfile): AdminProfile {
   const roleValue = normalizeAdminRoleValue(profile.role);
   return {
+    id: profile.id,
     institutionId: profile.institution_id,
     name: profile.full_name,
     email: profile.email,
@@ -1399,7 +1433,8 @@ function profileFromApi(profile: ApiAdminProfile): AdminProfile {
     phone: profile.phone ?? defaultAdminProfile.phone,
     region: normalizeProfileRegion(profile.region ?? defaultAdminProfile.region),
     bio: profile.bio ?? defaultAdminProfile.bio,
-    avatar: resolveProfileAvatar(profile.avatar_url)
+    avatar: resolveProfileAvatar(profile.avatar_url),
+    teacherProfile: teacherProfileFromApi(profile.teacher_profile)
   };
 }
 
@@ -1430,7 +1465,8 @@ async function saveAdminProfile(profile: AdminProfile): Promise<AdminProfile | n
         title: profile.title,
         phone: profile.phone,
         region: profile.region,
-        bio: profile.bio
+        bio: profile.bio,
+        teacher_profile: teacherProfileToApi(profile.teacherProfile)
       })
     });
     if (!response.ok) {
@@ -2865,13 +2901,50 @@ function parseAdminProfile(value: string): AdminProfile {
       roleValue,
       role: roleLabel(roleValue),
       avatar: resolveProfileAvatar(profile.avatar),
-      region: normalizeProfileRegion(profile.region)
+      region: normalizeProfileRegion(profile.region),
+      teacherProfile: normalizeAdminTeacherProfile(profile.teacherProfile)
     };
   } catch {
     return defaultAdminProfile;
   }
 }
 
+function normalizeAdminTeacherProfile(profile?: Partial<AdminTeacherProfile> | null): AdminTeacherProfile {
+  return {
+    highestEducation: profile?.highestEducation ?? "",
+    graduationSchool: profile?.graduationSchool ?? "",
+    currentPosition: profile?.currentPosition ?? "",
+    employmentHistory: profile?.employmentHistory ?? "",
+    teachingYears: profile?.teachingYears ?? "",
+    professionalTitle: profile?.professionalTitle ?? "",
+    certificates: Array.isArray(profile?.certificates) ? profile.certificates.filter(Boolean) : []
+  };
+}
+
+function teacherProfileFromApi(profile?: ApiAdminTeacherProfile | null): AdminTeacherProfile {
+  return normalizeAdminTeacherProfile({
+    highestEducation: profile?.highest_education ?? "",
+    graduationSchool: profile?.graduation_school ?? "",
+    currentPosition: profile?.current_position ?? "",
+    employmentHistory: profile?.employment_history ?? "",
+    teachingYears: profile?.teaching_years ?? "",
+    professionalTitle: profile?.professional_title ?? "",
+    certificates: profile?.certificates ?? []
+  });
+}
+
+function teacherProfileToApi(profile: AdminTeacherProfile) {
+  const normalized = normalizeAdminTeacherProfile(profile);
+  return {
+    highest_education: normalized.highestEducation,
+    graduation_school: normalized.graduationSchool,
+    current_position: normalized.currentPosition,
+    employment_history: normalized.employmentHistory,
+    teaching_years: normalized.teachingYears,
+    professional_title: normalized.professionalTitle,
+    certificates: normalized.certificates.map((certificate) => certificate.trim()).filter(Boolean)
+  };
+}
 function persistAdminProfile(profile: AdminProfile) {
   if (typeof window === "undefined") {
     return;
@@ -3283,13 +3356,16 @@ function AdminPageHeader({
 function ProfileEditorModal({ onClose }: { onClose: () => void }) {
   const profile = useAdminProfile();
   const [draft, setDraft] = useState<AdminProfile>(profile);
+  const [activeProfileTab, setActiveProfileTab] = useState<"basic" | "teacher">("basic");
   const [status, setStatus] = useState("修改后点击保存，资料会同步到当前后台会话。");
   const [saving, setSaving] = useState(false);
+  const [passwordPanelOpen, setPasswordPanelOpen] = useState(false);
   const [passwordDraft, setPasswordDraft] = useState({ verificationCode: "", newPassword: "", confirmPassword: "" });
   const [passwordStatus, setPasswordStatus] = useState("通过邮箱验证码设置新密码。");
   const [passwordDemoCode, setPasswordDemoCode] = useState("");
   const [requestingPasswordCode, setRequestingPasswordCode] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const canEditTeacherProfile = draft.roleValue === "teacher" || draft.roleValue === "super_admin";
 
   useEffect(() => {
     let isMounted = true;
@@ -3299,15 +3375,52 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
       }
       persistAdminProfile(remoteProfile);
       setDraft(remoteProfile);
-      setStatus("已从服务器加载个人资料。");
     });
     return () => {
       isMounted = false;
     };
   }, []);
 
-  function updateDraft(field: keyof AdminProfile, value: string) {
+  function updateDraft<K extends keyof AdminProfile>(field: K, value: AdminProfile[K]) {
     setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateTeacherProfile<K extends keyof AdminTeacherProfile>(field: K, value: AdminTeacherProfile[K]) {
+    setDraft((current) => ({
+      ...current,
+      teacherProfile: {
+        ...current.teacherProfile,
+        [field]: value
+      }
+    }));
+  }
+
+  function updateCertificate(index: number, value: string) {
+    setDraft((current) => {
+      const certificates = [...current.teacherProfile.certificates];
+      certificates[index] = value;
+      return { ...current, teacherProfile: { ...current.teacherProfile, certificates } };
+    });
+  }
+
+  function addCertificate() {
+    setDraft((current) => ({
+      ...current,
+      teacherProfile: {
+        ...current.teacherProfile,
+        certificates: [...current.teacherProfile.certificates, ""]
+      }
+    }));
+  }
+
+  function removeCertificate(index: number) {
+    setDraft((current) => ({
+      ...current,
+      teacherProfile: {
+        ...current.teacherProfile,
+        certificates: current.teacherProfile.certificates.filter((_, certificateIndex) => certificateIndex !== index)
+      }
+    }));
   }
 
   function updatePasswordDraft(field: keyof typeof passwordDraft, value: string) {
@@ -3348,6 +3461,10 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
     onClose();
   }
 
+  const profileTabs: Array<{ key: "basic" | "teacher"; label: string }> = [
+    { key: "basic", label: "基本资料" },
+    ...(canEditTeacherProfile ? [{ key: "teacher" as const, label: "老师详细信息" }] : [])
+  ];
   async function sendPasswordCode() {
     setRequestingPasswordCode(true);
     setPasswordDemoCode("");
@@ -3387,7 +3504,9 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
       setDraft(result.profile);
       setPasswordDraft({ verificationCode: "", newPassword: "", confirmPassword: "" });
       setPasswordDemoCode("");
+      setPasswordPanelOpen(false);
       setPasswordStatus("密码已修改，下次登录请使用新密码。");
+      setStatus("密码已修改，下次登录请使用新密码。");
     } else {
       setPasswordStatus(result.message);
     }
@@ -3396,7 +3515,7 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-ink/45 px-4 py-8">
-      <section className="max-h-[90vh] w-full max-w-3xl overflow-y-auto rounded-lg bg-white p-5 shadow-soft">
+      <section className="max-h-[90vh] w-full max-w-5xl overflow-y-auto rounded-lg bg-white p-5 shadow-soft">
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div>
             <p className="text-sm font-bold text-coral">个人资料</p>
@@ -3411,181 +3530,186 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
           </button>
         </div>
 
-        <div className="mt-5 grid gap-5 md:grid-cols-[11rem_1fr]">
-          <aside className="rounded-lg bg-slate-50 p-4">
-            <img src={draft.avatar} alt={draft.name} className="h-36 w-36 rounded-lg object-cover" />
-            <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
-              <ImagePlus size={16} /> 上传头像
-              <input
-                type="file"
-                accept="image/*"
-                className="sr-only"
-                onChange={(event) => handleAvatarUpload(event.target.files?.[0])}
-              />
-            </label>
-          </aside>
+        <div className="mt-5 flex gap-2 rounded-lg bg-slate-100 p-1">
+          {profileTabs.map((tab) => (
+            <button
+              key={tab.key}
+              type="button"
+              onClick={() => setActiveProfileTab(tab.key)}
+              className={`focus-ring rounded-md px-4 py-2 text-sm font-bold ${activeProfileTab === tab.key ? "bg-ink text-white" : "text-slate-600"}`}
+            >
+              {tab.label}
+            </button>
+          ))}
+        </div>
 
-          <div className="grid gap-4">
+        {activeProfileTab === "basic" ? (
+          <div className="mt-5 grid gap-5 md:grid-cols-[11rem_1fr]">
+            <aside className="rounded-lg bg-slate-50 p-4">
+              <img src={draft.avatar} alt={draft.name} className="h-36 w-36 rounded-lg object-cover" />
+              <label className="focus-ring mt-4 inline-flex w-full cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                <ImagePlus size={16} /> 上传头像
+                <input type="file" accept="image/*" className="sr-only" onChange={(event) => handleAvatarUpload(event.target.files?.[0])} />
+              </label>
+            </aside>
+
+            <div className="grid gap-4">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  姓名
+                  <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.name} onChange={(event) => updateDraft("name", event.target.value)} />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  Email
+                  <input className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500" type="email" value={draft.email} readOnly aria-readonly="true" />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  角色
+                  <input className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500" value={draft.role} readOnly aria-readonly="true" />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  职务
+                  <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.title} onChange={(event) => updateDraft("title", event.target.value)} />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  电话
+                  <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.phone} onChange={(event) => updateDraft("phone", event.target.value)} />
+                </label>
+                <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                  所在地区
+                  <select className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2" value={draft.region} onChange={(event) => updateDraft("region", event.target.value)}>
+                    {profileRegionOptions.map((region) => (
+                      <option key={region} value={region}>{region}</option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+
+              <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                个人简介
+                <textarea className="focus-ring min-h-28 rounded-lg border border-slate-200 px-3 py-2 leading-7" value={draft.bio} onChange={(event) => updateDraft("bio", event.target.value)} />
+              </label>
+
+              <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <h3 className="font-bold text-ink">修改密码</h3>
+                    <p className="mt-1 text-sm text-slate-500">通过邮箱验证码设置新密码。</p>
+                  </div>
+                  <button type="button" onClick={() => setPasswordPanelOpen((current) => !current)} className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-bold text-slate-700">
+                    {passwordPanelOpen ? "收起" : "修改密码"}
+                  </button>
+                </div>
+                {passwordPanelOpen ? (
+                  <div className="mt-4">
+                    <button
+                      type="button"
+                      onClick={sendPasswordCode}
+                      disabled={requestingPasswordCode || savingPassword}
+                      className="focus-ring rounded-lg border border-mint/40 bg-white px-3 py-2 text-sm font-bold text-mint disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {requestingPasswordCode ? "发送中" : "发送验证码"}
+                    </button>
+                    {passwordDemoCode ? (
+                      <button type="button" onClick={() => updatePasswordDraft("verificationCode", passwordDemoCode)} className="focus-ring ml-2 rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-slate-600">
+                        使用演示验证码：{passwordDemoCode}
+                      </button>
+                    ) : null}
+                    <div className="mt-4 grid gap-3 md:grid-cols-3">
+                      <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                        验证码
+                        <input className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2" inputMode="numeric" value={passwordDraft.verificationCode} onChange={(event) => updatePasswordDraft("verificationCode", event.target.value)} />
+                      </label>
+                      <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                        新密码
+                        <input className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2" type="password" value={passwordDraft.newPassword} onChange={(event) => updatePasswordDraft("newPassword", event.target.value)} />
+                      </label>
+                      <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                        确认新密码
+                        <input className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2" type="password" value={passwordDraft.confirmPassword} onChange={(event) => updatePasswordDraft("confirmPassword", event.target.value)} />
+                      </label>
+                    </div>
+                    <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
+                      <p className="text-sm text-slate-500">{passwordStatus}</p>
+                      <button type="button" onClick={savePassword} disabled={savingPassword || requestingPasswordCode} className="focus-ring rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
+                        {savingPassword ? "修改中" : "确认修改密码"}
+                      </button>
+                    </div>
+                  </div>
+                ) : null}
+              </section>
+            </div>
+          </div>
+        ) : (
+          <div className="mt-5 grid gap-4">
             <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                姓名
-                <input
-                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                  value={draft.name}
-                  onChange={(event) => updateDraft("name", event.target.value)}
-                />
+                最高学历
+                <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.teacherProfile.highestEducation} onChange={(event) => updateTeacherProfile("highestEducation", event.target.value)} />
               </label>
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                Email
-                <input
-                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
-                  type="email"
-                  value={draft.email}
-                  readOnly
-                  aria-readonly="true"
-                />
+                毕业院校
+                <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.teacherProfile.graduationSchool} onChange={(event) => updateTeacherProfile("graduationSchool", event.target.value)} />
               </label>
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                角色
-                <input
-                  className="rounded-lg border border-slate-200 bg-slate-100 px-3 py-2 text-slate-500"
-                  value={draft.role}
-                  readOnly
-                  aria-readonly="true"
-                />
+                当前职位
+                <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.teacherProfile.currentPosition} onChange={(event) => updateTeacherProfile("currentPosition", event.target.value)} />
               </label>
               <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                职务
-                <input
-                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                  value={draft.title}
-                  onChange={(event) => updateDraft("title", event.target.value)}
-                />
+                教学年限
+                <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.teacherProfile.teachingYears} onChange={(event) => updateTeacherProfile("teachingYears", event.target.value)} />
               </label>
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                电话
-                <input
-                  className="focus-ring rounded-lg border border-slate-200 px-3 py-2"
-                  value={draft.phone}
-                  onChange={(event) => updateDraft("phone", event.target.value)}
-                />
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                职称
+                <input className="focus-ring rounded-lg border border-slate-200 px-3 py-2" value={draft.teacherProfile.professionalTitle} onChange={(event) => updateTeacherProfile("professionalTitle", event.target.value)} />
               </label>
-              <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                所属地区
-                <select
-                  className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
-                  value={draft.region}
-                  onChange={(event) => updateDraft("region", event.target.value)}
-                >
-                  {profileRegionOptions.map((region) => (
-                    <option key={region} value={region}>
-                      {region}
-                    </option>
-                  ))}
-                </select>
+              <label className="grid gap-2 text-sm font-semibold text-slate-700 md:col-span-2">
+                当前或曾任职学校、大学、培训机构
+                <textarea className="focus-ring min-h-28 rounded-lg border border-slate-200 px-3 py-2 leading-7" value={draft.teacherProfile.employmentHistory} onChange={(event) => updateTeacherProfile("employmentHistory", event.target.value)} />
               </label>
             </div>
 
-            <label className="grid gap-2 text-sm font-semibold text-slate-700">
-              个人简介
-              <textarea
-                className="focus-ring min-h-28 rounded-lg border border-slate-200 px-3 py-2 leading-7"
-                value={draft.bio}
-                onChange={(event) => updateDraft("bio", event.target.value)}
-              />
-            </label>
-
-            <section className="rounded-lg border border-slate-200 bg-slate-50 p-4">
-              <div className="flex flex-wrap items-start justify-between gap-3">
+            <section className="rounded-lg border border-slate-200 p-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-bold text-ink">修改密码</h3>
-                  <p className="mt-1 text-sm text-slate-500">验证码将发送到当前绑定邮箱，验证通过后才能设置新密码。</p>
+                  <h3 className="font-bold text-ink">资质或荣誉证书</h3>
+                  <p className="mt-1 text-sm text-slate-500">可以添加多项证书、奖项或专业资质。</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={sendPasswordCode}
-                  disabled={requestingPasswordCode || savingPassword}
-                  className="focus-ring rounded-lg border border-mint/40 bg-white px-3 py-2 text-sm font-bold text-mint disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {requestingPasswordCode ? "发送中" : "发送验证码"}
+                <button type="button" onClick={addCertificate} className="focus-ring rounded-lg bg-coral px-3 py-2 text-sm font-bold text-white">
+                  <Plus size={16} className="inline-block" /> 添加证书
                 </button>
               </div>
-              {passwordDemoCode ? (
-                <button
-                  type="button"
-                  onClick={() => updatePasswordDraft("verificationCode", passwordDemoCode)}
-                  className="focus-ring mt-3 rounded-lg bg-white px-3 py-2 text-left text-sm font-semibold text-slate-600"
-                >
-                  使用本地演示验证码：{passwordDemoCode}
-                </button>
-              ) : null}
-              <div className="mt-4 grid gap-3 md:grid-cols-3">
-                <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                  验证码
-                  <input
-                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
-                    inputMode="numeric"
-                    value={passwordDraft.verificationCode}
-                    onChange={(event) => updatePasswordDraft("verificationCode", event.target.value)}
-                  />
-                </label>
-                <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                  新密码
-                  <input
-                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
-                    type="password"
-                    value={passwordDraft.newPassword}
-                    onChange={(event) => updatePasswordDraft("newPassword", event.target.value)}
-                  />
-                </label>
-                <label className="grid gap-2 text-sm font-semibold text-slate-700">
-                  确认新密码
-                  <input
-                    className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
-                    type="password"
-                    value={passwordDraft.confirmPassword}
-                    onChange={(event) => updatePasswordDraft("confirmPassword", event.target.value)}
-                  />
-                </label>
-              </div>
-              <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
-                <p className="text-sm text-slate-500">{passwordStatus}</p>
-                <button
-                  type="button"
-                  onClick={savePassword}
-                  disabled={savingPassword || requestingPasswordCode}
-                  className="focus-ring rounded-lg bg-mint px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60"
-                >
-                  {savingPassword ? "修改中" : "确认修改密码"}
-                </button>
+              <div className="mt-4 grid gap-3">
+                {draft.teacherProfile.certificates.length ? (
+                  draft.teacherProfile.certificates.map((certificate, index) => (
+                    <div key={index} className="flex gap-2">
+                      <input className="focus-ring min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2" value={certificate} onChange={(event) => updateCertificate(index, event.target.value)} placeholder="例如：教师资格证、优秀教师奖、竞赛指导证书" />
+                      <button type="button" onClick={() => removeCertificate(index)} className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-red-100 text-red-500" aria-label="删除证书">
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
+                  ))
+                ) : (
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">暂未添加证书。</div>
+                )}
               </div>
             </section>
+          </div>
+        )}
 
-            <div className="flex flex-wrap items-center justify-between gap-3">
-              <p className="text-sm text-slate-500">{status}</p>
-              <div className="flex gap-2">
-                <button
-                  onClick={onClose}
-                  className="focus-ring rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700"
-                >
-                  取消
-                </button>
-                <button
-                  onClick={saveProfile}
-                  disabled={saving}
-                  className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white"
-                >
-                  {saving ? "保存中..." : "保存资料"}
-                </button>
-              </div>
-            </div>
+        <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-slate-100 pt-4">
+          <p className="text-sm text-slate-500">{status}</p>
+          <div className="flex gap-2">
+            <button onClick={onClose} className="focus-ring rounded-lg border border-slate-200 px-4 py-2 text-sm font-bold text-slate-700">取消</button>
+            <button onClick={saveProfile} disabled={saving} className="focus-ring rounded-lg bg-ink px-4 py-2 text-sm font-bold text-white disabled:cursor-not-allowed disabled:opacity-60">
+              {saving ? "保存中..." : "保存资料"}
+            </button>
           </div>
         </div>
       </section>
     </div>
   );
 }
-
 function formatAdminNumber(value: number) {
   return new Intl.NumberFormat("zh-CN").format(Math.round(Number(value) || 0));
 }
@@ -3781,13 +3905,12 @@ function RealDashboardPanel() {
         </div>
       </section>
 
-      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-6">
+      <section className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
         <AdminMetricCard compact label="课程总数" value={formatAdminNumber(overview.total_courses)} hint={`已发布 ${overview.published_courses} / 草稿 ${overview.draft_courses}`} />
         <AdminMetricCard compact label="题目总数" value={formatAdminNumber(overview.total_questions)} />
         <AdminMetricCard compact label="教师总数" value={formatAdminNumber(overview.total_teachers)} />
         <AdminMetricCard compact label="模拟试卷" value={formatAdminNumber(overview.total_exam_papers)} />
         <AdminMetricCard compact label="竞赛" value={formatAdminNumber(overview.total_competitions)} />
-        <AdminMetricCard compact label="待人工批改" value={formatAdminNumber(overview.pending_manual_grading)} tone="amber" />
       </section>
 
       <section className="grid gap-4 xl:grid-cols-[1.25fr_0.9fr_0.9fr]">
