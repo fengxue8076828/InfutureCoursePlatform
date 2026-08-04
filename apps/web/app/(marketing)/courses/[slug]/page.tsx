@@ -321,7 +321,7 @@ export default async function CourseDetailPage({ params }: { params: Promise<{ s
           </div>
 
           <Link
-            href={`/teachers/${course.teacher.slug}`}
+            href={`/teachers/${course.teacher.slug?.trim() || course.teacher.id}`}
             className="panel block rounded-lg p-5 transition hover:-translate-y-1 hover:border-coral"
           >
             <p className="text-sm font-bold text-coral">授课老师</p>

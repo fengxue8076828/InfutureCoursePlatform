@@ -549,7 +549,7 @@ export function InstitutionProfilePage({ slug }: { slug: string }) {
             <ResourceSection title={"\u6559\u5e08\u56e2\u961f"} subtitle="Teachers">
               <div className="space-y-3">
                 {profile.teachers.map((teacher) => (
-                  <Link key={teacher.id} href={`/teachers/${teacher.slug}`} className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 transition hover:bg-mint/10">
+                  <Link key={teacher.id} href={`/teachers/${teacher.slug?.trim() || teacher.id}`} className="flex items-center gap-3 rounded-xl bg-slate-50 p-3 transition hover:bg-mint/10">
                     <img src={teacher.avatar_url || "/avatars/default-teacher.svg"} alt={displayText(teacher.name)} className="h-12 w-12 rounded-xl object-cover" />
                     <div className="min-w-0 flex-1">
                       <p className="truncate text-sm font-black text-ink">{displayText(teacher.name)}</p>

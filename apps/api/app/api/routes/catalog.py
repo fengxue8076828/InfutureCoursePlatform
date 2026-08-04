@@ -942,9 +942,12 @@ def list_teachers(db: Session = Depends(get_db)) -> list[Teacher]:
     return list(db.scalars(select(Teacher).options(joinedload(Teacher.institution)).order_by(Teacher.name)))
 
 
-@router.get("/teachers/{slug}", response_model=TeacherOut)
-def get_teacher(slug: str, db: Session = Depends(get_db)) -> Teacher:
-    teacher = db.scalar(select(Teacher).where(Teacher.slug == slug).options(joinedload(Teacher.institution)))
+@router.get("/teachers/{identifier}", response_model=TeacherOut)
+def get_teacher(identifier: str, db: Session = Depends(get_db)) -> Teacher:
+    stmt = select(Teacher).options(joinedload(Teacher.institution))
+    teacher = db.scalar(stmt.where(Teacher.slug == identifier))
+    if teacher is None and identifier.isdigit():
+        teacher = db.scalar(stmt.where(Teacher.id == int(identifier)))
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
     return teacher

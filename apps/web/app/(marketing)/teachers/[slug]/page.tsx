@@ -44,7 +44,7 @@ export default async function TeacherDetailPage({ params }: { params: { slug: st
     notFound();
   }
 
-  const teacherCourses = courses.filter((course) => course.teacher.slug === teacher.slug);
+  const teacherCourses = courses.filter((course) => course.teacher.id === teacher.id || course.teacher.slug === teacher.slug);
   const specialtyItems = Array.isArray(teacher.specialties?.items)
     ? teacher.specialties.items.filter(Boolean)
     : [];

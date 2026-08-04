@@ -9,10 +9,11 @@ export function TeacherCard({ teacher }: { teacher: Teacher }) {
       ? teacher.specialties.items[0]
       : teacher.title;
   const avatarUrl = teacher.avatar_url?.trim();
+  const teacherHref = `/teachers/${teacher.slug?.trim() || teacher.id}`;
 
   return (
     <Link
-      href={`/teachers/${teacher.slug}`}
+      href={teacherHref}
       className="panel block w-[17rem] rounded-lg p-4 transition hover:-translate-y-1 hover:border-coral"
     >
       <div className="flex items-center gap-3">

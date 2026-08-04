@@ -84,8 +84,8 @@ export function getPublishedQuestions(): Promise<Question[]> {
   return fetchJson("/learn/public-questions", []);
 }
 
-export async function getTeacher(slug: string): Promise<Teacher | undefined> {
-  return fetchJson(`/teachers/${slug}`, undefined);
+export async function getTeacher(identifier: string): Promise<Teacher | undefined> {
+  return fetchJson(`/teachers/${encodeURIComponent(identifier)}`, undefined);
 }
 
 export function getBlogPosts(): Promise<BlogPost[]> {
