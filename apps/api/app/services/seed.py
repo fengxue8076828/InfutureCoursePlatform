@@ -243,6 +243,22 @@ def ensure_schema_extensions(db: Session) -> None:
             db.execute(text("ALTER TABLE learning_paths ADD COLUMN intro_video_url VARCHAR(500) NOT NULL DEFAULT ''"))
 
     table_names = set(inspector.get_table_names())
+    if {"institution_activities", "teachers"}.issubset(table_names):
+        activity_columns = {column["name"] for column in inspector.get_columns("institution_activities")}
+        if "teacher_id" not in activity_columns:
+            db.execute(
+                text(
+                    "ALTER TABLE institution_activities "
+                    "ADD COLUMN teacher_id INTEGER REFERENCES teachers(id) ON DELETE SET NULL"
+                )
+            )
+            db.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_institution_activities_teacher_id "
+                    "ON institution_activities(teacher_id)"
+                )
+            )
+
     if "courses" in table_names:
         course_columns = {column["name"] for column in inspector.get_columns("courses")}
         if "expected_duration_days" not in course_columns:

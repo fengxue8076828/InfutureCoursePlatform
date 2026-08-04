@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, field_validator
 
 from app.models import (
     ActivityMode,
@@ -137,6 +137,12 @@ class ActivityRegistrationOut(OrmModel):
     created_at: datetime
 
 
+class ActivityTeacherOut(BaseModel):
+    id: int
+    name: str
+    title: str | None = None
+
+
 class ActivityBase(BaseModel):
     title: str = Field(min_length=1, max_length=220)
     description: str = Field(min_length=1)
@@ -148,6 +154,7 @@ class ActivityBase(BaseModel):
     audience: str | None = Field(default=None, max_length=300)
     registration_status: ActivityRegistrationStatus = ActivityRegistrationStatus.open
     capacity: int | None = Field(default=None, ge=1)
+    teacher_id: int | None = None
 
 
 class ActivityCreate(ActivityBase):
@@ -162,6 +169,8 @@ class AdminActivityOut(OrmModel):
     id: int
     institution_id: int
     institution_name: str
+    teacher_id: int | None = None
+    teacher: ActivityTeacherOut | None = None
     title: str
     description: str
     starts_at: datetime
@@ -514,6 +523,12 @@ class AdminUserUpdate(BaseModel):
     bio: str | None = None
     is_active: bool = True
 
+class AdminTeacherCertificate(BaseModel):
+    name: str = Field(default="", max_length=200)
+    description: str = ""
+    image_url: str = Field(default="", max_length=2000)
+
+
 class AdminTeacherProfile(BaseModel):
     highest_education: str = Field(default="", max_length=160)
     graduation_school: str = Field(default="", max_length=200)
@@ -521,7 +536,28 @@ class AdminTeacherProfile(BaseModel):
     employment_history: str = ""
     teaching_years: str = Field(default="", max_length=80)
     professional_title: str = Field(default="", max_length=160)
-    certificates: list[str] = Field(default_factory=list)
+    certificates: list[AdminTeacherCertificate] = Field(default_factory=list)
+
+    @field_validator("certificates", mode="before")
+    @classmethod
+    def normalize_certificates(cls, value: Any) -> list[dict[str, str]]:
+        if not isinstance(value, list):
+            return []
+        certificates: list[dict[str, str]] = []
+        for item in value:
+            if isinstance(item, str):
+                name = item.strip()
+                if name:
+                    certificates.append({"name": name, "description": "", "image_url": ""})
+                continue
+            if not isinstance(item, dict):
+                continue
+            name = str(item.get("name") or item.get("title") or "").strip()
+            description = str(item.get("description") or "").strip()
+            image_url = str(item.get("image_url") or item.get("imageUrl") or item.get("url") or "").strip()
+            if name or description or image_url:
+                certificates.append({"name": name, "description": description, "image_url": image_url})
+        return certificates
 
 class AdminProfileOut(UserOut):
     title: str | None = None

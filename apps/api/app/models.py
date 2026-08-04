@@ -893,6 +893,7 @@ class InstitutionActivity(Base, TimestampMixin):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     institution_id: Mapped[int] = mapped_column(ForeignKey("institutions.id", ondelete="CASCADE"), index=True)
+    teacher_id: Mapped[int | None] = mapped_column(ForeignKey("teachers.id", ondelete="SET NULL"), index=True)
     title: Mapped[str] = mapped_column(String(220), index=True)
     description: Mapped[str] = mapped_column(Text)
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
@@ -910,6 +911,7 @@ class InstitutionActivity(Base, TimestampMixin):
     capacity: Mapped[int | None] = mapped_column(Integer)
 
     institution: Mapped[Institution] = relationship(back_populates="activities")
+    teacher: Mapped[Teacher | None] = relationship()
     registrations: Mapped[list["ActivityRegistration"]] = relationship(
         back_populates="activity", cascade="all, delete-orphan", order_by="ActivityRegistration.created_at.desc()"
     )

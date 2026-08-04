@@ -226,6 +226,9 @@ type AdminActivity = {
   id: number;
   institutionId: number;
   institutionName: string;
+  teacherId: number | null;
+  teacherName: string;
+  teacherTitle: string;
   title: string;
   description: string;
   startsAt: string;
@@ -246,6 +249,12 @@ type ApiAdminActivity = {
   id: number;
   institution_id: number;
   institution_name: string;
+  teacher_id?: number | null;
+  teacher?: {
+    id: number;
+    name: string;
+    title?: string | null;
+  } | null;
   title: string;
   description: string;
   starts_at: string;
@@ -504,7 +513,8 @@ type AdminUploadKind =
   | "lesson_video"
   | "handout"
   | "logo"
-  | "question_media";
+  | "question_media"
+  | "teacher_certificate";
 
 type AdminMetricChange = {
   current: number;
@@ -656,6 +666,19 @@ type ApiTeacher = {
 
 type AdminRoleValue = "super_admin" | "institution_admin" | "teacher" | "student";
 
+type AdminTeacherCertificate = {
+  name: string;
+  description: string;
+  imageUrl: string;
+};
+
+type ApiAdminTeacherCertificate = {
+  name?: string | null;
+  description?: string | null;
+  image_url?: string | null;
+  imageUrl?: string | null;
+};
+
 type AdminTeacherProfile = {
   highestEducation: string;
   graduationSchool: string;
@@ -663,7 +686,7 @@ type AdminTeacherProfile = {
   employmentHistory: string;
   teachingYears: string;
   professionalTitle: string;
-  certificates: string[];
+  certificates: AdminTeacherCertificate[];
 };
 
 type ApiAdminTeacherProfile = {
@@ -673,7 +696,7 @@ type ApiAdminTeacherProfile = {
   employment_history?: string | null;
   teaching_years?: string | null;
   professional_title?: string | null;
-  certificates?: string[] | null;
+  certificates?: Array<ApiAdminTeacherCertificate | string> | null;
 };
 type AdminProfile = {
   id: number | null;
@@ -1015,11 +1038,16 @@ function formatAdminDateTime(value: string) {
   }).format(date);
 }
 
-function createBlankActivityDraft(): AdminActivity {
+function createBlankActivityDraft(teachers: TeacherOption[] = [], preferredTeacherId?: number | null): AdminActivity {
+  const selectedTeacher =
+    (preferredTeacherId ? getTeacherById(preferredTeacherId, teachers) : null) ?? teachers[0] ?? null;
   return {
     id: -Date.now(),
     institutionId: 0,
     institutionName: "",
+    teacherId: selectedTeacher?.id ?? null,
+    teacherName: selectedTeacher?.name ?? "",
+    teacherTitle: selectedTeacher?.title ?? "",
     title: "",
     description: "",
     startsAt: toDateTimeInputValue(),
@@ -1042,6 +1070,9 @@ function activityFromApi(activity: ApiAdminActivity): AdminActivity {
     id: activity.id,
     institutionId: activity.institution_id,
     institutionName: activity.institution_name,
+    teacherId: activity.teacher_id ?? activity.teacher?.id ?? null,
+    teacherName: activity.teacher?.name ?? "",
+    teacherTitle: activity.teacher?.title ?? "",
     title: activity.title,
     description: activity.description,
     startsAt: toDateTimeInputValue(activity.starts_at),
@@ -1079,7 +1110,8 @@ function activityToApiPayload(activity: AdminActivity) {
     location: activity.mode === "offline" ? optionalText(activity.location) : null,
     audience: optionalText(activity.audience),
     registration_status: activity.registrationStatus,
-    capacity: Number.isFinite(capacity) && capacity > 0 ? capacity : null
+    capacity: Number.isFinite(capacity) && capacity > 0 ? capacity : null,
+    teacher_id: activity.teacherId
   };
 }
 
@@ -2909,7 +2941,33 @@ function parseAdminProfile(value: string): AdminProfile {
   }
 }
 
+function emptyTeacherCertificate(): AdminTeacherCertificate {
+  return { name: "", description: "", imageUrl: "" };
+}
+
+function normalizeTeacherCertificate(certificate: unknown): AdminTeacherCertificate | null {
+  if (typeof certificate === "string") {
+    const name = certificate.trim();
+    return name ? { ...emptyTeacherCertificate(), name } : null;
+  }
+  if (!certificate || typeof certificate !== "object") {
+    return null;
+  }
+  const record = certificate as Record<string, unknown>;
+  const name = String(record.name ?? record.title ?? "").trim();
+  const description = String(record.description ?? "").trim();
+  const imageUrl = String(record.imageUrl ?? record.image_url ?? record.url ?? "").trim();
+  return name || description || imageUrl ? { name, description, imageUrl } : null;
+}
+
 function normalizeAdminTeacherProfile(profile?: Partial<AdminTeacherProfile> | null): AdminTeacherProfile {
+  const rawCertificates = (profile as { certificates?: unknown } | null | undefined)?.certificates;
+  const certificates = Array.isArray(rawCertificates)
+    ? rawCertificates
+        .map(normalizeTeacherCertificate)
+        .filter((certificate): certificate is AdminTeacherCertificate => Boolean(certificate))
+    : [];
+
   return {
     highestEducation: profile?.highestEducation ?? "",
     graduationSchool: profile?.graduationSchool ?? "",
@@ -2917,7 +2975,7 @@ function normalizeAdminTeacherProfile(profile?: Partial<AdminTeacherProfile> | n
     employmentHistory: profile?.employmentHistory ?? "",
     teachingYears: profile?.teachingYears ?? "",
     professionalTitle: profile?.professionalTitle ?? "",
-    certificates: Array.isArray(profile?.certificates) ? profile.certificates.filter(Boolean) : []
+    certificates
   };
 }
 
@@ -2929,7 +2987,7 @@ function teacherProfileFromApi(profile?: ApiAdminTeacherProfile | null): AdminTe
     employmentHistory: profile?.employment_history ?? "",
     teachingYears: profile?.teaching_years ?? "",
     professionalTitle: profile?.professional_title ?? "",
-    certificates: profile?.certificates ?? []
+    certificates: (profile?.certificates ?? []) as AdminTeacherCertificate[]
   });
 }
 
@@ -2942,7 +3000,13 @@ function teacherProfileToApi(profile: AdminTeacherProfile) {
     employment_history: normalized.employmentHistory,
     teaching_years: normalized.teachingYears,
     professional_title: normalized.professionalTitle,
-    certificates: normalized.certificates.map((certificate) => certificate.trim()).filter(Boolean)
+    certificates: normalized.certificates
+      .map((certificate) => ({
+        name: certificate.name.trim(),
+        description: certificate.description.trim(),
+        image_url: certificate.imageUrl.trim()
+      }))
+      .filter((certificate) => certificate.name || certificate.description || certificate.image_url)
   };
 }
 function persistAdminProfile(profile: AdminProfile) {
@@ -3365,6 +3429,7 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
   const [passwordDemoCode, setPasswordDemoCode] = useState("");
   const [requestingPasswordCode, setRequestingPasswordCode] = useState(false);
   const [savingPassword, setSavingPassword] = useState(false);
+  const [certificateUploadProgress, setCertificateUploadProgress] = useState<Record<number, number | null>>({});
   const canEditTeacherProfile = draft.roleValue === "teacher" || draft.roleValue === "super_admin";
 
   useEffect(() => {
@@ -3395,10 +3460,10 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
     }));
   }
 
-  function updateCertificate(index: number, value: string) {
+  function updateCertificate(index: number, patch: Partial<AdminTeacherCertificate>) {
     setDraft((current) => {
       const certificates = [...current.teacherProfile.certificates];
-      certificates[index] = value;
+      certificates[index] = { ...emptyTeacherCertificate(), ...certificates[index], ...patch };
       return { ...current, teacherProfile: { ...current.teacherProfile, certificates } };
     });
   }
@@ -3408,7 +3473,7 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
       ...current,
       teacherProfile: {
         ...current.teacherProfile,
-        certificates: [...current.teacherProfile.certificates, ""]
+        certificates: [...current.teacherProfile.certificates, emptyTeacherCertificate()]
       }
     }));
   }
@@ -3421,6 +3486,29 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
         certificates: current.teacherProfile.certificates.filter((_, certificateIndex) => certificateIndex !== index)
       }
     }));
+  }
+
+  async function handleCertificateImageUpload(index: number, file: File | undefined) {
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setStatus("\u8bf7\u4e0a\u4f20\u56fe\u7247\u683c\u5f0f\u7684\u8bc1\u4e66\u56fe\u7247\u3002");
+      return;
+    }
+    setCertificateUploadProgress((current) => ({ ...current, [index]: 1 }));
+    setStatus("\u8bc1\u4e66\u56fe\u7247\u6b63\u5728\u4e0a\u4f20...");
+    try {
+      const url = await uploadAdminFile(file, "teacher_certificate", (progress) => {
+        setCertificateUploadProgress((current) => ({ ...current, [index]: progress.percent }));
+      });
+      updateCertificate(index, { imageUrl: url });
+      setStatus("\u8bc1\u4e66\u56fe\u7247\u5df2\u4e0a\u4f20\uff0c\u4fdd\u5b58\u8d44\u6599\u540e\u751f\u6548\u3002");
+    } catch (error) {
+      setStatus(`\u8bc1\u4e66\u56fe\u7247\u4e0a\u4f20\u5931\u8d25\uff1a${uploadFailureMessage(error, "\u8bf7\u786e\u8ba4 FastAPI \u670d\u52a1\u6b63\u5728\u8fd0\u884c\u3002")}`);
+    } finally {
+      setCertificateUploadProgress((current) => ({ ...current, [index]: null }));
+    }
   }
 
   function updatePasswordDraft(field: keyof typeof passwordDraft, value: string) {
@@ -3672,25 +3760,66 @@ function ProfileEditorModal({ onClose }: { onClose: () => void }) {
             <section className="rounded-lg border border-slate-200 p-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h3 className="font-bold text-ink">资质或荣誉证书</h3>
-                  <p className="mt-1 text-sm text-slate-500">可以添加多项证书、奖项或专业资质。</p>
+                  <h3 className="font-bold text-ink">{"\u8d44\u8d28\u6216\u8363\u8a89\u8bc1\u4e66"}</h3>
+                  <p className="mt-1 text-sm text-slate-500">{"\u53ef\u4ee5\u6dfb\u52a0\u591a\u9879\u8bc1\u4e66\u3001\u5956\u9879\u6216\u4e13\u4e1a\u8d44\u8d28\uff0c\u5e76\u4e0a\u4f20\u8bc1\u4e66\u56fe\u7247\u3002"}</p>
                 </div>
                 <button type="button" onClick={addCertificate} className="focus-ring rounded-lg bg-coral px-3 py-2 text-sm font-bold text-white">
-                  <Plus size={16} className="inline-block" /> 添加证书
+                  <Plus size={16} className="inline-block" /> {"\u6dfb\u52a0\u8bc1\u4e66"}
                 </button>
               </div>
               <div className="mt-4 grid gap-3">
                 {draft.teacherProfile.certificates.length ? (
-                  draft.teacherProfile.certificates.map((certificate, index) => (
-                    <div key={index} className="flex gap-2">
-                      <input className="focus-ring min-w-0 flex-1 rounded-lg border border-slate-200 px-3 py-2" value={certificate} onChange={(event) => updateCertificate(index, event.target.value)} placeholder="例如：教师资格证、优秀教师奖、竞赛指导证书" />
-                      <button type="button" onClick={() => removeCertificate(index)} className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-red-100 text-red-500" aria-label="删除证书">
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
+                  draft.teacherProfile.certificates.map((certificate, index) => {
+                    const certificateProgress = certificateUploadProgress[index];
+                    return (
+                      <div key={index} className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-3 md:grid-cols-[10rem_1fr_auto]">
+                        <div className="grid content-start gap-2">
+                          {certificate.imageUrl ? (
+                            <img src={certificate.imageUrl} alt={certificate.name || "\u8bc1\u4e66\u56fe\u7247"} className="h-28 w-full rounded-lg border border-slate-200 bg-white object-cover" />
+                          ) : (
+                            <div className="grid h-28 place-items-center rounded-lg border border-dashed border-slate-200 bg-white text-center text-xs font-semibold text-slate-400">
+                              {"\u5c1a\u672a\u4e0a\u4f20\u8bc1\u4e66\u56fe\u7247"}
+                            </div>
+                          )}
+                          <label className="focus-ring inline-flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700">
+                            <ImagePlus size={14} /> {"\u4e0a\u4f20\u56fe\u7247"}
+                            <input type="file" accept="image/*" className="sr-only" onChange={(event) => handleCertificateImageUpload(index, event.target.files?.[0])} />
+                          </label>
+                          {certificateProgress != null ? <UploadProgressRing progress={certificateProgress} size={18} /> : null}
+                          {certificate.imageUrl ? (
+                            <button type="button" onClick={() => updateCertificate(index, { imageUrl: "" })} className="focus-ring rounded-lg border border-red-100 bg-white px-3 py-2 text-xs font-bold text-red-500">
+                              {"\u79fb\u9664\u56fe\u7247"}
+                            </button>
+                          ) : null}
+                        </div>
+                        <div className="grid gap-3">
+                          <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                            {"\u8bc1\u4e66\u540d\u79f0"}
+                            <input
+                              className="focus-ring rounded-lg border border-slate-200 bg-white px-3 py-2"
+                              value={certificate.name}
+                              onChange={(event) => updateCertificate(index, { name: event.target.value })}
+                              placeholder="\u8bc1\u4e66\u540d\u79f0"
+                            />
+                          </label>
+                          <label className="grid gap-2 text-sm font-semibold text-slate-700">
+                            {"\u8bc1\u4e66\u4ecb\u7ecd"}
+                            <textarea
+                              className="focus-ring min-h-24 rounded-lg border border-slate-200 bg-white px-3 py-2 leading-7"
+                              value={certificate.description}
+                              onChange={(event) => updateCertificate(index, { description: event.target.value })}
+                              placeholder="\u8bc1\u4e66\u4ecb\u7ecd\uff0c\u4f8b\u5982\u9881\u53d1\u673a\u6784\u3001\u83b7\u5f97\u65f6\u95f4\u3001\u8bc1\u4e66\u8bf4\u660e"
+                            />
+                          </label>
+                        </div>
+                        <button type="button" onClick={() => removeCertificate(index)} className="focus-ring grid h-10 w-10 place-items-center rounded-lg border border-red-100 bg-white text-red-500" aria-label="\u5220\u9664\u8bc1\u4e66">
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    );
+                  })
                 ) : (
-                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">暂未添加证书。</div>
+                  <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-sm font-semibold text-slate-500">{"\u6682\u672a\u6dfb\u52a0\u8bc1\u4e66\u3002"}</div>
                 )}
               </div>
             </section>
@@ -9302,6 +9431,8 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
 
 function ActivityManagement() {
   const [activities, setActivities] = useState<AdminActivity[]>([]);
+  const [teacherOptions, setTeacherOptions] = useState<TeacherOption[]>([]);
+  const [currentAdminUserId, setCurrentAdminUserId] = useState<number | null>(null);
   const [draft, setDraft] = useState<AdminActivity>(() => createBlankActivityDraft());
   const [selectedActivityId, setSelectedActivityId] = useState<number | null>(null);
   const [status, setStatus] = useState("正在加载活动...");
@@ -9310,18 +9441,35 @@ function ActivityManagement() {
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
 
   const selectedActivity = activities.find((activity) => activity.id === selectedActivityId) ?? null;
+  const currentTeacherOption =
+    teacherOptions.find((teacher) => teacher.sourceUserId === currentAdminUserId) ?? null;
   const isNew = draft.id < 0;
 
   async function loadActivities() {
     try {
-      const response = await fetch(`${API_BASE_URL}/admin/activities`, {
-        headers: getAdminRequestHeaders(),
-        cache: "no-store"
-      });
-      if (!response.ok) {
+      const sessionUser = getAdminSessionUser();
+      const sessionUserId = sessionUser?.id ?? getAdminSessionUserId();
+      setCurrentAdminUserId(sessionUserId);
+      const [activitiesResponse, teachersResponse] = await Promise.all([
+        fetch(`${API_BASE_URL}/admin/activities`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        }),
+        fetch(`${API_BASE_URL}/admin/teachers`, {
+          headers: getAdminRequestHeaders(),
+          cache: "no-store"
+        })
+      ]);
+      if (!activitiesResponse.ok) {
         throw new Error("Activity API unavailable");
       }
-      const nextActivities = ((await response.json()) as ApiAdminActivity[]).map(activityFromApi);
+      const nextTeachers = teachersResponse.ok
+        ? ((await teachersResponse.json()) as ApiTeacher[]).map((teacher) => normalizeTeacherFromApi(teacher))
+        : [];
+      const nextCurrentTeacher =
+        nextTeachers.find((teacher) => teacher.sourceUserId === sessionUserId) ?? null;
+      const nextActivities = ((await activitiesResponse.json()) as ApiAdminActivity[]).map(activityFromApi);
+      setTeacherOptions(nextTeachers);
       setActivities(nextActivities);
       setSelectedActivityId((currentId) =>
         currentId && nextActivities.some((activity) => activity.id === currentId)
@@ -9329,11 +9477,12 @@ function ActivityManagement() {
           : nextActivities[0]?.id ?? null
       );
       if (!nextActivities.length) {
-        setDraft(createBlankActivityDraft());
+        setDraft(createBlankActivityDraft(nextTeachers, nextCurrentTeacher?.id ?? null));
       }
       setStatus(nextActivities.length ? "已从数据库加载活动。" : "还没有活动，可以先新增一个。");
     } catch {
       setActivities([]);
+      setTeacherOptions([]);
       setDraft(createBlankActivityDraft());
       setSelectedActivityId(null);
       setStatus("活动 API 暂时不可用，请确认 FastAPI 服务正在运行。");
@@ -9351,7 +9500,7 @@ function ActivityManagement() {
   }, [selectedActivity]);
 
   function addActivity() {
-    const nextDraft = createBlankActivityDraft();
+    const nextDraft = createBlankActivityDraft(teacherOptions, currentTeacherOption?.id ?? null);
     setSelectedActivityId(null);
     setDraft(nextDraft);
     setStatus("正在创建新的活动。");
@@ -9359,6 +9508,16 @@ function ActivityManagement() {
 
   function updateDraft<K extends keyof AdminActivity>(field: K, value: AdminActivity[K]) {
     setDraft((current) => ({ ...current, [field]: value }));
+  }
+
+  function updateActivityTeacher(value: string) {
+    const teacher = value ? getTeacherById(Number(value), teacherOptions) : null;
+    setDraft((current) => ({
+      ...current,
+      teacherId: teacher?.id ?? null,
+      teacherName: teacher?.name ?? "",
+      teacherTitle: teacher?.title ?? ""
+    }));
   }
 
   async function readActivityError(response: Response) {
@@ -9409,7 +9568,7 @@ function ActivityManagement() {
 
   async function deleteActivity() {
     if (isNew) {
-      setDraft(createBlankActivityDraft());
+      setDraft(createBlankActivityDraft(teacherOptions, currentTeacherOption?.id ?? null));
       setStatus("已取消新活动草稿。");
       return;
     }
@@ -9434,7 +9593,7 @@ function ActivityManagement() {
       setActivities(nextActivities);
       const nextActivity = nextActivities[0] ?? null;
       setSelectedActivityId(nextActivity?.id ?? null);
-      setDraft(nextActivity ?? createBlankActivityDraft());
+      setDraft(nextActivity ?? createBlankActivityDraft(teacherOptions, currentTeacherOption?.id ?? null));
       setStatus("活动已删除。");
     } catch (error) {
       setStatus(uploadFailureMessage(error, "活动删除失败，请确认 FastAPI 服务正在运行。"));
@@ -9480,6 +9639,11 @@ function ActivityManagement() {
                   <p className="mt-2 text-xs font-bold text-slate-400">
                     {activity.mode === "online" ? "线上活动" : "线下活动"} · {activity.registrationsCount} 人报名
                   </p>
+                  {activity.teacherName ? (
+                    <p className="mt-1 truncate text-xs font-semibold text-slate-400">
+                      指派老师：{activity.teacherName}
+                    </p>
+                  ) : null}
                 </div>
                 <span
                   className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-bold ${
@@ -9545,6 +9709,22 @@ function ActivityManagement() {
               className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
               placeholder="例如：7-12 岁中文学习者"
             />
+          </label>
+          <label className="grid gap-2 text-sm font-bold text-slate-700">
+            指派老师
+            <select
+              value={draft.teacherId ? String(draft.teacherId) : ""}
+              onChange={(event) => updateActivityTeacher(event.target.value)}
+              className="focus-ring rounded-lg border border-slate-200 px-3 py-3 text-sm"
+            >
+              <option value="">暂不指派</option>
+              {teacherOptions.map((teacher) => (
+                <option key={teacher.id} value={teacher.id}>
+                  {teacher.name}
+                  {teacher.title ? ` · ${teacher.title}` : ""}
+                </option>
+              ))}
+            </select>
           </label>
           <label className="grid gap-2 text-sm font-bold text-slate-700">
             开始时间

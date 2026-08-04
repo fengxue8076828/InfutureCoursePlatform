@@ -11,7 +11,7 @@ router = APIRouter()
 
 VIDEO_UPLOAD_KINDS = {"course_intro_video", "lesson_video"}
 HANDOUT_UPLOAD_KINDS = {"handout"}
-IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo", "student_post_image"}
+IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo", "student_post_image", "teacher_certificate"}
 UPLOAD_LIMITS = {
     "video": 200 * 1024 * 1024,
     "handout": 30 * 1024 * 1024,
@@ -21,7 +21,7 @@ UPLOAD_LIMITS = {
 
 ADMIN_UPLOAD_ROLES = {UserRole.institution_admin, UserRole.super_admin}
 STAFF_UPLOAD_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
-STAFF_UPLOAD_KINDS = VIDEO_UPLOAD_KINDS | HANDOUT_UPLOAD_KINDS | {"course_cover", "question_media", "avatar"}
+STAFF_UPLOAD_KINDS = VIDEO_UPLOAD_KINDS | HANDOUT_UPLOAD_KINDS | {"course_cover", "question_media", "avatar", "teacher_certificate"}
 ADMIN_ONLY_UPLOAD_KINDS = {"logo"}
 STUDENT_UPLOAD_KINDS = {"student_post_image"}
 

@@ -397,6 +397,12 @@ def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
         id=activity.id,
         institution_id=activity.institution_id,
         institution_name=activity.institution.name if activity.institution else "",
+        teacher_id=activity.teacher_id,
+        teacher=(
+            {"id": activity.teacher.id, "name": activity.teacher.name, "title": activity.teacher.title}
+            if activity.teacher
+            else None
+        ),
         title=activity.title,
         description=activity.description,
         starts_at=activity.starts_at,
@@ -419,20 +425,40 @@ def get_activity_or_404(activity_id: int, current_user: User, db: Session) -> In
     activity = db.scalar(
         select(InstitutionActivity)
         .where(InstitutionActivity.id == activity_id, InstitutionActivity.institution_id == institution_id)
-        .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
+        .options(
+            joinedload(InstitutionActivity.institution),
+            joinedload(InstitutionActivity.teacher),
+            selectinload(InstitutionActivity.registrations),
+        )
     )
     if not activity:
         raise HTTPException(status_code=404, detail="Activity not found")
     return activity
 
 
-def normalize_activity_payload(data: dict) -> dict:
+def normalize_activity_teacher_id(data: dict, current_user: User, db: Session, institution_id: int) -> int | None:
+    requested_teacher_id = data.get("teacher_id")
+    if current_user.role == UserRole.teacher:
+        teacher = sync_teacher_record_for_user(current_user, db)
+        if requested_teacher_id and requested_teacher_id != teacher.id:
+            raise HTTPException(status_code=403, detail="Teachers can only assign activities to themselves")
+        return teacher.id
+    if requested_teacher_id is None:
+        return None
+    teacher = db.get(Teacher, requested_teacher_id)
+    if not teacher or teacher.institution_id != institution_id:
+        raise HTTPException(status_code=400, detail="Teacher must belong to the current institution")
+    return teacher.id
+
+
+def normalize_activity_payload(data: dict, current_user: User, db: Session, institution_id: int) -> dict:
     mode = data.get("mode")
     mode_value = mode.value if hasattr(mode, "value") else str(mode)
     if mode_value == "online":
         data["location"] = None
     else:
         data["meeting_url"] = None
+    data["teacher_id"] = normalize_activity_teacher_id(data, current_user, db, institution_id)
     return data
 
 
@@ -2207,12 +2233,16 @@ def sync_stripe_connect_status(
 def admin_activities(
     current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
 ) -> list[AdminActivityOut]:
-    ensure_admin(current_user)
+    ensure_course_staff(current_user)
     institution_id = get_current_institution_id_or_403(current_user)
     activities = db.scalars(
         select(InstitutionActivity)
         .where(InstitutionActivity.institution_id == institution_id)
-        .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
+        .options(
+            joinedload(InstitutionActivity.institution),
+            joinedload(InstitutionActivity.teacher),
+            selectinload(InstitutionActivity.registrations),
+        )
         .order_by(InstitutionActivity.starts_at.desc(), InstitutionActivity.updated_at.desc())
     ).all()
     return [admin_activity_to_out(activity) for activity in activities]
@@ -2224,10 +2254,10 @@ def create_activity(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdminActivityOut:
-    ensure_admin(current_user)
+    ensure_course_staff(current_user)
     ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
-    data = normalize_activity_payload(payload.model_dump())
+    data = normalize_activity_payload(payload.model_dump(), current_user, db, institution_id)
     activity = InstitutionActivity(institution_id=institution_id, **data)
     db.add(activity)
     db.commit()
@@ -2241,10 +2271,10 @@ def update_activity(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> AdminActivityOut:
-    ensure_admin(current_user)
+    ensure_course_staff(current_user)
     ensure_institution_can_publish(current_user, db)
     activity = get_activity_or_404(activity_id, current_user, db)
-    data = normalize_activity_payload(payload.model_dump())
+    data = normalize_activity_payload(payload.model_dump(), current_user, db, activity.institution_id)
     for field, value in data.items():
         setattr(activity, field, value)
     db.commit()
@@ -2257,7 +2287,7 @@ def delete_activity(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ) -> dict[str, int | bool]:
-    ensure_admin(current_user)
+    ensure_course_staff(current_user)
     activity = get_activity_or_404(activity_id, current_user, db)
     db.delete(activity)
     db.commit()
