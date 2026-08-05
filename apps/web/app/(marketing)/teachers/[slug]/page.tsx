@@ -37,8 +37,13 @@ const labels = {
   noCourses: "\u8fd9\u4f4d\u8001\u5e08\u6682\u65f6\u8fd8\u6ca1\u6709\u53d1\u5e03\u8bfe\u7a0b\u3002",
 };
 
-export default async function TeacherDetailPage({ params }: { params: { slug: string } }) {
-  const [teacher, courses] = await Promise.all([getTeacher(params.slug), getCourses()]);
+type TeacherDetailPageProps = {
+  params: Promise<{ slug: string }> | { slug: string };
+};
+
+export default async function TeacherDetailPage({ params }: TeacherDetailPageProps) {
+  const { slug } = await Promise.resolve(params);
+  const [teacher, courses] = await Promise.all([getTeacher(slug), getCourses()]);
 
   if (!teacher) {
     notFound();

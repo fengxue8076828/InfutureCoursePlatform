@@ -85,7 +85,24 @@ export function getPublishedQuestions(): Promise<Question[]> {
 }
 
 export async function getTeacher(identifier: string): Promise<Teacher | undefined> {
-  return fetchJson(`/teachers/${encodeURIComponent(identifier)}`, undefined);
+  const normalizedIdentifier = String(identifier ?? "").trim();
+  if (!normalizedIdentifier) {
+    return undefined;
+  }
+
+  const teacher = await fetchJson<Teacher | undefined>(
+    `/teachers/${encodeURIComponent(normalizedIdentifier)}`,
+    undefined
+  );
+  if (teacher) {
+    return teacher;
+  }
+
+  const decodedIdentifier = decodeURIComponent(normalizedIdentifier);
+  const teachers = await getTeachers();
+  return teachers.find(
+    (item) => item.slug === decodedIdentifier || String(item.id) === decodedIdentifier
+  );
 }
 
 export function getBlogPosts(): Promise<BlogPost[]> {
