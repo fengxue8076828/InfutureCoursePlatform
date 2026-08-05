@@ -409,6 +409,7 @@ def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
         ),
         title=activity.title,
         description=activity.description,
+        cover_url=activity.cover_url or "",
         starts_at=activity.starts_at,
         ends_at=activity.ends_at,
         mode=activity.mode,

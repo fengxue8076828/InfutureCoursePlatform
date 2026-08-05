@@ -229,6 +229,7 @@ type AdminActivity = {
   teacherTitle: string;
   title: string;
   description: string;
+  coverUrl: string;
   startsAt: string;
   endsAt: string;
   mode: ActivityMode;
@@ -255,6 +256,7 @@ type ApiAdminActivity = {
   } | null;
   title: string;
   description: string;
+  cover_url?: string | null;
   starts_at: string;
   ends_at?: string | null;
   mode: ActivityMode;
@@ -514,6 +516,8 @@ type AdminUploadKind =
   | "question_media"
   | "blog_cover"
   | "blog_image"
+  | "activity_cover"
+  | "activity_image"
   | "teacher_certificate";
 
 
@@ -1081,6 +1085,7 @@ function createBlankActivityDraft(teachers: TeacherOption[] = [], preferredTeach
     teacherTitle: selectedTeacher?.title ?? "",
     title: "",
     description: "",
+    coverUrl: "",
     startsAt: toDateTimeInputValue(),
     endsAt: "",
     mode: "online",
@@ -1106,6 +1111,7 @@ function activityFromApi(activity: ApiAdminActivity): AdminActivity {
     teacherTitle: activity.teacher?.title ?? "",
     title: activity.title,
     description: activity.description,
+    coverUrl: activity.cover_url ?? "",
     startsAt: toDateTimeInputValue(activity.starts_at),
     endsAt: activity.ends_at ? toDateTimeInputValue(activity.ends_at) : "",
     mode: activity.mode,
@@ -1134,6 +1140,7 @@ function activityToApiPayload(activity: AdminActivity) {
   return {
     title: activity.title.trim(),
     description: activity.description.trim(),
+    cover_url: activity.coverUrl.trim(),
     starts_at: dateTimeInputToIso(activity.startsAt),
     ends_at: activity.endsAt ? dateTimeInputToIso(activity.endsAt) : null,
     mode: activity.mode,
@@ -4810,6 +4817,7 @@ function CourseCategoryManagement() {
   const [status, setStatus] = useState("正在加载课程类别...");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
 
   const parentCategories = useMemo(
@@ -7754,6 +7762,7 @@ function UserPermissionManagement() {
   const [status, setStatus] = useState("正在加载用户列表...");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
   const selectedUser = users.find((user) => user.id === selectedUserId) ?? users[0] ?? null;
 
@@ -9471,6 +9480,7 @@ function ActivityManagement() {
   const [status, setStatus] = useState("正在加载活动...");
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [coverUploadProgress, setCoverUploadProgress] = useState<number | null>(null);
   const { confirmDelete, deleteConfirmDialog } = useDeleteConfirmation();
 
   const selectedActivity = activities.find((activity) => activity.id === selectedActivityId) ?? null;
@@ -9551,6 +9561,21 @@ function ActivityManagement() {
       teacherName: teacher?.name ?? "",
       teacherTitle: teacher?.title ?? ""
     }));
+  }
+
+  async function uploadActivityCover(file: File | undefined) {
+    if (!file) return;
+    setCoverUploadProgress(0);
+    setStatus("正在上传活动封面...");
+    try {
+      const url = await uploadAdminFile(file, "activity_cover", (progress) => setCoverUploadProgress(progress.percent));
+      updateDraft("coverUrl", url);
+      setStatus("活动封面已上传，保存活动后生效。");
+    } catch (error) {
+      setStatus(uploadFailureMessage(error, "活动封面上传失败，请确认 FastAPI 服务正在运行。"));
+    } finally {
+      setCoverUploadProgress(null);
+    }
   }
 
   async function readActivityError(response: Response) {
@@ -9823,15 +9848,56 @@ function ActivityManagement() {
               placeholder="不填写表示不限人数"
             />
           </label>
-          <label className="grid gap-2 text-sm font-bold text-slate-700 lg:col-span-2">
-            活动详细介绍
-            <textarea
+          <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
+            <p className="text-sm font-bold text-slate-700">活动封面图</p>
+            <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
+              {draft.coverUrl ? (
+                <img
+                  src={draft.coverUrl}
+                  alt={draft.title || "活动封面图"}
+                  className="h-40 w-full rounded-lg bg-white object-cover"
+                />
+              ) : (
+                <div className="grid h-40 place-items-center rounded-lg border border-dashed border-slate-200 bg-white text-sm font-bold text-slate-400">
+                  尚未上传图片
+                </div>
+              )}
+              <div className="flex flex-col justify-center gap-3">
+                <label className="focus-ring inline-flex w-fit cursor-pointer items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-bold text-slate-700 hover:border-mint">
+                  {coverUploadProgress !== null ? <UploadProgressRing progress={coverUploadProgress} /> : <ImagePlus size={18} />}
+                  上传封面图
+                  <input
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(event) => {
+                      void uploadActivityCover(event.target.files?.[0]);
+                      event.currentTarget.value = "";
+                    }}
+                  />
+                </label>
+                {draft.coverUrl ? (
+                  <button
+                    type="button"
+                    onClick={() => updateDraft("coverUrl", "")}
+                    className="focus-ring w-fit rounded-lg border border-coral/30 bg-white px-4 py-2 text-sm font-bold text-coral hover:bg-coral/10"
+                  >
+                    移除封面
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          </div>
+
+          <div className="grid gap-2 text-sm font-bold text-slate-700 lg:col-span-2">
+            <span>活动详细介绍</span>
+            <RichTextEditor
               value={draft.description}
-              onChange={(event) => updateDraft("description", event.target.value)}
-              className="focus-ring min-h-36 rounded-lg border border-slate-200 px-3 py-3 text-sm leading-6"
+              onChange={(value) => updateDraft("description", value)}
               placeholder="介绍活动主题、适合学生、流程安排和准备事项。"
+              imageUploadKind="activity_image"
             />
-          </label>
+          </div>
         </div>
 
         <div className="mt-6 rounded-lg border border-slate-200 bg-slate-50 p-4">

@@ -258,6 +258,8 @@ def ensure_schema_extensions(db: Session) -> None:
                     "ON institution_activities(teacher_id)"
                 )
             )
+        if "cover_url" not in activity_columns:
+            db.execute(text("ALTER TABLE institution_activities ADD COLUMN cover_url TEXT NOT NULL DEFAULT ''"))
 
     if "blog_posts" in table_names:
         blog_columns = {column["name"] for column in inspector.get_columns("blog_posts")}

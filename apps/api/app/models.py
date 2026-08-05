@@ -896,6 +896,7 @@ class InstitutionActivity(Base, TimestampMixin):
     teacher_id: Mapped[int | None] = mapped_column(ForeignKey("teachers.id", ondelete="SET NULL"), index=True)
     title: Mapped[str] = mapped_column(String(220), index=True)
     description: Mapped[str] = mapped_column(Text)
+    cover_url: Mapped[str] = mapped_column(Text, default="", server_default="")
     starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
     ends_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     mode: Mapped[ActivityMode] = mapped_column(Enum(ActivityMode), default=ActivityMode.online, index=True)

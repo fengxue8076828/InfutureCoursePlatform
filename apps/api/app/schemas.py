@@ -146,6 +146,7 @@ class ActivityTeacherOut(BaseModel):
 class ActivityBase(BaseModel):
     title: str = Field(min_length=1, max_length=220)
     description: str = Field(min_length=1)
+    cover_url: str = ""
     starts_at: datetime
     ends_at: datetime | None = None
     mode: ActivityMode = ActivityMode.online
@@ -173,6 +174,7 @@ class AdminActivityOut(OrmModel):
     teacher: ActivityTeacherOut | None = None
     title: str
     description: str
+    cover_url: str = ""
     starts_at: datetime
     ends_at: datetime | None = None
     mode: ActivityMode
@@ -194,6 +196,7 @@ class PublicActivityOut(BaseModel):
     institution_logo_url: str | None = None
     title: str
     description: str
+    cover_url: str = ""
     starts_at: datetime
     ends_at: datetime | None = None
     mode: ActivityMode

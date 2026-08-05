@@ -16,6 +16,7 @@ type PublicActivity = {
   institution_logo_url?: string | null;
   title: string;
   description: string;
+  cover_url?: string | null;
   starts_at: string;
   ends_at?: string | null;
   mode: ActivityMode;
@@ -283,9 +284,17 @@ function ActivityCard({
           <span className="rounded-full bg-coral/10 px-3 py-1 text-xs font-black text-coral">{modeLabel(activity.mode)}</span>
           <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">{seatsLabel}</span>
         </div>
+        {activity.cover_url ? (
+          <img src={activity.cover_url} alt={activity.title} className="mt-4 h-48 w-full rounded-2xl object-cover" />
+        ) : null}
         <h3 className="mt-4 text-2xl font-black text-ink">{activity.title}</h3>
         <p className="mt-2 text-sm font-bold text-slate-500">{activity.institution_name}</p>
-        <p className="mt-4 whitespace-pre-wrap text-sm leading-7 text-slate-600">{activity.description}</p>
+        {activity.description ? (
+          <div
+            className="rich-content mt-4 text-sm leading-7 text-slate-600"
+            dangerouslySetInnerHTML={{ __html: activity.description }}
+          />
+        ) : null}
         <div className="mt-5 grid gap-3 text-sm font-semibold text-slate-600 md:grid-cols-2">
           <p className="flex items-center gap-2">
             <CalendarDays size={17} className="text-coral" /> {formatActivityDate(activity.starts_at)}
