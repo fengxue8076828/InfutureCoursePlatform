@@ -13,6 +13,7 @@ from passlib.context import CryptContext
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.api.deps import create_access_token
 from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import AdminLoginVerificationCode, Institution, User, UserRole
@@ -185,7 +186,7 @@ def register(payload: UserCreate, db: Session = Depends(get_db)) -> AuthOut:
     db.add(user)
     db.commit()
     db.refresh(user)
-    return AuthOut(access_token=f"demo-token-{user.id}", user=user)
+    return AuthOut(access_token=create_access_token(user.id), user=user)
 
 
 @router.post(
@@ -240,7 +241,7 @@ def register_institution(payload: InstitutionRegisterIn, db: Session = Depends(g
     db.add_all([institution, user])
     db.commit()
     db.refresh(user)
-    return AuthOut(access_token=f"demo-token-{user.id}", user=user)
+    return AuthOut(access_token=create_access_token(user.id), user=user)
 
 
 @router.post("/login", response_model=AuthOut)
@@ -250,7 +251,7 @@ def login(payload: LoginIn, db: Session = Depends(get_db)) -> AuthOut:
         payload.password, user.hashed_password
     ):
         raise HTTPException(status_code=401, detail="Invalid email or password")
-    return AuthOut(access_token=f"demo-token-{user.id}", user=user)
+    return AuthOut(access_token=create_access_token(user.id), user=user)
 
 
 @router.post("/admin-login-code", response_model=AdminLoginCodeOut)
@@ -277,7 +278,7 @@ def admin_login(payload: AdminLoginIn, db: Session = Depends(get_db)) -> AuthOut
     email = normalize_email(payload.email)
     user = get_admin_login_user(payload, db)
     verify_admin_login_code(email, payload.verification_code, db)
-    return AuthOut(access_token=f"demo-token-{user.id}", user=user)
+    return AuthOut(access_token=create_access_token(user.id), user=user)
 
 
 @router.post("/social-login", response_model=AuthOut)
@@ -318,7 +319,7 @@ def social_login(payload: SocialLoginIn, db: Session = Depends(get_db)) -> AuthO
             user.avatar_url = avatar_url
     db.commit()
     db.refresh(user)
-    return AuthOut(access_token=f"demo-token-{user.id}", user=user)
+    return AuthOut(access_token=create_access_token(user.id), user=user)
 
 
 @router.get("/social/{provider}/login-url")

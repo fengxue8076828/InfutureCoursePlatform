@@ -4,11 +4,11 @@ from urllib.parse import unquote, urlparse
 import zipfile
 import xml.etree.ElementTree as ET
 
-from fastapi import APIRouter, Depends, Header, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
-from app.api.deps import get_current_user, get_optional_current_user
+from app.api.deps import create_access_token, get_current_user, get_optional_current_user
 from app.api.routes.payments import checkout_metadata, retrieve_checkout_session, sync_checkout_session_if_complete
 from app.core.config import get_settings
 from app.db.session import get_db
@@ -80,6 +80,7 @@ from app.schemas import (
     StudentPostCreate,
     StudentPostOut,
     StudentProfileSummaryOut,
+    StudentProfileUpdateIn,
     StudentPublicProfileOut,
     StudentQuestionOut,
     StudentSocialHomeOut,
@@ -583,6 +584,26 @@ def my_social_home(
         questions=[community_question_out(question, current_user_id, db) for question in questions],
         answered_questions=[community_question_out(question, current_user_id, db) for question in answered_questions],
         notes=[community_note_out(note, current_user_id, db) for note in notes],
+    )
+
+
+@router.put("/me/profile", response_model=StudentProfileSummaryOut)
+def update_my_student_profile(
+    payload: StudentProfileUpdateIn,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> StudentProfileSummaryOut:
+    if current_user.role != UserRole.student:
+        raise HTTPException(status_code=403, detail="Student role required")
+    current_user.avatar_url = payload.avatar_url.strip() if payload.avatar_url else None
+    current_user.bio = payload.bio.strip() if payload.bio else None
+    db.add(current_user)
+    db.commit()
+    db.refresh(current_user)
+    return user_profile_summary(
+        current_user,
+        include_email=True,
+        community_points=community_points_for_user(db, current_user.id),
     )
 
 
@@ -1291,7 +1312,7 @@ def send_community_message(
 def subscribe_course(
     slug: str,
     payload: SubscribeCourseIn,
-    x_demo_user_id: int | None = Header(default=None),
+    current_user: User | None = Depends(get_optional_current_user),
     db: Session = Depends(get_db),
 ) -> SubscribeCourseOut:
     course = db.scalar(
@@ -1306,7 +1327,7 @@ def subscribe_course(
     if not course:
         raise HTTPException(status_code=404, detail="Course not found")
 
-    user: User | None = db.get(User, x_demo_user_id) if x_demo_user_id else None
+    user: User | None = current_user
     if user and user.role != UserRole.student:
         raise HTTPException(status_code=403, detail="Please subscribe with a student account")
 
@@ -1352,7 +1373,7 @@ def subscribe_course(
     if enrollment and active_subscription:
         db.commit()
         return SubscribeCourseOut(
-            auth=AuthOut(access_token=f"demo-token-{user.id}", user=user),
+            auth=AuthOut(access_token=create_access_token(user.id), user=user),
             enrollment=EnrollmentOut.model_validate(enrollment),
             subscription_status=active_subscription.status,
         )
@@ -1449,7 +1470,7 @@ def subscribe_course(
     db.refresh(user)
 
     return SubscribeCourseOut(
-        auth=AuthOut(access_token=f"demo-token-{user.id}", user=user),
+        auth=AuthOut(access_token=create_access_token(user.id), user=user),
         enrollment=None,
         subscription_status="checkout_required",
         checkout_url=str(stripe_value(checkout_session, "url", "") or ""),
@@ -1509,7 +1530,7 @@ def confirm_checkout_session(
     subscription_status = subscription.status
     db.commit()
     return SubscribeCourseOut(
-        auth=AuthOut(access_token=f"demo-token-{current_user.id}", user=current_user),
+        auth=AuthOut(access_token=create_access_token(current_user.id), user=current_user),
         enrollment=enrollment_out,
         subscription_status=subscription_status,
         checkout_session_id=session_id,

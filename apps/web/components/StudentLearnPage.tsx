@@ -2,7 +2,7 @@
 
 import { API_BASE_URL } from "@/lib/api-config";
 
-import { ArrowRight, Award, BookOpenCheck, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, Share2, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
+import { ArrowRight, Award, BookOpenCheck, Camera, Compass, Crown, Database, Feather, Heart, HelpCircle, ImagePlus, Loader2, MessageCircle, NotebookTabs, PenLine, Rocket, Share2, ShieldCheck, Sparkles, Star, Target, Trophy, UserPlus, Users, X } from "lucide-react";
 import Link from "next/link";
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 
@@ -11,8 +11,8 @@ import { Header } from "@/components/Header";
 import { SavedQuestionBankPanel } from "@/components/SavedQuestionBankPanel";
 import { StudentFollowNetworkPanel } from "@/components/StudentFollowNetworkPanel";
 import { StudentProfileActivityTabs } from "@/components/StudentProfileActivityTabs";
-import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, persistStudentSession, subscribeToStudentSession, type StudentAuthResponse, type StudentSessionUser } from "@/lib/student-session";
-import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
+import { clearStudentSession, getStudentRequestHeaders, getStudentSessionServerSnapshot, getStudentSessionUser, persistStudentSession, subscribeToStudentSession, updateStudentSessionUser, type StudentAuthResponse, type StudentSessionUser } from "@/lib/student-session";
+import type { CommunityHome, CommunityNoteShare, CommunityQuestion, CommunityReferenceCourse, Course, Enrollment, StudentLearningNote, StudentPointLevel, StudentPost, StudentProfileSummary, StudentPublicProfile, StudentSocialHome } from "@/lib/types";
 
 const STUDENT_NOTES_UPDATED_EVENT = "infuture-student-notes-updated";
 
@@ -96,6 +96,17 @@ const ui = {
   selectedStudentFailed: "\u540c\u5b66\u4e3b\u9875\u8bfb\u53d6\u5931\u8d25\u3002",
   regionUnknown: "\u5730\u533a\u672a\u586b\u5199",
   bioEmpty: "\u8fd8\u6ca1\u6709\u586b\u5199\u4e2a\u4eba\u7b80\u4ecb\u3002",
+  editProfile: "\u7f16\u8f91\u8d44\u6599",
+  cancel: "\u53d6\u6d88",
+  saveProfile: "\u4fdd\u5b58\u8d44\u6599",
+  savingProfile: "\u4fdd\u5b58\u4e2d...",
+  profileSaved: "\u4e2a\u4eba\u8d44\u6599\u5df2\u66f4\u65b0\u3002",
+  profileSaveFailed: "\u4e2a\u4eba\u8d44\u6599\u4fdd\u5b58\u5931\u8d25\uff0c\u8bf7\u7a0d\u540e\u518d\u8bd5\u3002",
+  uploadAvatar: "\u4e0a\u4f20\u5934\u50cf",
+  uploadingAvatar: "\u5934\u50cf\u4e0a\u4f20\u4e2d...",
+  avatarUploadFailed: "\u5934\u50cf\u4e0a\u4f20\u5931\u8d25\uff0c\u8bf7\u91cd\u8bd5\u3002",
+  profileBioLabel: "\u4e2a\u4eba\u7b80\u4ecb",
+  profileBioPlaceholder: "\u5199\u4e00\u6bb5\u7b80\u4ecb\uff0c\u8ba9\u540c\u5b66\u4e86\u89e3\u4f60\u7684\u5b66\u4e60\u65b9\u5411\u3002",
   viewCourse: "\u67e5\u770b\u8bfe\u7a0b",
   emptyRecommended: "\u6682\u65e0\u63a8\u8350\u8bfe\u7a0b",
   noteCount: "\u7bc7\u7b14\u8bb0"
@@ -402,6 +413,14 @@ export function StudentLearnPage() {
     });
   }
 
+  function updateProfile(profile: StudentProfileSummary) {
+    setSocialHome((current) => current ? { ...current, profile } : current);
+    updateStudentSessionUser({
+      full_name: profile.full_name,
+      avatar_url: profile.avatar_url ?? null
+    });
+  }
+
   if (!studentSession) {
     return (
       <>
@@ -434,7 +453,7 @@ export function StudentLearnPage() {
           </div>
 
           {activeTab === "home" ? (
-            <LearningHomePanel studentSession={studentSession} socialHome={visibleSocialHome} enrollments={visibleEnrollments} status={homeStatus} onPostCreated={addPost} onFollowChange={updateFollowing} />
+            <LearningHomePanel studentSession={studentSession} socialHome={visibleSocialHome} enrollments={visibleEnrollments} status={homeStatus} onPostCreated={addPost} onFollowChange={updateFollowing} onProfileUpdated={updateProfile} />
           ) : activeTab === "classroom" ? (
             <section className="panel rounded-lg p-5">
               <SectionHeader eyebrow={ui.classroom} title={ui.classroom} description={status} />
@@ -560,7 +579,23 @@ function CourseProgressCard({ enrollment, completed = false }: { enrollment: Enr
   );
 }
 
-function LearningHomePanel({ studentSession, socialHome, enrollments, status, onPostCreated, onFollowChange }: { studentSession: StudentSessionUser; socialHome: StudentSocialHome | null; enrollments: Enrollment[]; status: string; onPostCreated: (post: StudentPost) => void; onFollowChange: (studentId: number, following: boolean) => void }) {
+function LearningHomePanel({
+  studentSession,
+  socialHome,
+  enrollments,
+  status,
+  onPostCreated,
+  onFollowChange,
+  onProfileUpdated
+}: {
+  studentSession: StudentSessionUser;
+  socialHome: StudentSocialHome | null;
+  enrollments: Enrollment[];
+  status: string;
+  onPostCreated: (post: StudentPost) => void;
+  onFollowChange: (studentId: number, following: boolean) => void;
+  onProfileUpdated: (profile: StudentProfileSummary) => void;
+}) {
   const [postDraft, setPostDraft] = useState("");
   const [postCourseId, setPostCourseId] = useState("");
   const [postImages, setPostImages] = useState<string[]>([]);
@@ -575,9 +610,16 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
   const [questionDraft, setQuestionDraft] = useState<QuestionDraft>(emptyQuestionDraft);
   const [questionStatus, setQuestionStatus] = useState("");
   const [isQuestionPosting, setIsQuestionPosting] = useState(false);
+  const [isProfileEditing, setIsProfileEditing] = useState(false);
+  const [profileDraft, setProfileDraft] = useState({ bio: "", avatarUrl: "" });
+  const [profileStatus, setProfileStatus] = useState("");
+  const [isProfileSaving, setIsProfileSaving] = useState(false);
+  const [isAvatarUploading, setIsAvatarUploading] = useState(false);
+  const avatarInputRef = useRef<HTMLInputElement | null>(null);
   const profile = socialHome?.profile;
   const displayName = profile?.full_name || studentSession.full_name;
   const avatarUrl = profile?.avatar_url || studentSession.avatar_url;
+  const draftAvatarUrl = profileDraft.avatarUrl || avatarUrl;
   const activeCourses = socialHome?.active_courses ?? enrollments.filter((item) => item.status === "active");
   const completedCourses = socialHome?.completed_courses ?? enrollments.filter((item) => item.status === "completed");
   const visiblePosts = useMemo(() => mergeStudentPosts(localPosts, socialHome?.posts ?? []), [localPosts, socialHome?.posts]);
@@ -623,6 +665,70 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
     void loadCommunityReferences();
     return () => { ignore = true; };
   }, [studentSession.id]);
+
+  function startProfileEditing() {
+    setProfileDraft({ bio: profile?.bio ?? "", avatarUrl: avatarUrl ?? "" });
+    setProfileStatus("");
+    setIsProfileEditing(true);
+  }
+
+  function cancelProfileEditing() {
+    setProfileDraft({ bio: profile?.bio ?? "", avatarUrl: avatarUrl ?? "" });
+    setProfileStatus("");
+    setIsProfileEditing(false);
+  }
+
+  async function uploadProfileAvatar(files: FileList | null) {
+    const file = files?.[0];
+    if (!file) return;
+    setIsAvatarUploading(true);
+    setProfileStatus("");
+    try {
+      const formData = new FormData();
+      formData.append("kind", "student_avatar");
+      formData.append("file", file);
+      const response = await fetch(`${API_BASE_URL}/student/uploads`, {
+        method: "POST",
+        headers: getStudentRequestHeaders(),
+        body: formData,
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response, ui.avatarUploadFailed));
+      const payload = await response.json() as { url?: string };
+      if (!payload.url) throw new Error(ui.avatarUploadFailed);
+      setProfileDraft((current) => ({ ...current, avatarUrl: payload.url ?? "" }));
+    } catch (error) {
+      setProfileStatus(error instanceof Error && error.message ? error.message : ui.avatarUploadFailed);
+    } finally {
+      setIsAvatarUploading(false);
+      if (avatarInputRef.current) avatarInputRef.current.value = "";
+    }
+  }
+
+  async function saveProfile() {
+    setIsProfileSaving(true);
+    setProfileStatus("");
+    try {
+      const response = await fetch(`${API_BASE_URL}/learn/me/profile`, {
+        method: "PUT",
+        headers: { ...getStudentRequestHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          avatar_url: profileDraft.avatarUrl.trim() || null,
+          bio: profileDraft.bio.trim() || null
+        }),
+        cache: "no-store"
+      });
+      if (!response.ok) throw new Error(await readErrorMessage(response, ui.profileSaveFailed));
+      const updated = (await response.json()) as StudentProfileSummary;
+      onProfileUpdated(updated);
+      setIsProfileEditing(false);
+      setProfileStatus(ui.profileSaved);
+    } catch (error) {
+      setProfileStatus(error instanceof Error && error.message ? error.message : ui.profileSaveFailed);
+    } finally {
+      setIsProfileSaving(false);
+    }
+  }
 
   async function createCommunityQuestion() {
     if (!questionDraft.title.trim() || !questionDraft.body.trim()) {
@@ -868,8 +974,11 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
                   <p className="mt-2 text-sm font-bold text-slate-500">{profile?.region || ui.regionUnknown}</p>
                 </div>
               </div>
-              <div className="-translate-y-5 md:-translate-y-6">
+              <div className="-translate-y-5 flex flex-wrap items-center gap-3 md:-translate-y-6">
                 <LevelPointsBadge level={socialHome?.level ?? null} totalPoints={socialHome?.total_points ?? 0} />
+                <button type="button" onClick={startProfileEditing} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm font-black text-ink shadow-sm hover:border-mint">
+                  <PenLine size={16} />{ui.editProfile}
+                </button>
               </div>
             </div>
             <div className="mt-6 grid gap-2 text-center sm:grid-cols-3">
@@ -877,7 +986,38 @@ function LearningHomePanel({ studentSession, socialHome, enrollments, status, on
               <ProfileMetric label={ui.completedCourses} value={completedCourses.length} />
               <ProfileMetric label={ui.weeklyPoints} value={`+${socialHome?.weekly_points ?? 0}`} />
             </div>
-            <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile?.bio || ui.bioEmpty}</p>
+            {isProfileEditing ? (
+              <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
+                <input ref={avatarInputRef} type="file" accept="image/*" className="hidden" onChange={(event) => void uploadProfileAvatar(event.target.files)} />
+                <div className="flex flex-wrap items-center gap-4">
+                  <Avatar name={displayName} url={draftAvatarUrl} size="large" />
+                  <button type="button" onClick={() => avatarInputRef.current?.click()} disabled={isAvatarUploading} className="focus-ring inline-flex items-center gap-2 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm font-black text-ink disabled:cursor-not-allowed disabled:opacity-60">
+                    {isAvatarUploading ? <Loader2 size={16} className="animate-spin" /> : <Camera size={16} />}
+                    {isAvatarUploading ? ui.uploadingAvatar : ui.uploadAvatar}
+                  </button>
+                </div>
+                <label className="mt-4 block text-sm font-black text-ink">{ui.profileBioLabel}</label>
+                <textarea
+                  value={profileDraft.bio}
+                  onChange={(event) => setProfileDraft((current) => ({ ...current, bio: event.target.value }))}
+                  className="focus-ring mt-2 min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white p-3 text-sm leading-7 text-slate-700 outline-none"
+                  placeholder={ui.profileBioPlaceholder}
+                />
+                <div className="mt-3 flex flex-wrap justify-end gap-2">
+                  <button type="button" onClick={cancelProfileEditing} className="focus-ring rounded-lg border border-slate-200 bg-white px-4 py-2 text-sm font-black text-slate-600">{ui.cancel}</button>
+                  <button type="button" onClick={() => void saveProfile()} disabled={isProfileSaving || isAvatarUploading} className="focus-ring inline-flex items-center gap-2 rounded-lg bg-ink px-4 py-2 text-sm font-black text-white disabled:cursor-not-allowed disabled:opacity-60">
+                    {isProfileSaving ? <Loader2 size={16} className="animate-spin" /> : <ShieldCheck size={16} />}
+                    {isProfileSaving ? ui.savingProfile : ui.saveProfile}
+                  </button>
+                </div>
+                {profileStatus ? <p className="mt-3 rounded-lg bg-white px-3 py-2 text-sm font-bold text-slate-600">{profileStatus}</p> : null}
+              </div>
+            ) : (
+              <>
+                <p className="mt-5 rounded-lg bg-slate-50 p-4 text-sm leading-7 text-slate-600">{profile?.bio || ui.bioEmpty}</p>
+                {profileStatus ? <p className="mt-3 rounded-lg bg-mint/10 px-3 py-2 text-sm font-bold text-mint">{profileStatus}</p> : null}
+              </>
+            )}
           </div>
         </div>
         <StudentProfileActivityTabs

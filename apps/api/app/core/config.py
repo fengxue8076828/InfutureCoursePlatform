@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = True
     google_client_id: str | None = None
     frontend_base_url: str = "http://localhost:3000"
+    auth_secret_key: str | None = None
+    auth_token_ttl_minutes: int = 60 * 24 * 30
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
     stripe_default_country: str = "HU"

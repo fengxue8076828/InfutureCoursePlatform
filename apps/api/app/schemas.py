@@ -684,6 +684,11 @@ class StudentProfileSummaryOut(BaseModel):
     community_points: int = 0
 
 
+class StudentProfileUpdateIn(BaseModel):
+    avatar_url: str | None = Field(default=None, max_length=1000)
+    bio: str | None = Field(default=None, max_length=800)
+
+
 class StudentLearningNoteOut(BaseModel):
     id: int
     enrollment_id: int

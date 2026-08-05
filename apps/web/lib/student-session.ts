@@ -54,7 +54,26 @@ export function persistStudentSession(auth: StudentAuthResponse) {
   }
   window.localStorage.setItem(STUDENT_AUTH_TOKEN_STORAGE_KEY, auth.access_token);
   window.localStorage.setItem(STUDENT_AUTH_USER_STORAGE_KEY, JSON.stringify(auth.user));
+  cachedStudentSessionRaw = JSON.stringify(auth.user);
+  cachedStudentSessionUser = auth.user;
   emitStudentSessionChange();
+}
+
+export function updateStudentSessionUser(patch: Partial<StudentSessionUser>): StudentSessionUser | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const current = getStudentSessionUser();
+  if (!current) {
+    return null;
+  }
+  const next = { ...current, ...patch };
+  const raw = JSON.stringify(next);
+  window.localStorage.setItem(STUDENT_AUTH_USER_STORAGE_KEY, raw);
+  cachedStudentSessionRaw = raw;
+  cachedStudentSessionUser = next;
+  emitStudentSessionChange();
+  return next;
 }
 
 export function clearStudentSession() {
@@ -83,14 +102,10 @@ export function getStudentSessionServerSnapshot(): StudentSessionUser | null {
 }
 
 export function getStudentRequestHeaders(): HeadersInit {
-  const user = getStudentSessionUser();
   const token = typeof window === "undefined" ? null : window.localStorage.getItem(STUDENT_AUTH_TOKEN_STORAGE_KEY);
   const headers: Record<string, string> = {};
   if (token) {
     headers.Authorization = `Bearer ${token}`;
-  }
-  if (user?.role === "student") {
-    headers["x-demo-user-id"] = String(user.id);
   }
   return headers;
 }

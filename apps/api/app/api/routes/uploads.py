@@ -11,7 +11,7 @@ router = APIRouter()
 
 VIDEO_UPLOAD_KINDS = {"course_intro_video", "lesson_video"}
 HANDOUT_UPLOAD_KINDS = {"handout"}
-IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo", "student_post_image", "teacher_certificate", "blog_cover", "blog_image", "activity_cover", "activity_image"}
+IMAGE_UPLOAD_KINDS = {"course_cover", "question_media", "avatar", "logo", "student_post_image", "student_avatar", "teacher_certificate", "blog_cover", "blog_image", "activity_cover", "activity_image"}
 UPLOAD_LIMITS = {
     "video": 200 * 1024 * 1024,
     "handout": 30 * 1024 * 1024,
@@ -23,7 +23,7 @@ ADMIN_UPLOAD_ROLES = {UserRole.institution_admin, UserRole.super_admin}
 STAFF_UPLOAD_ROLES = {UserRole.teacher, UserRole.institution_admin, UserRole.super_admin}
 STAFF_UPLOAD_KINDS = VIDEO_UPLOAD_KINDS | HANDOUT_UPLOAD_KINDS | {"course_cover", "question_media", "avatar", "teacher_certificate", "blog_cover", "blog_image", "activity_cover", "activity_image"}
 ADMIN_ONLY_UPLOAD_KINDS = {"logo"}
-STUDENT_UPLOAD_KINDS = {"student_post_image"}
+STUDENT_UPLOAD_KINDS = {"student_post_image", "student_avatar"}
 
 
 def ensure_upload_permission(kind: str, current_user: User) -> None:
@@ -125,6 +125,6 @@ async def upload_student_file(
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
 ) -> dict[str, str | int]:
-    if kind != "student_post_image":
+    if kind not in STUDENT_UPLOAD_KINDS:
         raise HTTPException(status_code=422, detail="Unsupported student upload kind")
     return await upload_admin_file(request=request, kind=kind, file=file, current_user=current_user)

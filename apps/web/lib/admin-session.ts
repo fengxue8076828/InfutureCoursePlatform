@@ -22,11 +22,6 @@ export type AdminAuthResponse = {
   user: AdminSessionUser;
 };
 
-function parseUserIdFromToken(token: string | null) {
-  const match = token?.match(/^demo-token-(\d+)$/);
-  return match ? Number(match[1]) : null;
-}
-
 function readStoredNumber(key: string) {
   if (typeof window === "undefined") {
     return null;
@@ -77,7 +72,7 @@ export function clearExpiredAdminSession(now = Date.now()) {
 
 export function getAdminSessionUserId() {
   if (typeof window === "undefined") {
-    return 2;
+    return 0;
   }
   if (clearExpiredAdminSession()) {
     return 0;
@@ -90,7 +85,7 @@ export function getAdminSessionUserId() {
   if (Number.isFinite(storedId) && storedId > 0) {
     return storedId;
   }
-  return parseUserIdFromToken(window.localStorage.getItem(ADMIN_AUTH_TOKEN_STORAGE_KEY)) ?? 2;
+  return 0;
 }
 
 export function getAdminSessionUser(): AdminSessionUser | null {
@@ -113,10 +108,13 @@ export function getAdminSessionUser(): AdminSessionUser | null {
 
 export function getAdminRequestHeaders(base: Record<string, string> = {}) {
   clearExpiredAdminSession();
-  return {
-    ...base,
-    "x-demo-user-id": String(getAdminSessionUserId())
-  };
+  const token = typeof window === "undefined" ? null : window.localStorage.getItem(ADMIN_AUTH_TOKEN_STORAGE_KEY);
+  return token
+    ? {
+        ...base,
+        Authorization: `Bearer ${token}`
+      }
+    : base;
 }
 
 export function persistAdminSession(auth: AdminAuthResponse) {

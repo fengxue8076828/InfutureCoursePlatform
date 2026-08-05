@@ -51,6 +51,7 @@ PASSING_RATIO = 0.8
 NOTE_POINTS = 6
 NOTE_LIKE_POINTS = 3
 FOLLOWER_POINTS = 10
+REGISTRATION_BONUS_POINTS = 100
 
 
 def aware_now() -> datetime:
@@ -495,6 +496,19 @@ def calculate_student_point_detail(db: Session, student: User, week_start: datet
     recent_events: list[StudentPointEvent] = []
     handled_submission_ids: set[int] = set()
     latest_assessment_points = 0
+    registration_bonus = REGISTRATION_BONUS_POINTS
+    total_points += registration_bonus
+    if is_this_week(student.created_at, week_start):
+        weekly_points += registration_bonus
+    recent_events.append(
+        build_point_event(
+            label="\u65b0\u7528\u6237\u6ce8\u518c\u5956\u52b1",
+            source="registration",
+            points=registration_bonus,
+            occurred_at=student.created_at,
+            detail="\u6ce8\u518c\u5b66\u751f\u8d26\u53f7\u540e\u83b7\u5f97\u7684\u6b22\u8fce\u79ef\u5206",
+        )
+    )
 
     for enrollment in enrollments:
         course = enrollment.course
