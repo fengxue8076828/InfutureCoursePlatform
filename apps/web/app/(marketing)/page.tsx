@@ -158,16 +158,18 @@ function InstitutionLogo({ institution }: { institution: Institution }) {
   return (
     <Link
       href={`/institutions/${institution.slug}`}
-      className="flex min-w-0 items-center gap-4 rounded-lg px-3 py-2 transition hover:bg-white/70 hover:text-coral"
+      aria-label={`查看${institution.name}机构主页`}
+      className="grid h-20 min-w-0 place-items-center rounded-lg px-3 py-2 transition hover:bg-white/70"
     >
-      {logoUrl ? (
-        <img src={logoUrl} alt={institution.name} className="h-20 w-48 object-contain" />
-      ) : (
-        <span className="grid h-20 w-20 place-items-center rounded-lg bg-mint/15 text-xl font-black text-mint">
-          {institution.name.slice(0, 1)}
-        </span>
-      )}
-      <p className="truncate text-sm font-bold text-ink">{institution.name}</p>
+      <span className="grid h-16 w-full place-items-center">
+        {logoUrl ? (
+          <img src={logoUrl} alt={institution.name} className="h-14 w-full object-contain" />
+        ) : (
+          <span className="grid h-14 w-14 place-items-center rounded-lg bg-mint/15 text-xl font-black text-mint">
+            {institution.name.slice(0, 1)}
+          </span>
+        )}
+      </span>
     </Link>
   );
 }
