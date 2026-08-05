@@ -146,7 +146,18 @@ def teacher_source_user_id(teacher: Teacher) -> int | None:
     try:
         return int(raw_id)
     except (TypeError, ValueError):
-        return None
+        pass
+    if teacher.slug.startswith("user-teacher-"):
+        try:
+            return int(teacher.slug.removeprefix("user-teacher-"))
+        except ValueError:
+            return None
+    return None
+
+
+def teacher_source_user_email(teacher: Teacher) -> str:
+    raw_email = (teacher.specialties or {}).get("email")
+    return str(raw_email).strip().lower() if raw_email else ""
 
 
 def public_teacher_specialties(teacher: Teacher) -> dict[str, list[str]]:
@@ -204,10 +215,24 @@ def public_teacher_out(teacher: Teacher, user: User | None = None) -> TeacherOut
 
 def public_teacher_outs(db: Session, teachers: list[Teacher]) -> list[TeacherOut]:
     source_ids = [source_id for source_id in (teacher_source_user_id(teacher) for teacher in teachers) if source_id]
+    source_emails = [email for email in (teacher_source_user_email(teacher) for teacher in teachers) if email]
     users_by_id: dict[int, User] = {}
+    users_by_email: dict[str, User] = {}
     if source_ids:
         users_by_id = {user.id: user for user in db.scalars(select(User).where(User.id.in_(set(source_ids))))}
-    return [public_teacher_out(teacher, users_by_id.get(teacher_source_user_id(teacher) or 0)) for teacher in teachers]
+    if source_emails:
+        users_by_email = {
+            user.email.lower(): user
+            for user in db.scalars(select(User).where(func.lower(User.email).in_(set(source_emails))))
+        }
+    return [
+        public_teacher_out(
+            teacher,
+            users_by_id.get(teacher_source_user_id(teacher) or 0)
+            or users_by_email.get(teacher_source_user_email(teacher)),
+        )
+        for teacher in teachers
+    ]
 
 
 def public_activity_to_out(activity: InstitutionActivity) -> PublicActivityOut:
