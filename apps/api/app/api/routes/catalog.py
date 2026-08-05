@@ -127,6 +127,89 @@ def attach_course_learning_paths(db: Session, courses: list[Course]) -> list[Cou
     return courses
 
 
+PUBLIC_TEACHER_PROFILE_FIELDS = (
+    "highest_education",
+    "graduation_school",
+    "current_position",
+    "employment_history",
+    "teaching_years",
+    "professional_title",
+)
+
+
+def clean_public_teacher_text(value: object) -> str:
+    return value.strip() if isinstance(value, str) else ""
+
+
+def teacher_source_user_id(teacher: Teacher) -> int | None:
+    raw_id = (teacher.specialties or {}).get("source_user_id")
+    try:
+        return int(raw_id)
+    except (TypeError, ValueError):
+        return None
+
+
+def public_teacher_specialties(teacher: Teacher) -> dict[str, list[str]]:
+    raw_items = (teacher.specialties or {}).get("items")
+    items = []
+    if isinstance(raw_items, list):
+        items = [str(item).strip() for item in raw_items if str(item).strip()]
+    if not items and teacher.title:
+        items = [teacher.title]
+    return {"items": items}
+
+
+def public_teacher_profile(raw_profile: object) -> dict | None:
+    if not isinstance(raw_profile, dict):
+        return None
+
+    profile = {field: clean_public_teacher_text(raw_profile.get(field)) for field in PUBLIC_TEACHER_PROFILE_FIELDS}
+    certificates: list[dict[str, str]] = []
+    raw_certificates = raw_profile.get("certificates")
+    if isinstance(raw_certificates, list):
+        for item in raw_certificates:
+            if isinstance(item, str):
+                name = item.strip()
+                description = ""
+                image_url = ""
+            elif isinstance(item, dict):
+                name = clean_public_teacher_text(item.get("name") or item.get("title"))
+                description = clean_public_teacher_text(item.get("description"))
+                image_url = clean_public_teacher_text(item.get("image_url") or item.get("imageUrl") or item.get("url"))
+            else:
+                continue
+            if name or description or image_url:
+                certificates.append({"name": name, "description": description, "image_url": image_url})
+
+    profile["certificates"] = certificates
+    if any(profile[field] for field in PUBLIC_TEACHER_PROFILE_FIELDS) or certificates:
+        return profile
+    return None
+
+
+def public_teacher_out(teacher: Teacher, user: User | None = None) -> TeacherOut:
+    return TeacherOut(
+        id=teacher.id,
+        name=teacher.name,
+        slug=teacher.slug,
+        title=teacher.title,
+        bio=teacher.bio,
+        avatar_url=teacher.avatar_url,
+        region=teacher.region,
+        specialties=public_teacher_specialties(teacher),
+        institution=InstitutionOut.model_validate(teacher.institution) if teacher.institution else None,
+        teacher_profile=public_teacher_profile(user.teacher_profile if user else None),
+    )
+
+
+def public_teacher_outs(db: Session, teachers: list[Teacher]) -> list[TeacherOut]:
+    source_ids = [source_id for source_id in (teacher_source_user_id(teacher) for teacher in teachers) if source_id]
+    users_by_id: dict[int, User] = {}
+    if source_ids:
+        users_by_id = {user.id: user for user in db.scalars(select(User).where(User.id.in_(set(source_ids))))}
+    return [public_teacher_out(teacher, users_by_id.get(teacher_source_user_id(teacher) or 0)) for teacher in teachers]
+
+
 def public_activity_to_out(activity: InstitutionActivity) -> PublicActivityOut:
     return PublicActivityOut(
         id=activity.id,
@@ -939,19 +1022,20 @@ def get_course(slug: str, db: Session = Depends(get_db)) -> Course:
 
 
 @router.get("/teachers", response_model=list[TeacherOut])
-def list_teachers(db: Session = Depends(get_db)) -> list[Teacher]:
-    return list(db.scalars(select(Teacher).options(joinedload(Teacher.institution)).order_by(Teacher.name)))
+def list_teachers(db: Session = Depends(get_db)) -> list[TeacherOut]:
+    teachers = list(db.scalars(select(Teacher).options(joinedload(Teacher.institution)).order_by(Teacher.name)))
+    return public_teacher_outs(db, teachers)
 
 
 @router.get("/teachers/{identifier}", response_model=TeacherOut)
-def get_teacher(identifier: str, db: Session = Depends(get_db)) -> Teacher:
+def get_teacher(identifier: str, db: Session = Depends(get_db)) -> TeacherOut:
     stmt = select(Teacher).options(joinedload(Teacher.institution))
     teacher = db.scalar(stmt.where(Teacher.slug == identifier))
     if teacher is None and identifier.isdigit():
         teacher = db.scalar(stmt.where(Teacher.id == int(identifier)))
     if not teacher:
         raise HTTPException(status_code=404, detail="Teacher not found")
-    return teacher
+    return public_teacher_outs(db, [teacher])[0]
 
 
 @router.get("/leaderboard", response_model=StudentLeaderboardOut)

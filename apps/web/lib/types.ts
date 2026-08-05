@@ -22,6 +22,22 @@ export type CourseCategory = {
   is_active: boolean;
 };
 
+export type TeacherCertificate = {
+  name: string;
+  description?: string;
+  image_url?: string;
+};
+
+export type TeacherProfile = {
+  highest_education?: string;
+  graduation_school?: string;
+  current_position?: string;
+  employment_history?: string;
+  teaching_years?: string;
+  professional_title?: string;
+  certificates?: TeacherCertificate[];
+};
+
 export type Teacher = {
   id: number;
   name: string;
@@ -32,6 +48,7 @@ export type Teacher = {
   region: string;
   specialties: { items: string[] };
   institution?: Institution;
+  teacher_profile?: TeacherProfile | null;
 };
 
 export type LessonItem = {

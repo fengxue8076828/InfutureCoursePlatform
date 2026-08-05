@@ -253,6 +253,22 @@ class CourseCategoryUpdate(BaseModel):
     is_active: bool = True
 
 
+class PublicTeacherCertificateOut(BaseModel):
+    name: str = ""
+    description: str = ""
+    image_url: str = ""
+
+
+class PublicTeacherProfileOut(BaseModel):
+    highest_education: str = ""
+    graduation_school: str = ""
+    current_position: str = ""
+    employment_history: str = ""
+    teaching_years: str = ""
+    professional_title: str = ""
+    certificates: list[PublicTeacherCertificateOut] = Field(default_factory=list)
+
+
 class TeacherOut(OrmModel):
     id: int
     name: str
@@ -263,6 +279,7 @@ class TeacherOut(OrmModel):
     region: str
     specialties: dict[str, Any]
     institution: InstitutionOut | None = None
+    teacher_profile: PublicTeacherProfileOut | None = None
 
 
 class CourseLearningPathRefOut(BaseModel):
