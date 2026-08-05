@@ -119,8 +119,8 @@ export default async function TeacherDetailPage({ params }: TeacherDetailPagePro
             <ArrowLeft size={16} /> {labels.backHome}
           </Link>
 
-          <div className="mt-8 grid gap-8 lg:grid-cols-[22rem_1fr] lg:items-end">
-            <div className="rounded-lg border border-white/80 bg-white/80 p-4 shadow-soft backdrop-blur">
+          <div className="mt-8 grid gap-8 lg:grid-cols-[16rem_1fr] lg:items-end">
+            <div className="max-w-64 rounded-lg border border-white/80 bg-white/80 p-3 shadow-soft backdrop-blur">
               <img
                 src={avatarUrl}
                 alt={teacher.name}
