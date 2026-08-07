@@ -1,6 +1,7 @@
 "use client";
 
 import { API_BASE_URL } from "@/lib/api-config";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 
 import {
   ArrowRight,
@@ -276,8 +277,13 @@ export function InstitutionsDirectoryPage() {
   const [query, setQuery] = useState("");
   const [category, setCategory] = useState("");
   const [message, setMessage] = useState("\u6b63\u5728\u8bfb\u53d6\u673a\u6784...");
+  const recommendationFeed = useRecommendationFeed();
 
   const categoryOptions = useMemo(() => directory.categories, [directory.categories]);
+  const recommendedInstitutions = useMemo(
+    () => reorderByRecommendation(directory.institutions, recommendationFeed?.orders.institutions, (card) => card.institution.id),
+    [directory.institutions, recommendationFeed]
+  );
 
   useEffect(() => {
     async function load() {
@@ -372,7 +378,7 @@ export function InstitutionsDirectoryPage() {
             <h2 className="mt-1 text-3xl font-black text-ink">{"\u673a\u6784\u5217\u8868"}</h2>
           </div>
           <div className="mt-5 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-            {directory.institutions.map((card) => (
+            {recommendedInstitutions.map((card) => (
               <InstitutionCardView key={card.institution.id} card={card} />
             ))}
           </div>

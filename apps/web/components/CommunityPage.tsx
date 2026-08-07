@@ -1,6 +1,7 @@
 "use client";
 
 import { API_BASE_URL } from "@/lib/api-config";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 
 import {
   ArrowRight,
@@ -16,7 +17,7 @@ import {
   Users
 } from "lucide-react";
 import Link from "next/link";
-import { useEffect, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { Dispatch, ReactNode, SetStateAction } from "react";
 
 import { Header } from "@/components/Header";
@@ -59,6 +60,7 @@ function updateQuestionCollections(home: CommunityHome | null, updater: (questio
 
 export function CommunityPage() {
   const studentSession = useSyncExternalStore(subscribeToStudentSession, getStudentSessionUser, getStudentSessionServerSnapshot);
+  const recommendationFeed = useRecommendationFeed();
   const [home, setHome] = useState<CommunityHome | null>(null);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
@@ -71,7 +73,10 @@ export function CommunityPage() {
   const hotQuestions = home?.questions ?? [];
   const recommendedQuestions = home?.recommended_questions?.length ? home.recommended_questions : hotQuestions.filter((question) => question.user_id !== studentSession?.id).slice(0, 6);
   const hotNotes = home?.notes ?? [];
-  const hotStudents = home?.hot_students ?? [];
+  const hotStudents = useMemo(
+    () => reorderByRecommendation(home?.hot_students ?? [], recommendationFeed?.orders.students),
+    [home?.hot_students, recommendationFeed]
+  );
   const questionStats = hotQuestions.length;
   const noteStats = hotNotes.length;
   const answerStats = hotQuestions.reduce((sum, question) => sum + question.answers_count, 0);

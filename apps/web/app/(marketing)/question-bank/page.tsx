@@ -17,6 +17,7 @@ import {
 import Link from "next/link";
 
 import { AddToQuestionBankButton } from "@/components/AddToQuestionBankButton";
+import { RecommendedQuestionOrder } from "@/components/RecommendedQuestionOrder";
 import { MathText } from "@/components/MathText";
 import { getInstitutions, getPublishedQuestions } from "@/lib/api";
 import type { Question, QuestionType } from "@/lib/types";
@@ -368,7 +369,9 @@ export default async function QuestionBankPage({
           <div className="mt-5 grid gap-6 xl:grid-cols-[1fr_340px]">
             <div className="grid gap-2">
               {filteredQuestions.length ? (
-                filteredQuestions.map((question, index) => <QuestionRow key={question.id} question={question} index={index} institutionsById={institutionsById} />)
+                <RecommendedQuestionOrder questionIds={filteredQuestions.map((question) => question.id)}>
+                  {filteredQuestions.map((question, index) => <QuestionRow key={question.id} question={question} index={index} institutionsById={institutionsById} />)}
+                </RecommendedQuestionOrder>
               ) : (
                 <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-10 text-center">
                   <FileQuestion size={34} className="mx-auto text-slate-300" />
@@ -416,3 +419,4 @@ export default async function QuestionBankPage({
     </main>
   );
 }
+

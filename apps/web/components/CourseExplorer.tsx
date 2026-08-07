@@ -5,6 +5,7 @@ import { useMemo, useState } from "react";
 
 import { CourseCard } from "./CourseCard";
 import { getDifficultyOptionsForInstitution, normalizeInstitutionCategory } from "@/lib/difficulty";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 import type { Course, CourseCategory, Institution } from "@/lib/types";
 
 const ALL_OPTION = "__all__";
@@ -153,6 +154,12 @@ export function CourseExplorer({
         return courseCategoryMatch && levelMatch;
       }),
     [coursesAfterInstitutionScope, effectiveSelectedCourseCategory, effectiveSelectedLevel, showLevelFilter]
+  );
+
+  const recommendationFeed = useRecommendationFeed();
+  const recommendedCourses = useMemo(
+    () => reorderByRecommendation(filteredCourses, recommendationFeed?.orders.courses),
+    [filteredCourses, recommendationFeed]
   );
 
   const hasActiveFilters =
@@ -304,7 +311,7 @@ export function CourseExplorer({
           </div>
         ) : (
           <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredCourses.map((course) => (
+            {recommendedCourses.map((course) => (
               <div key={course.id} className="[&>a]:w-full">
                 <CourseCard course={course} />
               </div>

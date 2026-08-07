@@ -1,6 +1,7 @@
 "use client";
 
 import { API_BASE_URL } from "@/lib/api-config";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 
 import { ArrowRight, BookOpen, Building2, Layers3, Route, Search, Sparkles } from "lucide-react";
 import Link from "next/link";
@@ -82,7 +83,12 @@ export function LearningPathsPage() {
     void loadPaths(query);
   }
 
-  const featuredPaths = useMemo(() => paths.slice(0, 3), [paths]);
+  const recommendationFeed = useRecommendationFeed();
+  const recommendedPaths = useMemo(
+    () => reorderByRecommendation(paths, recommendationFeed?.orders.learning_paths),
+    [paths, recommendationFeed]
+  );
+  const featuredPaths = useMemo(() => recommendedPaths.slice(0, 3), [recommendedPaths]);
 
   return (
     <main className="bg-mist pb-16 text-ink">
@@ -152,7 +158,7 @@ export function LearningPathsPage() {
             {isLoading ? <p className="text-sm font-bold text-slate-500">正在加载...</p> : null}
           </div>
           <div className="mt-6 grid gap-5">
-            {paths.map((path) => (
+            {recommendedPaths.map((path) => (
               <LearningPathRow key={path.id} path={path} />
             ))}
             {!paths.length && !isLoading ? (

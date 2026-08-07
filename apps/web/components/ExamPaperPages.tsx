@@ -1,6 +1,7 @@
 "use client";
 
 import { API_BASE_URL } from "@/lib/api-config";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 
 import { BookOpenCheck, CalendarClock, CheckCircle2, ChevronLeft, ChevronRight, Clock3, FileText, Search, Send, Trophy, Users } from "lucide-react";
 import Link from "next/link";
@@ -131,11 +132,17 @@ export function ExamPaperListPage({ kind }: { kind: ExamPaperKind }) {
     });
   }, [papers, query, selectedCategoryId]);
 
+  const recommendationFeed = useRecommendationFeed();
+  const recommendationKey = kind === "competition" ? "competitions" : "mock_exams";
+  const recommendedPapers = useMemo(
+    () => reorderByRecommendation(filteredPapers, recommendationFeed?.orders[recommendationKey]),
+    [filteredPapers, recommendationFeed, recommendationKey]
+  );
+
   const categoryOptions = useMemo(() => {
     const categoryIds = new Set(papers.map((paper) => paper.category?.id).filter(Boolean));
     return categories.filter((category) => categoryIds.has(category.id));
   }, [categories, papers]);
-
   return (
     <main className="bg-slate-50">
       <section className="mx-auto max-w-7xl px-4 py-10 sm:px-6 lg:px-8">
@@ -180,7 +187,7 @@ export function ExamPaperListPage({ kind }: { kind: ExamPaperKind }) {
         </section>
 
         <section className="mt-8 grid gap-5 md:grid-cols-2 xl:grid-cols-3">
-          {filteredPapers.map((paper) => (
+          {recommendedPapers.map((paper) => (
             <Link
               key={paper.id}
               href={`${config.listPath}/${paper.slug}`}

@@ -1,6 +1,7 @@
 "use client";
 
 import { API_BASE_URL } from "@/lib/api-config";
+import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 
 import { CalendarDays, CheckCircle2, Mail, MapPin, MonitorPlay, Phone, Sparkles, Trophy, Users } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
@@ -95,6 +96,11 @@ export function ActivitiesPage() {
 
   const featuredLatest = activityHome.latest.slice(0, 3);
   const featuredPopular = activityHome.popular.slice(0, 3);
+  const recommendationFeed = useRecommendationFeed();
+  const recommendedActivities = useMemo(
+    () => reorderByRecommendation(activityHome.activities, recommendationFeed?.orders.activities),
+    [activityHome.activities, recommendationFeed]
+  );
 
   function updateDraft(activityId: number, field: keyof RegistrationDraft, value: string) {
     setDrafts((current) => ({
@@ -195,7 +201,7 @@ export function ActivitiesPage() {
           </div>
 
           <div className="mt-6 grid gap-5">
-            {activityHome.activities.map((activity) => (
+            {recommendedActivities.map((activity) => (
               <ActivityCard
                 key={activity.id}
                 activity={activity}

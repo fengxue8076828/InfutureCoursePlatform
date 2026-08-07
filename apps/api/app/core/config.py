@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     auth_token_ttl_minutes: int = 60 * 24 * 30
     stripe_secret_key: str | None = None
     stripe_webhook_secret: str | None = None
+    openai_api_key: str | None = None
+    openai_recommendation_model: str = "gpt-4.1-mini"
+    ai_recommendation_enabled: bool = True
+    ai_recommendation_limit: int = 24
     stripe_default_country: str = "HU"
     stripe_platform_fee_percent: float = 15.0
 

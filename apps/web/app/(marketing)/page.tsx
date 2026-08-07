@@ -22,10 +22,8 @@ import {
 import Image from "next/image";
 import Link from "next/link";
 
-import { CourseCard } from "@/components/CourseCard";
-import { ScrollRow } from "@/components/ScrollRow";
 import { SectionTitle } from "@/components/SectionTitle";
-import { TeacherCard } from "@/components/TeacherCard";
+import { HomeFeaturedCourses, HomeInstitutionLogos, HomeTeachers } from "@/components/HomeRecommendedSections";
 import { getBlogPosts, getCourses, getInstitutions, getPublishedQuestions, getStudentLeaderboard, getTeachers } from "@/lib/api";
 import type { Institution, Question, StudentLeaderboardEntry } from "@/lib/types";
 
@@ -318,7 +316,7 @@ export default async function HomePage() {
           <SectionTitle eyebrow="Institutions" title="精选入驻机构" subtitle="平台持续连接优质教育机构，让课程、题库和教学服务集中呈现。" />
           <div className="mt-7 grid gap-x-8 gap-y-6 sm:grid-cols-2 lg:grid-cols-4">
             {institutions.length > 0 ? (
-              institutions.slice(0, 8).map((institution) => <InstitutionLogo key={institution.id} institution={institution} />)
+              <HomeInstitutionLogos institutions={institutions} />
             ) : (
               <p className="text-sm text-slate-500">暂无入驻机构。</p>
             )}
@@ -336,11 +334,7 @@ export default async function HomePage() {
           </div>
           <div className="mt-7">
             {featuredCourses.length > 0 ? (
-              <ScrollRow>
-                {featuredCourses.map((course) => (
-                  <CourseCard key={course.id} course={course} className="w-[calc((100%-3rem)/4)] min-w-[17rem] shrink-0" />
-                ))}
-              </ScrollRow>
+              <HomeFeaturedCourses courses={featuredCourses} />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-8 text-sm text-slate-500">暂无已发布课程。</div>
             )}
@@ -620,9 +614,7 @@ export default async function HomePage() {
           </div>
           <div className="mt-7">
             {visibleTeachers.length > 0 ? (
-              <ScrollRow>
-                {visibleTeachers.map((teacher) => <TeacherCard key={teacher.id} teacher={teacher} />)}
-              </ScrollRow>
+              <HomeTeachers teachers={visibleTeachers} />
             ) : (
               <div className="rounded-lg border border-dashed border-slate-200 bg-white p-8 text-sm text-slate-500">暂无老师资料。</div>
             )}
