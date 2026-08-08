@@ -4,6 +4,7 @@ import { Building2, Grid2X2, Layers3, RotateCcw, SlidersHorizontal } from "lucid
 import { useMemo, useState } from "react";
 
 import { CourseCard } from "./CourseCard";
+import { ResourceTagFilters } from "./ResourceTagFilters";
 import { getDifficultyOptionsForInstitution, normalizeInstitutionCategory } from "@/lib/difficulty";
 import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
 import type { Course, CourseCategory, Institution } from "@/lib/types";
@@ -76,6 +77,7 @@ export function CourseExplorer({
   const [selectedInstitutionSlug, setSelectedInstitutionSlug] = useState(ALL_OPTION);
   const [selectedCourseCategory, setSelectedCourseCategory] = useState(ALL_OPTION);
   const [selectedLevel, setSelectedLevel] = useState(ALL_OPTION);
+  const [selectedTagIds, setSelectedTagIds] = useState<number[]>([]);
 
   const institutionsBySlug = useMemo(
     () => new Map(institutions.map((institution) => [institution.slug, institution])),
@@ -151,9 +153,11 @@ export function CourseExplorer({
         const courseCategoryMatch =
           effectiveSelectedCourseCategory === ALL_OPTION || course.category === effectiveSelectedCourseCategory;
         const levelMatch = !showLevelFilter || effectiveSelectedLevel === ALL_OPTION || course.level === effectiveSelectedLevel;
-        return courseCategoryMatch && levelMatch;
+        const courseTagIds = new Set((course.tag_list ?? []).map((tag) => tag.id));
+        const tagMatch = selectedTagIds.every((tagId) => courseTagIds.has(tagId));
+        return courseCategoryMatch && levelMatch && tagMatch;
       }),
-    [coursesAfterInstitutionScope, effectiveSelectedCourseCategory, effectiveSelectedLevel, showLevelFilter]
+    [coursesAfterInstitutionScope, effectiveSelectedCourseCategory, effectiveSelectedLevel, selectedTagIds, showLevelFilter]
   );
 
   const recommendationFeed = useRecommendationFeed();
@@ -166,19 +170,22 @@ export function CourseExplorer({
     selectedInstitutionCategory !== ALL_OPTION ||
     effectiveSelectedInstitutionSlug !== ALL_OPTION ||
     effectiveSelectedCourseCategory !== ALL_OPTION ||
-    effectiveSelectedLevel !== ALL_OPTION;
+    effectiveSelectedLevel !== ALL_OPTION ||
+    selectedTagIds.length > 0;
 
   function selectInstitutionCategory(category: string) {
     setSelectedInstitutionCategory(category);
     setSelectedInstitutionSlug(ALL_OPTION);
     setSelectedCourseCategory(ALL_OPTION);
     setSelectedLevel(ALL_OPTION);
+    setSelectedTagIds([]);
   }
 
   function selectInstitution(slug: string) {
     setSelectedInstitutionSlug(slug);
     setSelectedCourseCategory(ALL_OPTION);
     setSelectedLevel(ALL_OPTION);
+    setSelectedTagIds([]);
   }
 
   function resetFilters() {
@@ -186,6 +193,7 @@ export function CourseExplorer({
     setSelectedInstitutionSlug(ALL_OPTION);
     setSelectedCourseCategory(ALL_OPTION);
     setSelectedLevel(ALL_OPTION);
+    setSelectedTagIds([]);
   }
 
   return (
@@ -286,6 +294,17 @@ export function CourseExplorer({
               ))}
             </div>
           </div>
+        ) : null}
+
+        {showLevelFilter ? (
+          <ResourceTagFilters
+            value={{ institutionCategory: selectedInstitutionCategory, tagIds: selectedTagIds }}
+            onChange={(nextValue) => setSelectedTagIds(nextValue.tagIds)}
+            title={"\u8d44\u6e90\u6807\u7b7e"}
+            compact
+            showCategorySelect={false}
+            className="mt-6 shadow-none"
+          />
         ) : null}
       </aside>
 

@@ -18,8 +18,10 @@ import {
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
+import { ResourceTagPicker } from "./ResourceTagPicker";
 
 import { MathText, hasMathText } from "@/components/MathText";
+import type { ResourceTag } from "@/lib/types";
 import {
   adminInstitution,
   fallbackAdminQuestions,
@@ -95,6 +97,9 @@ type AdminQuestion = {
   requires_manual_grading: boolean;
   is_public: boolean;
   status: QuestionStatusValue;
+  tagIds: number[];
+  tagList: ResourceTag[];
+  tag_list?: ResourceTag[];
   options: QuestionOption[];
   media_assets: QuestionMedia[];
 };
@@ -321,6 +326,8 @@ function createBlankQuestion(
     requires_manual_grading: type === "writing",
     is_public: true,
     status: "draft",
+    tagIds: [],
+    tagList: [],
     options: createDefaultOptions(type),
     media_assets: []
   };
@@ -343,6 +350,8 @@ function normalizeQuestion(raw: AdminQuestion): AdminQuestion {
     answer_key: raw.answer_key ?? {},
     is_public: raw.is_public ?? true,
     status: raw.status ?? "saved",
+    tagIds: Array.isArray(raw.tagIds) ? raw.tagIds : (raw.tag_list ?? []).map((tag) => tag.id),
+    tagList: Array.isArray(raw.tagList) ? raw.tagList : raw.tag_list ?? [],
     options: raw.options ?? [],
     media_assets: (raw.media_assets ?? []).filter((media) => media.media_type !== "handout")
   };
@@ -1261,6 +1270,12 @@ export function QuestionBankManager() {
                 className="h-5 w-5 accent-mint"
               />
             </label>
+            <ResourceTagPicker
+              value={selectedQuestion.tagIds}
+              onChange={(tagIds) => updateSelected({ tagIds })}
+              disabled={!canEditQuestions}
+              className="md:col-span-2"
+            />
           </div>
 
           <div className="mt-4 grid gap-2 text-sm font-semibold text-slate-700">
@@ -1942,6 +1957,7 @@ function buildQuestionPayload(question: AdminQuestion) {
     requires_manual_grading: question.requires_manual_grading,
     is_public: question.is_public,
     status: question.status,
+    tag_ids: question.tagIds,
     options,
     media_assets: question.media_assets
       .filter((media) => media.media_type !== "handout" && media.url.trim().length > 0)

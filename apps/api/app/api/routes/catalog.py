@@ -38,7 +38,10 @@ from app.models import (
     ProgressRecord,
     Question,
     QuestionStatus,
+    ResourceTag,
+    ResourceType,
     Submission,
+    Tag,
 )
 from app.schemas import (
     BlogPostOut,
@@ -67,6 +70,7 @@ from app.schemas import (
     StudentLeaderboardDetailOut,
     StudentLeaderboardOut,
     StudentQuestionOut,
+    TagOut,
     TeacherOut,
 )
 from app.services.points import aware_now, build_leaderboard_entry, calculate_student_point_detail, leaderboard_rows
@@ -125,6 +129,115 @@ def attach_course_learning_paths(db: Session, courses: list[Course]) -> list[Cou
     for course in courses:
         setattr(course, "learning_paths", paths_by_course.get(course.id, []))
     return courses
+
+
+def tag_to_out(tag: Tag) -> TagOut:
+    return TagOut.model_validate(tag)
+
+
+def parse_tag_ids(tag_ids: str | None) -> list[int]:
+    parsed: list[int] = []
+    seen: set[int] = set()
+    for raw_item in (tag_ids or "").replace("，", ",").split(","):
+        raw_item = raw_item.strip()
+        if not raw_item:
+            continue
+        try:
+            tag_id = int(raw_item)
+        except ValueError:
+            continue
+        if tag_id > 0 and tag_id not in seen:
+            seen.add(tag_id)
+            parsed.append(tag_id)
+    return parsed
+
+
+def apply_resource_tag_filter(stmt, resource_type: ResourceType, id_column, tag_ids: str | None):
+    selected_tag_ids = parse_tag_ids(tag_ids)
+    if not selected_tag_ids:
+        return stmt
+    tagged_resource_ids = (
+        select(ResourceTag.resource_id)
+        .where(
+            ResourceTag.resource_type == resource_type,
+            ResourceTag.tag_id.in_(selected_tag_ids),
+        )
+        .group_by(ResourceTag.resource_id)
+        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
+        .subquery()
+    )
+    return stmt.where(id_column.in_(select(tagged_resource_ids.c.resource_id)))
+
+
+def apply_learning_path_tag_filter(stmt, tag_ids: str | None):
+    selected_tag_ids = parse_tag_ids(tag_ids)
+    if not selected_tag_ids:
+        return stmt
+    tagged_path_ids = (
+        select(LearningPathCourse.learning_path_id)
+        .join(ResourceTag, ResourceTag.resource_id == LearningPathCourse.course_id)
+        .where(
+            ResourceTag.resource_type == ResourceType.course,
+            ResourceTag.tag_id.in_(selected_tag_ids),
+        )
+        .group_by(LearningPathCourse.learning_path_id)
+        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
+        .subquery()
+    )
+    return stmt.where(LearningPath.id.in_(select(tagged_path_ids.c.learning_path_id)))
+
+
+def resource_tag_map(db: Session, resource_type: ResourceType, resource_ids: list[int]) -> dict[int, list[TagOut]]:
+    if not resource_ids:
+        return {}
+    rows = db.execute(
+        select(ResourceTag.resource_id, Tag)
+        .join(Tag, Tag.id == ResourceTag.tag_id)
+        .where(
+            ResourceTag.resource_type == resource_type,
+            ResourceTag.resource_id.in_(resource_ids),
+            Tag.is_active.is_(True),
+        )
+        .order_by(Tag.is_preset.desc(), Tag.name)
+    ).all()
+    tags_by_resource: dict[int, list[TagOut]] = {resource_id: [] for resource_id in resource_ids}
+    for resource_id, tag in rows:
+        tags_by_resource.setdefault(resource_id, []).append(tag_to_out(tag))
+    return tags_by_resource
+
+
+def attach_tag_lists(db: Session, resource_type: ResourceType, resources: list):
+    tag_map = resource_tag_map(db, resource_type, [resource.id for resource in resources])
+    for resource in resources:
+        setattr(resource, "tag_list", tag_map.get(resource.id, []))
+    return resources
+
+
+def attach_learning_path_tag_lists(db: Session, paths: list[LearningPath]) -> list[LearningPath]:
+    path_ids = [path.id for path in paths]
+    if not path_ids:
+        return paths
+    rows = db.execute(
+        select(LearningPathCourse.learning_path_id, Tag)
+        .join(ResourceTag, ResourceTag.resource_id == LearningPathCourse.course_id)
+        .join(Tag, Tag.id == ResourceTag.tag_id)
+        .where(
+            LearningPathCourse.learning_path_id.in_(path_ids),
+            ResourceTag.resource_type == ResourceType.course,
+            Tag.is_active.is_(True),
+        )
+        .order_by(Tag.is_preset.desc(), Tag.name)
+    ).all()
+    tags_by_path: dict[int, list[TagOut]] = {path_id: [] for path_id in path_ids}
+    seen_by_path: dict[int, set[int]] = {path_id: set() for path_id in path_ids}
+    for path_id, tag in rows:
+        if tag.id in seen_by_path.setdefault(path_id, set()):
+            continue
+        seen_by_path[path_id].add(tag.id)
+        tags_by_path.setdefault(path_id, []).append(tag_to_out(tag))
+    for path in paths:
+        setattr(path, "tag_list", tags_by_path.get(path.id, []))
+    return paths
 
 
 PUBLIC_TEACHER_PROFILE_FIELDS = (
@@ -253,6 +366,7 @@ def public_activity_to_out(activity: InstitutionActivity) -> PublicActivityOut:
         registration_status=activity.registration_status,
         capacity=activity.capacity,
         registrations_count=len(activity.registrations),
+        tag_list=getattr(activity, "tag_list", []),
     )
 
 
@@ -285,6 +399,7 @@ def public_learning_path_to_out(path: LearningPath) -> LearningPathOut:
         ],
         created_at=path.created_at,
         updated_at=path.updated_at,
+        tag_list=getattr(path, "tag_list", []),
     )
 
 
@@ -337,6 +452,7 @@ def public_exam_paper_to_out(paper: ExamPaper, include_questions: bool = False) 
         category=CourseCategoryOut.model_validate(paper.category) if paper.category else None,
         questions_count=len(links),
         registrations_count=len(paper.registrations),
+        tag_list=getattr(paper, "tag_list", []),
         questions=[
             PublicExamPaperQuestionOut(
                 id=link.id,
@@ -385,6 +501,7 @@ def public_competition_to_out(competition: Competition, include_questions: bool 
         category=CourseCategoryOut.model_validate(competition.category) if competition.category else None,
         questions_count=len(links),
         registrations_count=len(competition.registrations),
+        tag_list=getattr(competition, "tag_list", []),
         questions=[
             PublicCompetitionQuestionOut(
                 id=link.id,
@@ -631,6 +748,11 @@ def get_institution_profile(slug: str, db: Session = Depends(get_db)) -> PublicI
             .order_by(Competition.updated_at.desc())
         ).unique()
     )
+    attach_tag_lists(db, ResourceType.course, courses)
+    attach_tag_lists(db, ResourceType.activity, activities)
+    attach_learning_path_tag_lists(db, learning_paths)
+    attach_tag_lists(db, ResourceType.exam_paper, mock_exams)
+    attach_tag_lists(db, ResourceType.competition, competitions)
     question_count = db.scalar(
         select(func.count(Question.id)).where(
             Question.institution_id == institution.id,
@@ -652,14 +774,25 @@ def get_institution_profile(slug: str, db: Session = Depends(get_db)) -> PublicI
 
 
 @router.get("/activities", response_model=PublicActivityHomeOut)
-def list_public_activities(db: Session = Depends(get_db)) -> PublicActivityHomeOut:
+def list_public_activities(
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> PublicActivityHomeOut:
+    stmt = (
+        select(InstitutionActivity)
+        .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
+        .order_by(InstitutionActivity.starts_at.desc(), InstitutionActivity.updated_at.desc())
+    )
+    if institution_category:
+        stmt = stmt.where(InstitutionActivity.institution.has(Institution.category == institution_category))
+    stmt = apply_resource_tag_filter(stmt, ResourceType.activity, InstitutionActivity.id, tag_ids)
     activities = list(
         db.scalars(
-            select(InstitutionActivity)
-            .options(joinedload(InstitutionActivity.institution), selectinload(InstitutionActivity.registrations))
-            .order_by(InstitutionActivity.starts_at.desc(), InstitutionActivity.updated_at.desc())
+            stmt
         )
     )
+    attach_tag_lists(db, ResourceType.activity, activities)
     latest = activities[:6]
     popular = sorted(activities, key=lambda activity: (-len(activity.registrations), activity.starts_at))[:6]
     return PublicActivityHomeOut(
@@ -735,10 +868,26 @@ def list_course_categories(db: Session = Depends(get_db)) -> list[CourseCategory
     )
 
 
+@router.get("/tags", response_model=list[TagOut])
+def list_public_tags(
+    institution_category: str | None = Query(default=None),
+    category: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[TagOut]:
+    selected_category = (institution_category or category or "").strip()
+    stmt = select(Tag).where(Tag.is_active.is_(True))
+    if selected_category:
+        stmt = stmt.where(Tag.institution_category == selected_category)
+    tags = list(db.scalars(stmt.order_by(Tag.institution_category, Tag.is_preset.desc(), Tag.name)))
+    return [tag_to_out(tag) for tag in tags]
+
+
 @router.get("/learning-paths", response_model=list[LearningPathOut])
 def list_learning_paths(
     query: str | None = Query(default=None),
     institution: str | None = Query(default=None),
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[LearningPathOut]:
     stmt = (
@@ -756,7 +905,12 @@ def list_learning_paths(
         )
     if institution:
         stmt = stmt.join(LearningPath.institution).where(Institution.slug == institution)
-    return [public_learning_path_to_out(path) for path in db.scalars(stmt).unique()]
+    if institution_category:
+        stmt = stmt.where(LearningPath.institution.has(Institution.category == institution_category))
+    stmt = apply_learning_path_tag_filter(stmt, tag_ids)
+    paths = list(db.scalars(stmt).unique())
+    attach_learning_path_tag_lists(db, paths)
+    return [public_learning_path_to_out(path) for path in paths]
 
 
 @router.get("/learning-paths/{slug}", response_model=LearningPathOut)
@@ -769,6 +923,7 @@ def get_learning_path(slug: str, db: Session = Depends(get_db)) -> LearningPathO
     )
     if not path:
         raise HTTPException(status_code=404, detail="Learning path not found")
+    attach_learning_path_tag_lists(db, [path])
     return public_learning_path_to_out(path)
 
 
@@ -783,6 +938,8 @@ def list_public_exam_papers(
     kind: ExamPaperKind,
     query: str | None,
     category_id: int | None,
+    institution_category: str | None,
+    tag_ids: str | None,
     db: Session,
 ) -> list[PublicExamPaperOut]:
     stmt = (
@@ -792,6 +949,8 @@ def list_public_exam_papers(
     )
     if category_id:
         stmt = stmt.where(ExamPaper.category_id == category_id)
+    if institution_category:
+        stmt = stmt.where(ExamPaper.institution.has(Institution.category == institution_category))
     if query and query.strip():
         like_query = f"%{query.strip()}%"
         stmt = stmt.where(
@@ -799,7 +958,10 @@ def list_public_exam_papers(
             | ExamPaper.description.ilike(like_query)
             | ExamPaper.audience.ilike(like_query)
         )
-    return [public_exam_paper_to_out(paper) for paper in db.scalars(stmt).unique()]
+    stmt = apply_resource_tag_filter(stmt, ResourceType.exam_paper, ExamPaper.id, tag_ids)
+    papers = list(db.scalars(stmt).unique())
+    attach_tag_lists(db, ResourceType.exam_paper, papers)
+    return [public_exam_paper_to_out(paper) for paper in papers]
 
 
 def submit_public_exam_paper(
@@ -846,6 +1008,8 @@ def submit_public_exam_paper(
 def list_public_competitions(
     query: str | None,
     category_id: int | None,
+    institution_category: str | None,
+    tag_ids: str | None,
     db: Session,
 ) -> list[PublicCompetitionOut]:
     stmt = (
@@ -855,6 +1019,8 @@ def list_public_competitions(
     )
     if category_id:
         stmt = stmt.where(Competition.category_id == category_id)
+    if institution_category:
+        stmt = stmt.where(Competition.institution.has(Institution.category == institution_category))
     if query and query.strip():
         like_query = f"%{query.strip()}%"
         stmt = stmt.where(
@@ -863,7 +1029,10 @@ def list_public_competitions(
             | Competition.audience.ilike(like_query)
             | Competition.difficulty.ilike(like_query)
         )
-    return [public_competition_to_out(competition) for competition in db.scalars(stmt).unique()]
+    stmt = apply_resource_tag_filter(stmt, ResourceType.competition, Competition.id, tag_ids)
+    competitions = list(db.scalars(stmt).unique())
+    attach_tag_lists(db, ResourceType.competition, competitions)
+    return [public_competition_to_out(competition) for competition in competitions]
 
 
 def get_public_competition_or_404(slug: str, db: Session) -> Competition:
@@ -920,14 +1089,17 @@ def submit_public_competition(
 def list_mock_exams(
     query: str | None = Query(default=None),
     category_id: int | None = Query(default=None),
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[PublicExamPaperOut]:
-    return list_public_exam_papers(ExamPaperKind.mock_exam, query, category_id, db)
+    return list_public_exam_papers(ExamPaperKind.mock_exam, query, category_id, institution_category, tag_ids, db)
 
 
 @router.get("/mock-exams/{slug}", response_model=PublicExamPaperOut)
 def get_mock_exam(slug: str, db: Session = Depends(get_db)) -> PublicExamPaperOut:
     paper = get_public_exam_paper_or_404(slug, ExamPaperKind.mock_exam, db)
+    attach_tag_lists(db, ResourceType.exam_paper, [paper])
     return public_exam_paper_to_out(paper, include_questions=True)
 
 
@@ -945,14 +1117,17 @@ def submit_mock_exam(
 def list_competitions(
     query: str | None = Query(default=None),
     category_id: int | None = Query(default=None),
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[PublicCompetitionOut]:
-    return list_public_competitions(query, category_id, db)
+    return list_public_competitions(query, category_id, institution_category, tag_ids, db)
 
 
 @router.get("/competitions/{slug}", response_model=PublicCompetitionOut)
 def get_competition(slug: str, db: Session = Depends(get_db)) -> PublicCompetitionOut:
     competition = get_public_competition_or_404(slug, db)
+    attach_tag_lists(db, ResourceType.competition, [competition])
     return public_competition_to_out(competition, include_questions=True)
 
 
@@ -1005,8 +1180,10 @@ def submit_competition(
 def list_courses(
     category: str | None = Query(default=None),
     institution: str | None = Query(default=None),
+    institution_category: str | None = Query(default=None),
     level: str | None = Query(default=None),
     hot: bool | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[Course]:
     stmt = (
@@ -1023,9 +1200,13 @@ def list_courses(
         stmt = stmt.where(Course.is_hot == hot)
     if institution:
         stmt = stmt.join(Course.institution).where(Institution.slug == institution)
+    if institution_category:
+        stmt = stmt.where(Course.institution.has(Institution.category == institution_category))
+    stmt = apply_resource_tag_filter(stmt, ResourceType.course, Course.id, tag_ids)
     courses = list(db.scalars(stmt))
     courses = attach_course_ratings(db, courses)
-    return attach_course_learning_paths(db, courses)
+    courses = attach_course_learning_paths(db, courses)
+    return attach_tag_lists(db, ResourceType.course, courses)
 
 
 @router.get("/courses/{slug}", response_model=CourseDetailOut)
@@ -1043,6 +1224,7 @@ def get_course(slug: str, db: Session = Depends(get_db)) -> Course:
         raise HTTPException(status_code=404, detail="Course not found")
     attach_course_ratings(db, [course])
     attach_course_learning_paths(db, [course])
+    attach_tag_lists(db, ResourceType.course, [course])
     return course
 
 
@@ -1142,14 +1324,21 @@ def get_student_leaderboard_detail(student_id: int, db: Session = Depends(get_db
 
 
 @router.get("/blog", response_model=list[BlogPostOut])
-def list_blog_posts(db: Session = Depends(get_db)) -> list[BlogPost]:
-    return list(
-        db.scalars(
-            select(BlogPost)
-            .where(BlogPost.is_published.is_(True))
-            .order_by(BlogPost.created_at.desc())
-        )
+def list_blog_posts(
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
+    db: Session = Depends(get_db),
+) -> list[BlogPost]:
+    stmt = (
+        select(BlogPost)
+        .where(BlogPost.is_published.is_(True))
+        .order_by(BlogPost.created_at.desc())
     )
+    if institution_category:
+        stmt = stmt.where(BlogPost.institution.has(Institution.category == institution_category))
+    stmt = apply_resource_tag_filter(stmt, ResourceType.blog_post, BlogPost.id, tag_ids)
+    posts = list(db.scalars(stmt))
+    return attach_tag_lists(db, ResourceType.blog_post, posts)
 
 
 @router.get("/blog/{slug}", response_model=BlogPostOut)
@@ -1157,4 +1346,5 @@ def get_blog_post(slug: str, db: Session = Depends(get_db)) -> BlogPost:
     post = db.scalar(select(BlogPost).where(BlogPost.slug == slug, BlogPost.is_published.is_(True)))
     if not post:
         raise HTTPException(status_code=404, detail="Blog post not found")
+    attach_tag_lists(db, ResourceType.blog_post, [post])
     return post

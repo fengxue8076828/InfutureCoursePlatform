@@ -108,6 +108,15 @@ class SubmissionStatus(str, enum.Enum):
     manually_graded = "manually_graded"
 
 
+class ResourceType(str, enum.Enum):
+    course = "course"
+    question = "question"
+    activity = "activity"
+    exam_paper = "exam_paper"
+    competition = "competition"
+    blog_post = "blog_post"
+
+
 class TimestampMixin:
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -226,6 +235,41 @@ class Teacher(Base, TimestampMixin):
 
     institution: Mapped[Institution] = relationship(back_populates="teachers")
     courses: Mapped[list["Course"]] = relationship(back_populates="teacher")
+
+
+class Tag(Base, TimestampMixin):
+    __tablename__ = "tags"
+    __table_args__ = (
+        UniqueConstraint("institution_category", "institution_id", "name", name="uq_tag_scope_name"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(80), index=True)
+    institution_category: Mapped[str] = mapped_column(String(40), index=True)
+    institution_id: Mapped[int | None] = mapped_column(
+        ForeignKey("institutions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    is_preset: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false", index=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true", index=True)
+
+    institution: Mapped["Institution | None"] = relationship()
+    resource_links: Mapped[list["ResourceTag"]] = relationship(
+        back_populates="tag", cascade="all, delete-orphan"
+    )
+
+
+class ResourceTag(Base, TimestampMixin):
+    __tablename__ = "resource_tags"
+    __table_args__ = (
+        UniqueConstraint("resource_type", "resource_id", "tag_id", name="uq_resource_tag"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    resource_type: Mapped[ResourceType] = mapped_column(Enum(ResourceType), index=True)
+    resource_id: Mapped[int] = mapped_column(Integer, index=True)
+    tag_id: Mapped[int] = mapped_column(ForeignKey("tags.id", ondelete="CASCADE"), index=True)
+
+    tag: Mapped[Tag] = relationship(back_populates="resource_links")
 
 
 class CourseCategory(Base, TimestampMixin):

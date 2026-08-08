@@ -1,10 +1,10 @@
-from datetime import datetime, timedelta
+﻿from datetime import datetime, timedelta
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 import zipfile
 import xml.etree.ElementTree as ET
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session, joinedload, selectinload
 
@@ -24,12 +24,16 @@ from app.models import (
     CourseReview,
     CourseStatus,
     Enrollment,
+    Institution,
     LessonItemType,
     LessonItem,
     ProgressRecord,
     Question,
     QuestionStatus,
     QuestionType,
+    ResourceTag,
+    ResourceType,
+    Tag,
     Submission,
     Subscription,
     SubscriptionCancellationRequest,
@@ -84,12 +88,72 @@ from app.schemas import (
     StudentPublicProfileOut,
     StudentQuestionOut,
     StudentSocialHomeOut,
+    TagOut,
 )
 from app.services.code_runner import code_tests_for_question, run_python_code
 from app.services.points import calculate_student_point_detail, load_student_with_point_data
 from app.services.subscriptions import stop_course_subscription_renewal_after_completion
 
 router = APIRouter()
+
+
+def tag_to_out(tag: Tag) -> TagOut:
+    return TagOut.model_validate(tag)
+
+
+def parse_tag_ids(tag_ids: str | None) -> list[int]:
+    parsed: list[int] = []
+    seen: set[int] = set()
+    for raw_item in (tag_ids or "").replace("，", ",").split(","):
+        raw_item = raw_item.strip()
+        if not raw_item:
+            continue
+        try:
+            tag_id = int(raw_item)
+        except ValueError:
+            continue
+        if tag_id > 0 and tag_id not in seen:
+            seen.add(tag_id)
+            parsed.append(tag_id)
+    return parsed
+
+
+def apply_question_tag_filter(stmt, tag_ids: str | None):
+    selected_tag_ids = parse_tag_ids(tag_ids)
+    if not selected_tag_ids:
+        return stmt
+    tagged_question_ids = (
+        select(ResourceTag.resource_id)
+        .where(
+            ResourceTag.resource_type == ResourceType.question,
+            ResourceTag.tag_id.in_(selected_tag_ids),
+        )
+        .group_by(ResourceTag.resource_id)
+        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
+        .subquery()
+    )
+    return stmt.where(Question.id.in_(select(tagged_question_ids.c.resource_id)))
+
+
+def attach_question_tag_lists(db: Session, questions: list[Question]) -> list[Question]:
+    question_ids = [question.id for question in questions]
+    if not question_ids:
+        return questions
+    rows = db.execute(
+        select(ResourceTag.resource_id, Tag)
+        .join(Tag, Tag.id == ResourceTag.tag_id)
+        .where(
+            ResourceTag.resource_type == ResourceType.question,
+            ResourceTag.resource_id.in_(question_ids),
+            Tag.is_active.is_(True),
+        )
+    ).all()
+    tags_by_question: dict[int, list[TagOut]] = {question_id: [] for question_id in question_ids}
+    for question_id, tag in rows:
+        tags_by_question.setdefault(question_id, []).append(tag_to_out(tag))
+    for question in questions:
+        setattr(question, "tag_list", tags_by_question.get(question.id, []))
+    return questions
 
 
 def stripe_value(obj: object, key: str, default: object = None) -> object:
@@ -292,7 +356,7 @@ def dashboard(
         active_courses=[EnrollmentOut.model_validate(item) for item in active],
         completed_courses=[EnrollmentOut.model_validate(item) for item in completed],
         weekly_minutes=135,
-        next_lesson_title=next_item.title if next_item else "寮€濮嬬涓€鑺傝",
+        next_lesson_title=next_item.title if next_item else "瀵偓婵顑囨稉鈧懞鍌濐嚦",
     )
 
 
@@ -1886,6 +1950,8 @@ def list_questions(
     course_id: int | None = None,
     ids: str | None = None,
     type: str | None = None,
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[Question]:
     stmt = (
@@ -1910,13 +1976,19 @@ def list_questions(
         stmt = stmt.where(Question.id.in_(question_ids))
     if type:
         stmt = stmt.where(Question.type == type)
-    return list(db.scalars(stmt))
+    if institution_category:
+        stmt = stmt.where(Question.institution.has(Institution.category == institution_category))
+    stmt = apply_question_tag_filter(stmt, tag_ids)
+    questions = list(db.scalars(stmt))
+    return attach_question_tag_lists(db, questions)
 
 
 @router.get("/public-questions", response_model=list[StudentQuestionOut])
 def list_public_questions(
     ids: str | None = None,
     type: str | None = None,
+    institution_category: str | None = Query(default=None),
+    tag_ids: str | None = Query(default=None),
     db: Session = Depends(get_db),
 ) -> list[Question]:
     stmt = (
@@ -1940,7 +2012,11 @@ def list_public_questions(
         stmt = stmt.where(Question.id.in_(question_ids))
     if type:
         stmt = stmt.where(Question.type == type)
-    return list(db.scalars(stmt))
+    if institution_category:
+        stmt = stmt.where(Question.institution.has(Institution.category == institution_category))
+    stmt = apply_question_tag_filter(stmt, tag_ids)
+    questions = list(db.scalars(stmt))
+    return attach_question_tag_lists(db, questions)
 
 
 @router.post("/questions/{question_id}/run-code", response_model=CodeRunOut)
@@ -2314,7 +2390,7 @@ def submit_answer(
     if not question.requires_manual_grading:
         score = auto_grade_score(question, payload.answer)
         status = SubmissionStatus.auto_graded
-        feedback = "鑷姩鍒ゅ嵎瀹屾垚"
+        feedback = "自动判分完成。"
 
     submission = Submission(
         user_id=current_user.id,
@@ -2409,7 +2485,7 @@ def submit_quiz_paper(
         if not question.requires_manual_grading:
             score = auto_grade_score(question, answers_by_question_id[question.id])
             status = SubmissionStatus.auto_graded
-            feedback = "鑷姩鍒ゅ嵎瀹屾垚"
+            feedback = "自动判分完成。"
 
         submission = Submission(
             user_id=current_user.id,

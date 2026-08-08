@@ -19,7 +19,7 @@ import Link from "next/link";
 import { AddToQuestionBankButton } from "@/components/AddToQuestionBankButton";
 import { RecommendedQuestionOrder } from "@/components/RecommendedQuestionOrder";
 import { MathText } from "@/components/MathText";
-import { getInstitutions, getPublishedQuestions } from "@/lib/api";
+import { getInstitutions, getPublishedQuestions, getTags } from "@/lib/api";
 import type { Question, QuestionType } from "@/lib/types";
 
 const questionTypeLabels: Record<QuestionType, string> = {
@@ -71,10 +71,18 @@ type FilterState = {
   category: string;
   type: string;
   level: string;
+  tagIds: number[];
 };
 
 function normalize(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] ?? "" : value ?? "";
+}
+
+function parseTagIds(value: string) {
+  return value
+    .split(",")
+    .map((item) => Number(item.trim()))
+    .filter((id) => Number.isFinite(id) && id > 0);
 }
 
 function questionTitle(question: Question) {
@@ -115,12 +123,20 @@ function buildHref(current: FilterState, overrides: Partial<FilterState>) {
   const next = { ...current, ...overrides };
   const params = new URLSearchParams();
   Object.entries(next).forEach(([key, value]) => {
-    if (value) {
-      params.set(key, value);
+    if (key === "tagIds" && Array.isArray(value) && value.length) {
+      params.set("tag_ids", value.join(","));
+      return;
+    }
+    if (typeof value === "string" && value) {
+      params.set(key === "category" ? "institution_category" : key, value);
     }
   });
   const query = params.toString();
   return query ? `/question-bank?${query}` : "/question-bank";
+}
+
+function toggleTagId(tagIds: number[], tagId: number) {
+  return tagIds.includes(tagId) ? tagIds.filter((id) => id !== tagId) : [...tagIds, tagId];
 }
 
 function difficultyClass(level: string) {
@@ -160,6 +176,11 @@ function QuestionRow({
           <div className="flex flex-wrap items-center gap-2">
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-bold text-slate-600">{typeLabel}</span>
             <span className="rounded-full bg-mint/10 px-2 py-0.5 text-xs font-bold text-mint">{question.skill_area || "\u7efc\u5408\u80fd\u529b"}</span>
+            {question.tag_list?.slice(0, 3).map((tag) => (
+              <span key={tag.id} className="rounded-full bg-white px-2 py-0.5 text-xs font-bold text-slate-500 ring-1 ring-slate-200">
+                #{tag.name}
+              </span>
+            ))}
           </div>
           <h3 className="mt-2 truncate text-base font-black text-ink md:text-lg">{title}</h3>
         </div>
@@ -255,12 +276,17 @@ export default async function QuestionBankPage({
   const params = (await searchParams) ?? {};
   const filterState: FilterState = {
     q: normalize(params.q).trim(),
-    category: normalize(params.category),
+    category: normalize(params.institution_category) || normalize(params.category),
     type: normalize(params.type),
-    level: normalize(params.level)
+    level: normalize(params.level),
+    tagIds: parseTagIds(normalize(params.tag_ids))
   };
 
-  const [questions, institutions] = await Promise.all([getPublishedQuestions(), getInstitutions()]);
+  const [questions, institutions, tags] = await Promise.all([
+    getPublishedQuestions({ institutionCategory: filterState.category, tagIds: filterState.tagIds }),
+    getInstitutions(),
+    filterState.category ? getTags(filterState.category) : Promise.resolve([])
+  ]);
   const institutionsById = new Map(institutions.map((institution) => [institution.id, institution]));
 
   const allCategories = Array.from(
@@ -305,13 +331,13 @@ export default async function QuestionBankPage({
         </section>
 
         <nav className="mt-8 flex gap-6 overflow-x-auto border-b border-slate-100 pb-4">
-          <Link href={buildHref(filterState, { category: "" })} className={`whitespace-nowrap text-base font-semibold ${!filterState.category ? "text-ink" : "text-slate-500 hover:text-ink"}`}>
+          <Link href={buildHref(filterState, { category: "", tagIds: [] })} className={`whitespace-nowrap text-base font-semibold ${!filterState.category ? "text-ink" : "text-slate-500 hover:text-ink"}`}>
             {"\u5168\u90e8"} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{questions.length}</span>
           </Link>
           {categoryTabs.map((tab) => (
             <Link
               key={tab.category}
-              href={buildHref(filterState, { category: tab.category })}
+              href={buildHref(filterState, { category: tab.category, tagIds: [] })}
               className={`whitespace-nowrap text-base font-semibold ${filterState.category === tab.category ? "text-ink" : "text-slate-500 hover:text-ink"}`}
             >
               {tab.label} <span className="ml-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs text-slate-500">{tab.count}</span>
@@ -330,11 +356,56 @@ export default async function QuestionBankPage({
           ))}
         </div>
 
+        {filterState.category ? (
+          <section className="mt-5 rounded-lg border border-slate-100 bg-slate-50/70 p-4">
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <p className="text-sm font-black text-ink">{"\u6807\u7b7e\u7b5b\u9009"}</p>
+                <p className="mt-1 text-xs font-semibold text-slate-500">
+                  {"\u53ef\u4ee5\u9009\u62e9\u591a\u4e2a\u6807\u7b7e\u7ec4\u5408\u67e5\u8be2\uff0c\u6807\u7b7e\u6765\u81ea\u5f53\u524d\u673a\u6784\u7c7b\u578b\u3002"}
+                </p>
+              </div>
+              <Link
+                href={buildHref(filterState, { tagIds: [] })}
+                className={`inline-flex shrink-0 items-center justify-center rounded-full px-4 py-2 text-xs font-black ${
+                  filterState.tagIds.length ? "bg-white text-slate-500 ring-1 ring-slate-200 hover:text-coral" : "bg-ink text-white"
+                }`}
+              >
+                {"\u5168\u90e8\u6807\u7b7e"}
+              </Link>
+            </div>
+            {tags.length ? (
+              <div className="mt-4 flex flex-wrap gap-2">
+                {tags.map((tag) => {
+                  const selected = filterState.tagIds.includes(tag.id);
+                  return (
+                    <Link
+                      key={tag.id}
+                      href={buildHref(filterState, { tagIds: toggleTagId(filterState.tagIds, tag.id) })}
+                      className={`inline-flex items-center gap-1 rounded-full px-3 py-2 text-xs font-black ${
+                        selected ? "bg-mint text-white" : "bg-white text-slate-600 ring-1 ring-slate-200 hover:text-mint"
+                      }`}
+                    >
+                      <Tag size={13} />
+                      {tag.name}
+                    </Link>
+                  );
+                })}
+              </div>
+            ) : (
+              <p className="mt-4 rounded-lg border border-dashed border-slate-200 bg-white px-4 py-3 text-sm font-semibold text-slate-500">
+                {"\u5f53\u524d\u673a\u6784\u7c7b\u578b\u6682\u65f6\u6ca1\u6709\u53ef\u7528\u6807\u7b7e\u3002"}
+              </p>
+            )}
+          </section>
+        ) : null}
+
         <section className="mt-6 border-t border-slate-100 pt-6">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
             <form action="/question-bank" className="flex flex-wrap items-center gap-3">
               <input type="hidden" name="category" value={filterState.category} />
               <input type="hidden" name="type" value={filterState.type} />
+              <input type="hidden" name="tag_ids" value={filterState.tagIds.join(",")} />
               <label className="flex min-w-72 items-center gap-2 rounded-full bg-slate-100 px-4 py-3">
                 <Search size={18} className="text-slate-400" />
                 <input
@@ -354,7 +425,7 @@ export default async function QuestionBankPage({
                 </select>
               </label>
               <button className="rounded-full bg-ink px-5 py-3 text-sm font-bold text-white hover:bg-slate-800">{"\u641c\u7d22"}</button>
-              {filterState.q || filterState.category || filterState.type || filterState.level ? (
+              {filterState.q || filterState.category || filterState.type || filterState.level || filterState.tagIds.length ? (
                 <Link href="/question-bank" className="text-sm font-bold text-slate-500 hover:text-coral">{"\u6e05\u9664\u7b5b\u9009"}</Link>
               ) : null}
             </form>

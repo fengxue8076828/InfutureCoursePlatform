@@ -76,6 +76,15 @@ export type CourseLearningPathRef = {
   position: number;
 };
 
+export type ResourceTag = {
+  id: number;
+  name: string;
+  slug?: string;
+  institution_category: string;
+  institution_id?: number | null;
+  is_preset: boolean;
+};
+
 export type Course = {
   id: number;
   slug: string;
@@ -90,6 +99,7 @@ export type Course = {
   intro_video_url?: string;
   syllabus?: { items: string[] };
   tags?: { items: string[] };
+  tag_list?: ResourceTag[];
   is_hot: boolean;
   students_count: number;
   rating_average?: number;
@@ -118,6 +128,7 @@ export type BlogPost = {
   cover_url: string;
   content: string;
   author_name: string;
+  tag_list?: ResourceTag[];
   created_at: string;
 };
 
@@ -427,6 +438,7 @@ export type Question = {
   is_public?: boolean;
   options: QuestionOption[];
   media_assets: QuestionMedia[];
+  tag_list?: ResourceTag[];
 };
 
 export type ExamPaperKind = "mock_exam" | "competition";
@@ -493,6 +505,7 @@ export type ExamPaper = {
   institution: Institution;
   category?: CourseCategory | null;
   questions_count: number;
+  tag_list?: ResourceTag[];
   registrations_count: number;
   submissions_count?: number;
   questions: ExamPaperQuestion[];

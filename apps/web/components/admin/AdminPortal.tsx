@@ -42,6 +42,7 @@ import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactN
 import { useDeleteConfirmation } from "./DeleteConfirmDialog";
 import { API_BASE_URL, apiConnectionErrorMessage } from "@/lib/api-config";
 import { uploadFormDataWithProgress, type UploadProgress } from "@/lib/upload";
+import type { ResourceTag } from "@/lib/types";
 
 import { MathText } from "@/components/MathText";
 import {
@@ -64,6 +65,7 @@ import {
 } from "@/lib/admin-session";
 
 import { QuestionBankManager } from "./QuestionBankManager";
+import { ResourceTagPicker } from "./ResourceTagPicker";
 
 type ModuleKey =
   | "dashboard"
@@ -139,6 +141,8 @@ type CourseDraft = {
   title: string;
   category: string;
   level: string;
+  tagIds: number[];
+  tagList: ResourceTag[];
   priceEurMonthly: number;
   expectedDurationDays: number;
   coverUrl: string;
@@ -164,6 +168,7 @@ type AdminCourseSummary = {
   status: string;
   statusValue: CoursePublicationStatus;
   institutionId: number | null;
+  tagList: ResourceTag[];
 };
 
 type LearningPathStatus = "draft" | "published" | "archived";
@@ -182,6 +187,7 @@ type AdminLearningPath = {
   institutionName: string;
   courseIds: number[];
   courses: AdminCourseSummary[];
+  tagList: ResourceTag[];
   createdAt: string;
   updatedAt: string;
 };
@@ -203,6 +209,7 @@ type ApiLearningPath = {
     position: number;
     course: ApiCourseCard;
   }>;
+  tag_list?: ResourceTag[];
   created_at: string;
   updated_at: string;
 };
@@ -238,6 +245,8 @@ type AdminActivity = {
   audience: string;
   registrationStatus: ActivityRegistrationStatus;
   capacity: string;
+  tagIds: number[];
+  tagList: ResourceTag[];
   registrationsCount: number;
   registrations: AdminActivityRegistration[];
   createdAt: string;
@@ -265,6 +274,7 @@ type ApiAdminActivity = {
   audience?: string | null;
   registration_status: ActivityRegistrationStatus;
   capacity?: number | null;
+  tag_list?: ResourceTag[];
   registrations_count: number;
   registrations: Array<{
     id: number;
@@ -334,6 +344,8 @@ type AdminExamPaper = {
   endsAt: string;
   categoryId: number | null;
   categoryName: string;
+  tagIds: number[];
+  tagList: ResourceTag[];
   institutionName: string;
   questions: AdminExamPaperQuestion[];
   registrations: AdminCompetitionRegistration[];
@@ -366,6 +378,7 @@ type ApiExamPaper = {
   ends_at?: string | null;
   institution: { name: string };
   category?: { id: number; name: string } | null;
+  tag_list?: ResourceTag[];
   questions?: Array<{
     id: number;
     position: number;
@@ -531,6 +544,8 @@ type AdminBlogPost = {
   authorName: string;
   institutionId: number | null;
   authorUserId: number | null;
+  tagIds: number[];
+  tagList: ResourceTag[];
   isPublished: boolean;
   createdAt: string;
   updatedAt: string;
@@ -546,6 +561,7 @@ type ApiAdminBlogPost = {
   author_name: string;
   institution_id?: number | null;
   author_user_id?: number | null;
+  tag_list?: ResourceTag[];
   is_published: boolean;
   created_at: string;
   updated_at: string;
@@ -619,6 +635,7 @@ type ApiCourseDetail = {
   description?: string;
   hero_image_url: string;
   intro_video_url?: string;
+  tag_list?: ResourceTag[];
   institution?: { id: number };
   teacher?: { id: number; name: string; title?: string };
   chapters?: Array<{
@@ -647,6 +664,7 @@ type ApiCourseCard = {
   expected_duration_days?: number;
   status?: CoursePublicationStatus;
   hero_image_url: string;
+  tag_list?: ResourceTag[];
   institution?: { id: number };
   teacher?: { id: number; name: string; title?: string };
 };
@@ -1094,6 +1112,8 @@ function createBlankActivityDraft(teachers: TeacherOption[] = [], preferredTeach
     audience: "",
     registrationStatus: "open",
     capacity: "",
+    tagIds: [],
+    tagList: [],
     registrationsCount: 0,
     registrations: [],
     createdAt: "",
@@ -1120,6 +1140,8 @@ function activityFromApi(activity: ApiAdminActivity): AdminActivity {
     audience: activity.audience ?? "",
     registrationStatus: activity.registration_status,
     capacity: activity.capacity ? String(activity.capacity) : "",
+    tagIds: (activity.tag_list ?? []).map((tag) => tag.id),
+    tagList: activity.tag_list ?? [],
     registrationsCount: activity.registrations_count,
     registrations: activity.registrations.map((registration) => ({
       id: registration.id,
@@ -1149,7 +1171,8 @@ function activityToApiPayload(activity: AdminActivity) {
     audience: optionalText(activity.audience),
     registration_status: activity.registrationStatus,
     capacity: Number.isFinite(capacity) && capacity > 0 ? capacity : null,
-    teacher_id: activity.teacherId
+    teacher_id: activity.teacherId,
+    tag_ids: activity.tagIds
   };
 }
 
@@ -1174,6 +1197,8 @@ function createBlankExamPaperDraft(kind: ExamPaperKind): AdminExamPaper {
     endsAt: kind === "competition" ? toDateTimeInputValue(new Date(now + 3 * 60 * 60 * 1000).toISOString()) : "",
     categoryId: null,
     categoryName: "",
+    tagIds: [],
+    tagList: [],
     institutionName: "",
     questions: [],
     registrations: [],
@@ -1208,6 +1233,8 @@ function examPaperFromApi(paper: ApiExamPaper): AdminExamPaper {
     endsAt: paper.ends_at ? toDateTimeInputValue(paper.ends_at) : "",
     categoryId: paper.category?.id ?? null,
     categoryName: paper.category?.name ?? "",
+    tagIds: (paper.tag_list ?? []).map((tag) => tag.id),
+    tagList: paper.tag_list ?? [],
     institutionName: paper.institution?.name ?? "",
     questions: (paper.questions ?? [])
       .map((link) => {
@@ -1256,6 +1283,7 @@ function examPaperToApiPayload(paper: AdminExamPaper) {
     duration_minutes: Math.max(1, Number(paper.durationMinutes) || 60),
     status: paper.status,
     category_id: paper.categoryId,
+    tag_ids: paper.tagIds,
     questions: paper.questions.map((link) => ({
       question_id: link.question.id,
       points_override: link.points
@@ -1865,7 +1893,8 @@ function normalizeCourseCardFromApi(course: ApiCourseCard): AdminCourseSummary {
     image: course.hero_image_url,
     status: courseStatusLabels[statusValue],
     statusValue,
-    institutionId: course.institution?.id ?? null
+    institutionId: course.institution?.id ?? null,
+    tagList: course.tag_list ?? []
   };
 }
 
@@ -1887,6 +1916,7 @@ function learningPathFromApi(path: ApiLearningPath): AdminLearningPath {
     institutionName: path.institution?.name ?? "",
     courseIds: orderedCourses.map((course) => course.id),
     courses: orderedCourses,
+    tagList: path.tag_list ?? [],
     createdAt: path.created_at,
     updatedAt: path.updated_at
   };
@@ -1907,6 +1937,7 @@ function createBlankLearningPathDraft(): AdminLearningPath {
     institutionName: "",
     courseIds: [],
     courses: [],
+    tagList: [],
     createdAt: "",
     updatedAt: ""
   };
@@ -2029,7 +2060,8 @@ const emptyCourseSummary: AdminCourseSummary = {
   image: "",
   status: courseStatusLabels.draft,
   statusValue: "draft",
-  institutionId: null
+  institutionId: null,
+  tagList: []
 };
 
 const courseQuestionStatusLabels: Record<CourseQuestionStatus, string> = {
@@ -2129,6 +2161,8 @@ function createDefaultCourseDraft(
     title: course.title,
     category: course.category,
     level: course.level,
+    tagIds: course.tagList.map((tag) => tag.id),
+    tagList: course.tagList,
     priceEurMonthly: course.priceEurMonthly,
     expectedDurationDays: course.expectedDurationDays,
     coverUrl: course.image,
@@ -2156,7 +2190,8 @@ function createNewCourseSummary(
     image: "",
     status: courseStatusLabels.draft,
     statusValue: "draft",
-    institutionId: null
+    institutionId: null,
+    tagList: []
   };
 }
 
@@ -2243,6 +2278,10 @@ function normalizeCourseDraft(
     title: draft.title || fallback.title,
     category: draft.category ?? fallback.category,
     level: draft.level ?? fallback.level,
+    tagIds: Array.isArray(draft.tagIds)
+      ? draft.tagIds.filter((id): id is number => typeof id === "number")
+      : fallback.tagIds,
+    tagList: Array.isArray(draft.tagList) ? draft.tagList : fallback.tagList,
     priceEurMonthly: normalizeCoursePrice(draft.priceEurMonthly, fallback.priceEurMonthly),
     expectedDurationDays: normalizeCourseDuration(draft.expectedDurationDays, fallback.expectedDurationDays),
     coverUrl: draft.coverUrl || fallback.coverUrl,
@@ -2555,6 +2594,8 @@ function courseDraftFromApi(
     title: course.title,
     category: course.category,
     level: course.level,
+    tagIds: (course.tag_list ?? []).map((tag) => tag.id),
+    tagList: course.tag_list ?? [],
     priceEurMonthly: normalizeCoursePrice(course.price_eur_monthly),
     expectedDurationDays: normalizeCourseDuration(course.expected_duration_days),
     coverUrl: course.hero_image_url,
@@ -2609,6 +2650,7 @@ function courseDraftToApiPayload(
     intro_video_url: draft.introVideoUrl,
     price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly),
     expected_duration_days: normalizeCourseDuration(draft.expectedDurationDays),
+    tag_ids: draft.tagIds,
     status,
     teacher_id:
       getTeacherById(draft.teacherId, teachers)?.id ??
@@ -2659,7 +2701,8 @@ function courseDraftToCreatePayload(
     institution_id: course.institutionId ?? adminInstitution.id,
     teacher_id: teacherId,
     price_eur_monthly: normalizeCoursePrice(draft.priceEurMonthly, course.priceEurMonthly),
-    expected_duration_days: normalizeCourseDuration(draft.expectedDurationDays, course.expectedDurationDays)
+    expected_duration_days: normalizeCourseDuration(draft.expectedDurationDays, course.expectedDurationDays),
+    tag_ids: draft.tagIds
   };
 }
 
@@ -6911,6 +6954,12 @@ function CourseManagement({ isActive }: { isActive: boolean }) {
                 ))}
               </select>
             </label>
+            <ResourceTagPicker
+              value={courseDraft.tagIds}
+              onChange={(tagIds) => updateCourseDraft("tagIds", tagIds)}
+              disabled={!canModifyCourseContent}
+              className="md:col-span-2 xl:col-span-6"
+            />
             <div className="grid gap-3 md:col-span-2">
               <span className="text-sm font-semibold text-slate-700">课程封面图</span>
               <div className="grid gap-4 rounded-lg border border-slate-200 bg-slate-50 p-4 md:grid-cols-[16rem_1fr]">
@@ -9200,6 +9249,12 @@ function ExamPaperManagement({ kind }: { kind: ExamPaperKind }) {
           ) : null}
         </div>
 
+        <ResourceTagPicker
+          value={draft.tagIds}
+          onChange={(tagIds) => updateDraft({ tagIds })}
+          className="mt-4"
+        />
+
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <label className="block">
             <span className="text-sm font-black text-slate-700">适合学生人群</span>
@@ -9848,6 +9903,11 @@ function ActivityManagement() {
               placeholder="不填写表示不限人数"
             />
           </label>
+          <ResourceTagPicker
+            value={draft.tagIds}
+            onChange={(tagIds) => setDraft((current) => ({ ...current, tagIds }))}
+            className="lg:col-span-2"
+          />
           <div className="grid gap-3 rounded-lg border border-slate-200 bg-slate-50 p-4 lg:col-span-2">
             <p className="text-sm font-bold text-slate-700">活动封面图</p>
             <div className="grid gap-4 md:grid-cols-[16rem_1fr]">
@@ -9994,6 +10054,8 @@ function createBlankAdminBlogPost(): AdminBlogPost {
     authorName: "",
     institutionId: null,
     authorUserId: null,
+    tagIds: [],
+    tagList: [],
     isPublished: false,
     createdAt: now,
     updatedAt: now
@@ -10011,6 +10073,8 @@ function adminBlogPostFromApi(post: ApiAdminBlogPost): AdminBlogPost {
     authorName: post.author_name || "",
     institutionId: post.institution_id ?? null,
     authorUserId: post.author_user_id ?? null,
+    tagIds: (post.tag_list ?? []).map((tag) => tag.id),
+    tagList: post.tag_list ?? [],
     isPublished: Boolean(post.is_published),
     createdAt: post.created_at,
     updatedAt: post.updated_at
@@ -10023,6 +10087,7 @@ function adminBlogPostPayload(post: AdminBlogPost) {
     excerpt: post.excerpt.trim(),
     cover_url: post.coverUrl.trim(),
     content: post.content,
+    tag_ids: post.tagIds,
     is_published: post.isPublished
   };
 }
@@ -10225,6 +10290,12 @@ function BlogManagement() {
               </select>
             </label>
           </div>
+
+          <ResourceTagPicker
+            value={draft.tagIds}
+            onChange={(tagIds) => setDraft((current) => ({ ...current, tagIds }))}
+            className="mt-4"
+          />
 
           <div className="mt-4 grid gap-4 lg:grid-cols-[18rem_1fr]">
             <div className="rounded-lg border border-slate-200 bg-slate-50 p-4">

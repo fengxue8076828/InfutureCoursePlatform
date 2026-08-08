@@ -24,6 +24,19 @@ class OrmModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TagOut(OrmModel):
+    id: int
+    name: str
+    institution_category: str
+    institution_id: int | None = None
+    is_preset: bool = False
+    is_active: bool = True
+
+
+class TagCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+
+
 class InstitutionOut(OrmModel):
     id: int
     name: str
@@ -156,6 +169,7 @@ class ActivityBase(BaseModel):
     registration_status: ActivityRegistrationStatus = ActivityRegistrationStatus.open
     capacity: int | None = Field(default=None, ge=1)
     teacher_id: int | None = None
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class ActivityCreate(ActivityBase):
@@ -187,6 +201,7 @@ class AdminActivityOut(OrmModel):
     registrations: list[ActivityRegistrationOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class PublicActivityOut(BaseModel):
@@ -206,6 +221,7 @@ class PublicActivityOut(BaseModel):
     registration_status: ActivityRegistrationStatus
     capacity: int | None = None
     registrations_count: int = 0
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class PublicActivityHomeOut(BaseModel):
@@ -305,6 +321,7 @@ class CourseCardOut(OrmModel):
     rating_average: float = 0.0
     rating_count: int = 0
     learning_paths: list[CourseLearningPathRefOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
     institution: InstitutionOut
     teacher: TeacherOut
 
@@ -355,6 +372,7 @@ class LearningPathOut(BaseModel):
     institution: InstitutionOut
     course_count: int
     courses: list[LearningPathCourseOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -388,6 +406,7 @@ class BlogPostOut(OrmModel):
     author_user_id: int | None = None
     created_at: datetime
     updated_at: datetime
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class AdminBlogPostCreate(BaseModel):
@@ -396,6 +415,7 @@ class AdminBlogPostCreate(BaseModel):
     cover_url: str = Field(default="", max_length=500)
     content: str = ""
     is_published: bool = False
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class AdminBlogPostUpdate(AdminBlogPostCreate):
@@ -984,6 +1004,7 @@ class QuestionOut(OrmModel):
     media_assets: list[QuestionMediaOut] = []
     created_at: datetime
     updated_at: datetime
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class StudentQuestionOptionOut(OrmModel):
@@ -1008,6 +1029,7 @@ class StudentQuestionOut(OrmModel):
     institution: InstitutionOut | None = None
     options: list[StudentQuestionOptionOut] = []
     media_assets: list[QuestionMediaOut] = []
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class ExamPaperQuestionInput(BaseModel):
@@ -1029,6 +1051,7 @@ class ExamPaperBase(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     category_id: int | None = None
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class ExamPaperCreate(ExamPaperBase):
@@ -1058,6 +1081,7 @@ class CompetitionBase(BaseModel):
     starts_at: datetime | None = None
     ends_at: datetime | None = None
     category_id: int | None = None
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class CompetitionCreate(CompetitionBase):
@@ -1152,6 +1176,7 @@ class ExamPaperOut(BaseModel):
     questions: list[ExamPaperQuestionOut] = Field(default_factory=list)
     registrations: list[CompetitionRegistrationOut] = Field(default_factory=list)
     submissions: list[ExamPaperSubmissionOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -1180,6 +1205,7 @@ class CompetitionOut(BaseModel):
     questions: list[CompetitionQuestionOut] = Field(default_factory=list)
     registrations: list[CompetitionRegistrationOut] = Field(default_factory=list)
     submissions: list[CompetitionSubmissionOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
     created_at: datetime
     updated_at: datetime
 
@@ -1205,6 +1231,7 @@ class PublicExamPaperOut(BaseModel):
     questions_count: int = 0
     registrations_count: int = 0
     questions: list[PublicExamPaperQuestionOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class PublicCompetitionOut(BaseModel):
@@ -1228,6 +1255,7 @@ class PublicCompetitionOut(BaseModel):
     questions_count: int = 0
     registrations_count: int = 0
     questions: list[PublicCompetitionQuestionOut] = Field(default_factory=list)
+    tag_list: list[TagOut] = Field(default_factory=list)
 
 
 class PublicInstitutionCardOut(BaseModel):
@@ -1396,6 +1424,7 @@ class CourseCreate(BaseModel):
     teacher_id: int
     price_eur_monthly: float = Field(default=39, gt=0, le=9999)
     expected_duration_days: int = Field(default=30, ge=1, le=3650)
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class LessonItemUpsert(BaseModel):
@@ -1430,6 +1459,7 @@ class CourseUpdate(BaseModel):
     expected_duration_days: int | None = Field(default=None, ge=1, le=3650)
     status: CourseStatus | None = None
     chapters: list[ChapterUpsert] | None = None
+    tag_ids: list[int] | None = None
 
 
 class TeacherCreate(BaseModel):
@@ -1459,6 +1489,7 @@ class QuestionCreate(BaseModel):
     status: QuestionStatus = QuestionStatus.saved
     options: list[QuestionOptionCreate] = Field(default_factory=list)
     media_assets: list[QuestionMediaCreate] = Field(default_factory=list)
+    tag_ids: list[int] = Field(default_factory=list)
 
 
 class QuestionUpdate(BaseModel):
@@ -1477,6 +1508,7 @@ class QuestionUpdate(BaseModel):
     status: QuestionStatus | None = None
     options: list[QuestionOptionCreate] | None = None
     media_assets: list[QuestionMediaCreate] | None = None
+    tag_ids: list[int] | None = None
 
 
 class AdminMetricChangeOut(BaseModel):

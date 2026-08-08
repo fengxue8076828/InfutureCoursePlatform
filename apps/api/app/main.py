@@ -10,7 +10,7 @@ from app.api.router import api_router
 from app.core.config import get_settings
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
-from app.services.seed import ensure_schema_extensions, seed_database
+from app.services.seed import ensure_preset_tags, ensure_schema_extensions, seed_database
 
 settings = get_settings()
 upload_dir = Path(settings.upload_dir)
@@ -23,6 +23,7 @@ async def lifespan(app: FastAPI):
     db = SessionLocal()
     try:
         ensure_schema_extensions(db)
+        ensure_preset_tags(db)
         if settings.auto_seed:
             seed_database(db)
     finally:

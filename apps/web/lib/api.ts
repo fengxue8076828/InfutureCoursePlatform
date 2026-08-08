@@ -6,6 +6,7 @@ import type {
   Enrollment,
   Institution,
   Question,
+  ResourceTag,
   StudentLeaderboard,
   StudentLeaderboardDetail,
   StudentPublicProfile,
@@ -41,12 +42,35 @@ async function fetchPublicJson<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
+export type ResourceSearchFilters = {
+  institutionCategory?: string;
+  tagIds?: number[];
+};
+
+export function buildResourceQuery(filters?: ResourceSearchFilters) {
+  const params = new URLSearchParams();
+  if (filters?.institutionCategory) {
+    params.set("institution_category", filters.institutionCategory);
+  }
+  const tagIds = filters?.tagIds?.filter((id) => Number.isFinite(id));
+  if (tagIds?.length) {
+    params.set("tag_ids", tagIds.join(","));
+  }
+  const query = params.toString();
+  return query ? `?${query}` : "";
+}
+
 export function getInstitutions(): Promise<Institution[]> {
   return fetchJson("/institutions", []);
 }
 
-export function getCourses(): Promise<Course[]> {
-  return fetchJson("/courses", []);
+export function getTags(institutionCategory?: string): Promise<ResourceTag[]> {
+  const query = institutionCategory ? `?institution_category=${encodeURIComponent(institutionCategory)}` : "";
+  return fetchJson(`/tags${query}`, []);
+}
+
+export function getCourses(filters?: ResourceSearchFilters): Promise<Course[]> {
+  return fetchJson(`/courses${buildResourceQuery(filters)}`, []);
 }
 
 export function getCourseCategories(): Promise<CourseCategory[]> {
@@ -80,8 +104,8 @@ export function getStudentPublicProfile(studentId: number): Promise<StudentPubli
   return fetchPublicJson(`/learn/students/${studentId}/profile`, undefined);
 }
 
-export function getPublishedQuestions(): Promise<Question[]> {
-  return fetchJson("/learn/public-questions", []);
+export function getPublishedQuestions(filters?: ResourceSearchFilters): Promise<Question[]> {
+  return fetchJson(`/learn/public-questions${buildResourceQuery(filters)}`, []);
 }
 
 export async function getTeacher(identifier: string): Promise<Teacher | undefined> {
@@ -105,8 +129,8 @@ export async function getTeacher(identifier: string): Promise<Teacher | undefine
   );
 }
 
-export function getBlogPosts(): Promise<BlogPost[]> {
-  return fetchJson("/blog", []);
+export function getBlogPosts(filters?: ResourceSearchFilters): Promise<BlogPost[]> {
+  return fetchJson(`/blog${buildResourceQuery(filters)}`, []);
 }
 
 export async function getBlogPost(slug: string): Promise<BlogPost | undefined> {

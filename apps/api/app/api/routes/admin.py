@@ -47,9 +47,12 @@ from app.models import (
     QuestionOption,
     QuestionStatus,
     QuestionType,
+    ResourceTag,
+    ResourceType,
     Submission,
     Subscription,
     SubscriptionCancellationRequest,
+    Tag,
     Teacher,
     AdminLoginVerificationCode,
     User,
@@ -112,6 +115,8 @@ from app.schemas import (
     StripeConnectOnboardingOut,
     StripeDashboardLinkOut,
     StripeRequirementsOut,
+    TagCreate,
+    TagOut,
     TeacherCreate,
     TeacherOut,
 )
@@ -392,6 +397,123 @@ def build_institution_finance_out(
     )
 
 
+def tag_to_out(tag: Tag) -> TagOut:
+    return TagOut.model_validate(tag)
+
+
+def current_institution_or_404(current_user: User, db: Session) -> Institution:
+    institution_id = get_current_institution_id_or_403(current_user)
+    institution = db.get(Institution, institution_id)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    return institution
+
+
+def clean_tag_ids(tag_ids: list[int] | None) -> list[int]:
+    seen: set[int] = set()
+    cleaned: list[int] = []
+    for raw_id in tag_ids or []:
+        try:
+            tag_id = int(raw_id)
+        except (TypeError, ValueError):
+            continue
+        if tag_id > 0 and tag_id not in seen:
+            seen.add(tag_id)
+            cleaned.append(tag_id)
+    return cleaned
+
+
+def validate_tags_for_institution(db: Session, institution: Institution, tag_ids: list[int] | None) -> list[Tag]:
+    ids = clean_tag_ids(tag_ids)
+    if not ids:
+        return []
+    tags = list(
+        db.scalars(
+            select(Tag).where(
+                Tag.id.in_(ids),
+                Tag.is_active.is_(True),
+                Tag.institution_category == institution.category,
+                or_(Tag.institution_id.is_(None), Tag.institution_id == institution.id),
+            )
+        )
+    )
+    if len({tag.id for tag in tags}) != len(ids):
+        raise HTTPException(status_code=422, detail="Some tags are not available for this institution")
+    order = {tag_id: index for index, tag_id in enumerate(ids)}
+    return sorted(tags, key=lambda tag: order.get(tag.id, 0))
+
+
+def sync_resource_tags(
+    db: Session,
+    resource_type: ResourceType,
+    resource_id: int,
+    tag_ids: list[int] | None,
+    institution: Institution,
+) -> None:
+    tags = validate_tags_for_institution(db, institution, tag_ids)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == resource_type,
+            ResourceTag.resource_id == resource_id,
+        )
+    )
+    for tag in tags:
+        db.add(ResourceTag(resource_type=resource_type, resource_id=resource_id, tag_id=tag.id))
+
+
+def resource_tag_map(db: Session, resource_type: ResourceType, resource_ids: list[int]) -> dict[int, list[Tag]]:
+    ids = [int(resource_id) for resource_id in resource_ids if resource_id]
+    if not ids:
+        return {}
+    rows = db.execute(
+        select(ResourceTag.resource_id, Tag)
+        .join(Tag, Tag.id == ResourceTag.tag_id)
+        .where(
+            ResourceTag.resource_type == resource_type,
+            ResourceTag.resource_id.in_(ids),
+            Tag.is_active.is_(True),
+        )
+        .order_by(Tag.name)
+    ).all()
+    tags_by_resource: dict[int, list[Tag]] = {resource_id: [] for resource_id in ids}
+    for resource_id, tag in rows:
+        tags_by_resource.setdefault(resource_id, []).append(tag)
+    return tags_by_resource
+
+
+def attach_tag_lists(db: Session, resource_type: ResourceType, resources: list) -> list:
+    if not resources:
+        return resources
+    tags_by_resource = resource_tag_map(db, resource_type, [resource.id for resource in resources])
+    for resource in resources:
+        setattr(resource, "tag_list", [tag_to_out(tag) for tag in tags_by_resource.get(resource.id, [])])
+    return resources
+
+
+def attach_learning_path_tag_lists(db: Session, paths: list[LearningPath]) -> list[LearningPath]:
+    if not paths:
+        return paths
+    path_ids = [path.id for path in paths]
+    rows = db.execute(
+        select(LearningPathCourse.learning_path_id, Tag)
+        .join(ResourceTag, ResourceTag.resource_id == LearningPathCourse.course_id)
+        .join(Tag, Tag.id == ResourceTag.tag_id)
+        .where(
+            LearningPathCourse.learning_path_id.in_(path_ids),
+            ResourceTag.resource_type == ResourceType.course,
+            Tag.is_active.is_(True),
+        )
+        .order_by(Tag.name)
+    ).all()
+    tags_by_path: dict[int, dict[int, Tag]] = {path_id: {} for path_id in path_ids}
+    for path_id, tag in rows:
+        tags_by_path.setdefault(path_id, {})[tag.id] = tag
+    for path in paths:
+        tags = sorted(tags_by_path.get(path.id, {}).values(), key=lambda tag: tag.name)
+        setattr(path, "tag_list", [tag_to_out(tag) for tag in tags])
+    return paths
+
+
 def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
     registrations = [
         ActivityRegistrationOut.model_validate(registration)
@@ -422,6 +544,7 @@ def admin_activity_to_out(activity: InstitutionActivity) -> AdminActivityOut:
         registrations=registrations,
         created_at=activity.created_at,
         updated_at=activity.updated_at,
+        tag_list=getattr(activity, "tag_list", []),
     )
 
 
@@ -938,6 +1061,7 @@ def learning_path_to_out(path: LearningPath) -> LearningPathOut:
         ],
         created_at=path.created_at,
         updated_at=path.updated_at,
+        tag_list=getattr(path, "tag_list", []),
     )
 
 
@@ -1093,6 +1217,7 @@ def exam_paper_to_out(paper: ExamPaper) -> ExamPaperOut:
         submissions=[ExamPaperSubmissionOut.model_validate(submission) for submission in submissions],
         created_at=paper.created_at,
         updated_at=paper.updated_at,
+        tag_list=getattr(paper, "tag_list", []),
     )
 
 
@@ -1155,7 +1280,7 @@ def validate_exam_questions(question_inputs: list, institution_id: int, db: Sess
 
 
 def normalize_exam_paper_payload(payload: ExamPaperCreate | ExamPaperUpdate, institution_id: int, db: Session) -> dict:
-    data = payload.model_dump(exclude={"questions"})
+    data = payload.model_dump(exclude={"questions", "tag_ids"})
     if data.get("kind") == ExamPaperKind.competition:
         raise HTTPException(status_code=422, detail="Use /admin/competitions for competitions")
     data["title"] = data["title"].strip()
@@ -1262,6 +1387,7 @@ def competition_to_out(competition: Competition) -> CompetitionOut:
         submissions=[CompetitionSubmissionOut.model_validate(submission) for submission in submissions],
         created_at=competition.created_at,
         updated_at=competition.updated_at,
+        tag_list=getattr(competition, "tag_list", []),
     )
 
 
@@ -1310,7 +1436,7 @@ def normalize_competition_prizes(prizes: list) -> list[dict[str, object]]:
 
 
 def normalize_competition_payload(payload: CompetitionCreate | CompetitionUpdate, institution_id: int, db: Session) -> dict:
-    data = payload.model_dump(exclude={"questions"})
+    data = payload.model_dump(exclude={"questions", "tag_ids"})
     data["title"] = data["title"].strip()
     data["description"] = data.get("description", "").strip()
     data["cover_url"] = data.get("cover_url", "").strip()
@@ -2291,6 +2417,7 @@ def admin_activities(
         )
         .order_by(InstitutionActivity.starts_at.desc(), InstitutionActivity.updated_at.desc())
     ).all()
+    attach_tag_lists(db, ResourceType.activity, list(activities))
     return [admin_activity_to_out(activity) for activity in activities]
 
 
@@ -2303,11 +2430,16 @@ def create_activity(
     ensure_course_staff(current_user)
     ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
-    data = normalize_activity_payload(payload.model_dump(), current_user, db, institution_id)
+    institution = current_institution_or_404(current_user, db)
+    data = normalize_activity_payload(payload.model_dump(exclude={"tag_ids"}), current_user, db, institution_id)
     activity = InstitutionActivity(institution_id=institution_id, **data)
     db.add(activity)
+    db.flush()
+    sync_resource_tags(db, ResourceType.activity, activity.id, payload.tag_ids, institution)
     db.commit()
-    return admin_activity_to_out(get_activity_or_404(activity.id, current_user, db))
+    activity = get_activity_or_404(activity.id, current_user, db)
+    attach_tag_lists(db, ResourceType.activity, [activity])
+    return admin_activity_to_out(activity)
 
 
 @router.put("/activities/{activity_id}", response_model=AdminActivityOut)
@@ -2320,11 +2452,15 @@ def update_activity(
     ensure_course_staff(current_user)
     ensure_institution_can_publish(current_user, db)
     activity = get_activity_or_404(activity_id, current_user, db)
-    data = normalize_activity_payload(payload.model_dump(), current_user, db, activity.institution_id)
+    institution = current_institution_or_404(current_user, db)
+    data = normalize_activity_payload(payload.model_dump(exclude={"tag_ids"}), current_user, db, activity.institution_id)
     for field, value in data.items():
         setattr(activity, field, value)
+    sync_resource_tags(db, ResourceType.activity, activity.id, payload.tag_ids, institution)
     db.commit()
-    return admin_activity_to_out(get_activity_or_404(activity.id, current_user, db))
+    activity = get_activity_or_404(activity.id, current_user, db)
+    attach_tag_lists(db, ResourceType.activity, [activity])
+    return admin_activity_to_out(activity)
 
 
 @router.delete("/activities/{activity_id}")
@@ -2335,6 +2471,12 @@ def delete_activity(
 ) -> dict[str, int | bool]:
     ensure_course_staff(current_user)
     activity = get_activity_or_404(activity_id, current_user, db)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.activity,
+            ResourceTag.resource_id == activity_id,
+        )
+    )
     db.delete(activity)
     db.commit()
     return {"id": activity_id, "deleted": True}
@@ -2349,7 +2491,9 @@ def admin_blog_posts(
     stmt = select(BlogPost).where(BlogPost.institution_id == institution_id)
     if current_user.role == UserRole.teacher:
         stmt = stmt.where(BlogPost.author_user_id == current_user.id)
-    return list(db.scalars(stmt.order_by(BlogPost.updated_at.desc(), BlogPost.created_at.desc())))
+    posts = list(db.scalars(stmt.order_by(BlogPost.updated_at.desc(), BlogPost.created_at.desc())))
+    attach_tag_lists(db, ResourceType.blog_post, posts)
+    return posts
 
 
 @router.post("/blog-posts", response_model=AdminBlogPostOut, status_code=201)
@@ -2360,7 +2504,8 @@ def create_blog_post(
 ) -> BlogPost:
     ensure_course_staff(current_user)
     institution_id = get_current_institution_id_or_403(current_user)
-    data = normalize_blog_payload(payload.model_dump())
+    institution = current_institution_or_404(current_user, db)
+    data = normalize_blog_payload(payload.model_dump(exclude={"tag_ids"}))
     title = str(data["title"])
     post = BlogPost(
         institution_id=institution_id,
@@ -2370,8 +2515,11 @@ def create_blog_post(
         **data,
     )
     db.add(post)
+    db.flush()
+    sync_resource_tags(db, ResourceType.blog_post, post.id, payload.tag_ids, institution)
     db.commit()
     db.refresh(post)
+    attach_tag_lists(db, ResourceType.blog_post, [post])
     return post
 
 
@@ -2384,7 +2532,8 @@ def update_blog_post(
 ) -> BlogPost:
     ensure_course_staff(current_user)
     post = get_blog_post_or_404(post_id, current_user, db)
-    data = normalize_blog_payload(payload.model_dump())
+    institution = current_institution_or_404(current_user, db)
+    data = normalize_blog_payload(payload.model_dump(exclude={"tag_ids"}))
     title = str(data["title"])
     if post.title != title:
         post.slug = unique_blog_slug(db, title, post.id)
@@ -2392,8 +2541,10 @@ def update_blog_post(
         setattr(post, field, value)
     if not post.author_name:
         post.author_name = current_user.full_name or current_user.email.split("@")[0]
+    sync_resource_tags(db, ResourceType.blog_post, post.id, payload.tag_ids, institution)
     db.commit()
     db.refresh(post)
+    attach_tag_lists(db, ResourceType.blog_post, [post])
     return post
 
 
@@ -2405,6 +2556,12 @@ def delete_blog_post(
 ) -> dict[str, int | bool]:
     ensure_course_staff(current_user)
     post = get_blog_post_or_404(post_id, current_user, db)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.blog_post,
+            ResourceTag.resource_id == post_id,
+        )
+    )
     db.delete(post)
     db.commit()
     return {"id": post_id, "deleted": True}
@@ -2418,6 +2575,58 @@ def admin_difficulty_levels(
     institution = get_admin_institution(current_user, db)
     category = institution.category if institution else "other"
     return {"category": category, "levels": difficulty_levels_for_category(category)}
+
+
+@router.get("/tags", response_model=list[TagOut])
+def admin_tags(
+    current_user: User = Depends(get_current_user), db: Session = Depends(get_db)
+) -> list[TagOut]:
+    ensure_course_staff(current_user)
+    institution = current_institution_or_404(current_user, db)
+    tags = db.scalars(
+        select(Tag)
+        .where(
+            Tag.is_active.is_(True),
+            Tag.institution_category == institution.category,
+            or_(Tag.institution_id.is_(None), Tag.institution_id == institution.id),
+        )
+        .order_by(Tag.is_preset.desc(), Tag.name)
+    ).all()
+    return [tag_to_out(tag) for tag in tags]
+
+
+@router.post("/tags", response_model=TagOut, status_code=201)
+def create_admin_tag(
+    payload: TagCreate,
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> TagOut:
+    ensure_course_staff(current_user)
+    institution = current_institution_or_404(current_user, db)
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Tag name is required")
+    existing = db.scalar(
+        select(Tag).where(
+            Tag.is_active.is_(True),
+            Tag.institution_category == institution.category,
+            Tag.name == name,
+            or_(Tag.institution_id.is_(None), Tag.institution_id == institution.id),
+        )
+    )
+    if existing:
+        return tag_to_out(existing)
+    tag = Tag(
+        name=name,
+        institution_category=institution.category,
+        institution_id=institution.id,
+        is_preset=False,
+        is_active=True,
+    )
+    db.add(tag)
+    db.commit()
+    db.refresh(tag)
+    return tag_to_out(tag)
 
 
 @router.get("/course-categories", response_model=list[CourseCategoryOut])
@@ -2506,7 +2715,9 @@ def admin_learning_paths(
         .where(LearningPath.institution_id == institution_id, LearningPath.status != LearningPathStatus.archived)
         .order_by(LearningPath.updated_at.desc())
     )
-    return [learning_path_to_out(path) for path in db.scalars(stmt).unique()]
+    paths = list(db.scalars(stmt).unique())
+    attach_learning_path_tag_lists(db, paths)
+    return [learning_path_to_out(path) for path in paths]
 
 
 @router.get("/learning-path-course-options", response_model=list[CourseCardOut])
@@ -2521,7 +2732,9 @@ def admin_learning_path_course_options(
         .where(Course.institution_id == institution_id, Course.status != CourseStatus.archived)
         .order_by(Course.updated_at.desc())
     )
-    return list(db.scalars(stmt))
+    courses = list(db.scalars(stmt))
+    attach_tag_lists(db, ResourceType.course, courses)
+    return courses
 
 
 @router.post("/learning-paths", response_model=LearningPathOut, status_code=201)
@@ -2550,7 +2763,9 @@ def create_learning_path(
     db.add(path)
     sync_learning_path_courses(path, course_ids, db)
     db.commit()
-    return learning_path_to_out(get_learning_path_or_404(path.id, current_user, db))
+    path = get_learning_path_or_404(path.id, current_user, db)
+    attach_learning_path_tag_lists(db, [path])
+    return learning_path_to_out(path)
 
 
 @router.put("/learning-paths/{path_id}", response_model=LearningPathOut)
@@ -2576,7 +2791,9 @@ def update_learning_path(
     path.status = payload.status
     sync_learning_path_courses(path, course_ids, db)
     db.commit()
-    return learning_path_to_out(get_learning_path_or_404(path.id, current_user, db))
+    path = get_learning_path_or_404(path.id, current_user, db)
+    attach_learning_path_tag_lists(db, [path])
+    return learning_path_to_out(path)
 
 
 @router.delete("/learning-paths/{path_id}")
@@ -2611,7 +2828,9 @@ def admin_exam_papers(
         stmt = stmt.where(ExamPaper.kind == kind)
     else:
         stmt = stmt.where(ExamPaper.kind != ExamPaperKind.competition)
-    return [exam_paper_to_out(paper) for paper in db.scalars(stmt).unique()]
+    papers = list(db.scalars(stmt).unique())
+    attach_tag_lists(db, ResourceType.exam_paper, papers)
+    return [exam_paper_to_out(paper) for paper in papers]
 
 
 @router.post("/exam-papers", response_model=ExamPaperOut, status_code=201)
@@ -2624,6 +2843,7 @@ def create_exam_paper(
     if payload.status == ExamPaperStatus.published:
         ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
+    institution = current_institution_or_404(current_user, db)
     data = normalize_exam_paper_payload(payload, institution_id, db)
     question_inputs = validate_exam_questions(payload.questions, institution_id, db)
     paper = ExamPaper(
@@ -2633,8 +2853,12 @@ def create_exam_paper(
     )
     db.add(paper)
     sync_exam_paper_questions(paper, question_inputs, db)
+    db.flush()
+    sync_resource_tags(db, ResourceType.exam_paper, paper.id, payload.tag_ids, institution)
     db.commit()
-    return exam_paper_to_out(get_exam_paper_or_404(paper.id, current_user, db))
+    paper = get_exam_paper_or_404(paper.id, current_user, db)
+    attach_tag_lists(db, ResourceType.exam_paper, [paper])
+    return exam_paper_to_out(paper)
 
 
 @router.put("/exam-papers/{paper_id}", response_model=ExamPaperOut)
@@ -2648,6 +2872,7 @@ def update_exam_paper(
     if payload.status == ExamPaperStatus.published:
         ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
+    institution = current_institution_or_404(current_user, db)
     paper = get_exam_paper_or_404(paper_id, current_user, db)
     data = normalize_exam_paper_payload(payload, institution_id, db)
     question_inputs = validate_exam_questions(payload.questions, institution_id, db)
@@ -2655,8 +2880,11 @@ def update_exam_paper(
         setattr(paper, field, value)
     paper.slug = unique_exam_paper_slug(db, paper.title, institution_id, paper.id)
     sync_exam_paper_questions(paper, question_inputs, db)
+    sync_resource_tags(db, ResourceType.exam_paper, paper.id, payload.tag_ids, institution)
     db.commit()
-    return exam_paper_to_out(get_exam_paper_or_404(paper.id, current_user, db))
+    paper = get_exam_paper_or_404(paper.id, current_user, db)
+    attach_tag_lists(db, ResourceType.exam_paper, [paper])
+    return exam_paper_to_out(paper)
 
 
 @router.delete("/exam-papers/{paper_id}")
@@ -2667,6 +2895,12 @@ def delete_exam_paper(
 ) -> dict[str, int | bool]:
     ensure_course_staff(current_user)
     paper = get_exam_paper_or_404(paper_id, current_user, db)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.exam_paper,
+            ResourceTag.resource_id == paper_id,
+        )
+    )
     db.delete(paper)
     db.commit()
     return {"id": paper_id, "deleted": True}
@@ -2684,7 +2918,9 @@ def admin_competitions(
         .where(Competition.institution_id == institution_id, Competition.status != ExamPaperStatus.archived)
         .order_by(Competition.updated_at.desc())
     )
-    return [competition_to_out(competition) for competition in db.scalars(stmt).unique()]
+    competitions = list(db.scalars(stmt).unique())
+    attach_tag_lists(db, ResourceType.competition, competitions)
+    return [competition_to_out(competition) for competition in competitions]
 
 
 @router.post("/competitions", response_model=CompetitionOut, status_code=201)
@@ -2697,6 +2933,7 @@ def create_competition(
     if payload.status == ExamPaperStatus.published:
         ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
+    institution = current_institution_or_404(current_user, db)
     data = normalize_competition_payload(payload, institution_id, db)
     question_inputs = validate_exam_questions(payload.questions, institution_id, db)
     competition = Competition(
@@ -2706,8 +2943,12 @@ def create_competition(
     )
     db.add(competition)
     sync_competition_questions(competition, question_inputs, db)
+    db.flush()
+    sync_resource_tags(db, ResourceType.competition, competition.id, payload.tag_ids, institution)
     db.commit()
-    return competition_to_out(get_competition_or_404(competition.id, current_user, db))
+    competition = get_competition_or_404(competition.id, current_user, db)
+    attach_tag_lists(db, ResourceType.competition, [competition])
+    return competition_to_out(competition)
 
 
 @router.put("/competitions/{competition_id}", response_model=CompetitionOut)
@@ -2721,6 +2962,7 @@ def update_competition(
     if payload.status == ExamPaperStatus.published:
         ensure_institution_can_publish(current_user, db)
     institution_id = get_current_institution_id_or_403(current_user)
+    institution = current_institution_or_404(current_user, db)
     competition = get_competition_or_404(competition_id, current_user, db)
     data = normalize_competition_payload(payload, institution_id, db)
     question_inputs = validate_exam_questions(payload.questions, institution_id, db)
@@ -2728,8 +2970,11 @@ def update_competition(
         setattr(competition, field, value)
     competition.slug = unique_competition_slug(db, competition.title, institution_id, competition.id)
     sync_competition_questions(competition, question_inputs, db)
+    sync_resource_tags(db, ResourceType.competition, competition.id, payload.tag_ids, institution)
     db.commit()
-    return competition_to_out(get_competition_or_404(competition.id, current_user, db))
+    competition = get_competition_or_404(competition.id, current_user, db)
+    attach_tag_lists(db, ResourceType.competition, [competition])
+    return competition_to_out(competition)
 
 
 @router.delete("/competitions/{competition_id}")
@@ -2740,6 +2985,12 @@ def delete_competition(
 ) -> dict[str, int | bool]:
     ensure_course_staff(current_user)
     competition = get_competition_or_404(competition_id, current_user, db)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.competition,
+            ResourceTag.resource_id == competition_id,
+        )
+    )
     db.delete(competition)
     db.commit()
     return {"id": competition_id, "deleted": True}
@@ -2762,6 +3013,7 @@ def admin_courses(
     elif current_user.institution_id:
         stmt = stmt.where(Course.institution_id == current_user.institution_id)
     courses = list(db.scalars(stmt))
+    attach_tag_lists(db, ResourceType.course, courses)
     return attach_course_learning_paths(db, courses)
 
 
@@ -2773,6 +3025,7 @@ def admin_course_detail(
 ) -> Course:
     ensure_course_staff(current_user)
     course = get_course_or_404(course_id, current_user, db)
+    attach_tag_lists(db, ResourceType.course, [course])
     attach_course_learning_paths(db, [course])
     return course
 
@@ -2784,21 +3037,30 @@ def create_course(
     db: Session = Depends(get_db),
 ) -> Course:
     ensure_course_staff(current_user)
-    data = payload.model_dump()
+    data = payload.model_dump(exclude={"tag_ids"})
+    institution: Institution | None = None
     if current_user.role in {UserRole.teacher, UserRole.super_admin}:
         teacher = sync_teacher_record_for_user(current_user, db)
         data["teacher_id"] = teacher.id
         data["institution_id"] = teacher.institution_id
+        institution = db.get(Institution, teacher.institution_id)
     elif current_user.role == UserRole.institution_admin and current_user.institution_id:
         if data["institution_id"] != current_user.institution_id:
             raise HTTPException(status_code=403, detail="Course belongs to another institution")
         teacher = db.get(Teacher, data["teacher_id"])
         if not teacher or teacher.institution_id != current_user.institution_id:
             raise HTTPException(status_code=403, detail="Teacher belongs to another institution")
+        institution = db.get(Institution, current_user.institution_id)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
     course = Course(**data, status=CourseStatus.draft)
     db.add(course)
+    db.flush()
+    sync_resource_tags(db, ResourceType.course, course.id, payload.tag_ids, institution)
     db.commit()
     db.refresh(course)
+    attach_tag_lists(db, ResourceType.course, [course])
+    attach_course_learning_paths(db, [course])
     return course
 
 
@@ -2811,7 +3073,7 @@ def update_course(
 ) -> Course:
     ensure_course_staff(current_user)
     course = get_course_or_404(course_id, current_user, db)
-    data = payload.model_dump(exclude_unset=True, exclude={"chapters"})
+    data = payload.model_dump(exclude_unset=True, exclude={"chapters", "tag_ids"})
     if data.get("status") == CourseStatus.published:
         ensure_institution_can_publish(current_user, db)
     ensure_current_teacher_owns_course(course, current_user, db)
@@ -2829,8 +3091,14 @@ def update_course(
         setattr(course, field, value)
     if "chapters" in payload.model_fields_set:
         sync_course_chapters(course, payload.chapters or [], db)
+    if "tag_ids" in payload.model_fields_set:
+        institution = db.get(Institution, course.institution_id)
+        if not institution:
+            raise HTTPException(status_code=404, detail="Institution not found")
+        sync_resource_tags(db, ResourceType.course, course.id, payload.tag_ids, institution)
     db.commit()
     course = get_course_or_404(course.id, current_user, db)
+    attach_tag_lists(db, ResourceType.course, [course])
     attach_course_learning_paths(db, [course])
     return course
 
@@ -2857,6 +3125,12 @@ def delete_course(
 
     for question in course.questions:
         question.course_id = None
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.course,
+            ResourceTag.resource_id == course.id,
+        )
+    )
     db.delete(course)
     db.commit()
     return {"id": course_id, "deleted": True, "archived": False}
@@ -2917,7 +3191,9 @@ def admin_questions(
         stmt = stmt.where(Question.type == type)
     if course_id:
         stmt = stmt.where(Question.course_id == course_id)
-    return list(db.scalars(stmt))
+    questions = list(db.scalars(stmt))
+    attach_tag_lists(db, ResourceType.question, questions)
+    return questions
 
 
 @router.post("/code/run", response_model=CodeRunOut)
@@ -2969,7 +3245,9 @@ def admin_question_pool(
                     Question.difficulty.ilike(like_query),
                 )
             )
-    return list(db.scalars(stmt.order_by(Question.updated_at.desc())))
+    questions = list(db.scalars(stmt.order_by(Question.updated_at.desc())))
+    attach_tag_lists(db, ResourceType.question, questions)
+    return questions
 
 
 @router.get("/questions/{question_id}", response_model=QuestionOut)
@@ -2982,6 +3260,7 @@ def admin_question_detail(
     question = get_question_or_404(question_id, db)
     if current_user.role != UserRole.super_admin and question.created_by_user_id != current_user.id:
         raise HTTPException(status_code=403, detail="Question belongs to another creator")
+    attach_tag_lists(db, ResourceType.question, [question])
     return question
 
 
@@ -2994,7 +3273,7 @@ def create_question(
     ensure_question_staff(current_user)
     if payload.status == QuestionStatus.published:
         ensure_institution_can_publish(current_user, db)
-    data = payload.model_dump(exclude={"options", "media_assets"})
+    data = payload.model_dump(exclude={"options", "media_assets", "tag_ids"})
     if current_user.institution_id:
         data["institution_id"] = current_user.institution_id
     data["created_by_user_id"] = current_user.id
@@ -3003,8 +3282,15 @@ def create_question(
     question = Question(**data)
     db.add(question)
     sync_question_children(question, payload.options, payload.media_assets, db)
+    db.flush()
+    institution = db.get(Institution, question.institution_id)
+    if not institution:
+        raise HTTPException(status_code=404, detail="Institution not found")
+    sync_resource_tags(db, ResourceType.question, question.id, payload.tag_ids, institution)
     db.commit()
-    return get_question_or_404(question.id, db)
+    question = get_question_or_404(question.id, db)
+    attach_tag_lists(db, ResourceType.question, [question])
+    return question
 
 
 @router.patch("/questions/{question_id}", response_model=QuestionOut)
@@ -3017,7 +3303,7 @@ def update_question(
     ensure_question_staff(current_user)
     question = get_question_or_404(question_id, db)
     ensure_own_question(question, current_user)
-    data = payload.model_dump(exclude_unset=True, exclude={"options", "media_assets"})
+    data = payload.model_dump(exclude_unset=True, exclude={"options", "media_assets", "tag_ids"})
     if current_user.institution_id:
         data.pop("institution_id", None)
     data.pop("created_by_user_id", None)
@@ -3036,8 +3322,15 @@ def update_question(
         payload.media_assets if "media_assets" in payload.model_fields_set else None,
         db,
     )
+    if "tag_ids" in payload.model_fields_set:
+        institution = db.get(Institution, question.institution_id)
+        if not institution:
+            raise HTTPException(status_code=404, detail="Institution not found")
+        sync_resource_tags(db, ResourceType.question, question.id, payload.tag_ids, institution)
     db.commit()
-    return get_question_or_404(question.id, db)
+    question = get_question_or_404(question.id, db)
+    attach_tag_lists(db, ResourceType.question, [question])
+    return question
 
 
 @router.post("/questions/{question_id}/publish", response_model=QuestionOut)
@@ -3052,7 +3345,9 @@ def publish_question(
     ensure_institution_can_publish(current_user, db)
     question.status = QuestionStatus.published
     db.commit()
-    return get_question_or_404(question.id, db)
+    question = get_question_or_404(question.id, db)
+    attach_tag_lists(db, ResourceType.question, [question])
+    return question
 
 
 @router.delete("/questions/{question_id}", status_code=204)
@@ -3064,6 +3359,12 @@ def delete_question(
     ensure_question_staff(current_user)
     question = get_question_or_404(question_id, db)
     ensure_own_question(question, current_user)
+    db.execute(
+        delete(ResourceTag).where(
+            ResourceTag.resource_type == ResourceType.question,
+            ResourceTag.resource_id == question_id,
+        )
+    )
     db.delete(question)
     db.commit()
 

@@ -21,12 +21,53 @@ from app.models import (
     QuestionType,
     Submission,
     Subscription,
+    Tag,
     Teacher,
     User,
     UserRole,
 )
 
 pwd_context = CryptContext(schemes=["pbkdf2_sha256"], deprecated="auto")
+
+
+PRESET_TAGS_BY_INSTITUTION_CATEGORY = {
+    "tutoring": ["数学", "物理", "化学", "历史", "地理", "生物"],
+    "it": ["编程", "计算机理论", "算法", "AI"],
+    "language": ["英语", "匈语", "法语", "意大利语", "中文"],
+    "art": ["钢琴", "舞蹈", "绘画"],
+}
+
+
+def ensure_preset_tags(db: Session) -> None:
+    db.execute(
+        text(
+            "DELETE FROM tags "
+            "WHERE is_preset = true AND institution_id IS NULL AND name LIKE '%?%'"
+        )
+    )
+    for institution_category, tag_names in PRESET_TAGS_BY_INSTITUTION_CATEGORY.items():
+        for tag_name in tag_names:
+            existing = db.scalar(
+                select(Tag).where(
+                    Tag.institution_category == institution_category,
+                    Tag.institution_id.is_(None),
+                    Tag.name == tag_name,
+                )
+            )
+            if existing:
+                existing.is_preset = True
+                existing.is_active = True
+                continue
+            db.add(
+                Tag(
+                    name=tag_name,
+                    institution_category=institution_category,
+                    institution_id=None,
+                    is_preset=True,
+                    is_active=True,
+                )
+            )
+    db.commit()
 
 LEGACY_DEMO_COURSE_SLUGS = {
     "ib-chinese-reading-writing",

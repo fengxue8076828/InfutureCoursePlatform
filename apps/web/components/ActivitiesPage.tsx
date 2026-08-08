@@ -1,11 +1,24 @@
 "use client";
 
+import { ResourceTagFilters, type ResourceTagFilterValue } from "@/components/ResourceTagFilters";
+import { buildResourceQuery } from "@/lib/api";
 import { API_BASE_URL } from "@/lib/api-config";
 import { reorderByRecommendation, useRecommendationFeed } from "@/lib/recommendations";
-
-import { CalendarDays, CheckCircle2, Mail, MapPin, MonitorPlay, Phone, Sparkles, Trophy, Users } from "lucide-react";
+import type { ResourceTag } from "@/lib/types";
+import {
+  CalendarDays,
+  CheckCircle2,
+  Mail,
+  MapPin,
+  MonitorPlay,
+  Phone,
+  Sparkles,
+  Tag,
+  Trophy,
+  Users
+} from "lucide-react";
+import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
-
 
 type ActivityMode = "online" | "offline";
 type ActivityStatus = "open" | "closed";
@@ -27,6 +40,7 @@ type PublicActivity = {
   registration_status: ActivityStatus;
   capacity?: number | null;
   registrations_count: number;
+  tag_list?: ResourceTag[];
 };
 
 type ActivityHome = {
@@ -51,7 +65,9 @@ const emptyDraft: RegistrationDraft = {
 
 function formatActivityDate(value: string) {
   const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "时间待定";
+  if (Number.isNaN(date.getTime())) {
+    return "时间待定";
+  }
   return new Intl.DateTimeFormat("zh-CN", {
     month: "long",
     day: "numeric",
@@ -61,28 +77,48 @@ function formatActivityDate(value: string) {
 }
 
 function statusLabel(status: ActivityStatus) {
-  return status === "open" ? "开放注册" : "关闭注册";
+  return status === "open" ? "开放报名" : "关闭报名";
 }
 
 function modeLabel(mode: ActivityMode) {
   return mode === "online" ? "线上活动" : "线下活动";
 }
 
+function normalizeActivityPayload(payload: ActivityHome | PublicActivity[]): ActivityHome {
+  if (!Array.isArray(payload)) {
+    return payload;
+  }
+  const popular = [...payload].sort((left, right) => right.registrations_count - left.registrations_count);
+  return {
+    latest: payload.slice(0, 3),
+    popular: popular.slice(0, 3),
+    activities: payload
+  };
+}
+
 export function ActivitiesPage() {
   const [activityHome, setActivityHome] = useState<ActivityHome>({ latest: [], popular: [], activities: [] });
   const [drafts, setDrafts] = useState<Record<number, RegistrationDraft>>({});
   const [messages, setMessages] = useState<Record<number, string>>({});
+  const [filters, setFilters] = useState<ResourceTagFilterValue>({ institutionCategory: "", tagIds: [] });
   const [isLoading, setIsLoading] = useState(true);
   const [pageMessage, setPageMessage] = useState("正在读取活动...");
+  const recommendationFeed = useRecommendationFeed();
 
-  async function loadActivities() {
+  async function loadActivities(nextFilters = filters) {
     setIsLoading(true);
     try {
-      const response = await fetch(`${API_BASE_URL}/activities`, { cache: "no-store" });
-      if (!response.ok) throw new Error("Activity API unavailable");
-      const data = (await response.json()) as ActivityHome;
+      const query = buildResourceQuery({
+        institutionCategory: nextFilters.institutionCategory,
+        tagIds: nextFilters.tagIds
+      });
+      const response = await fetch(`${API_BASE_URL}/activities${query}`, { cache: "no-store" });
+      if (!response.ok) {
+        throw new Error("Activity API unavailable");
+      }
+      const data = normalizeActivityPayload((await response.json()) as ActivityHome | PublicActivity[]);
       setActivityHome(data);
-      setPageMessage(data.activities.length ? "已从平台读取最新活动。" : "暂时还没有发布活动。");
+      setPageMessage(data.activities.length ? "已从平台读取最新活动。" : "暂时还没有符合条件的活动。");
     } catch {
       setPageMessage("活动读取失败，请确认 FastAPI 服务正在运行。");
     } finally {
@@ -91,12 +127,11 @@ export function ActivitiesPage() {
   }
 
   useEffect(() => {
-    void loadActivities();
-  }, []);
+    void loadActivities(filters);
+  }, [filters]);
 
   const featuredLatest = activityHome.latest.slice(0, 3);
   const featuredPopular = activityHome.popular.slice(0, 3);
-  const recommendationFeed = useRecommendationFeed();
   const recommendedActivities = useMemo(
     () => reorderByRecommendation(activityHome.activities, recommendationFeed?.orders.activities),
     [activityHome.activities, recommendationFeed]
@@ -145,7 +180,7 @@ export function ActivitiesPage() {
       }
       setDrafts((current) => ({ ...current, [activity.id]: emptyDraft }));
       setMessages((current) => ({ ...current, [activity.id]: "报名成功，机构后台已经收到你的信息。" }));
-      await loadActivities();
+      await loadActivities(filters);
     } catch (error) {
       setMessages((current) => ({
         ...current,
@@ -160,13 +195,14 @@ export function ActivitiesPage() {
         <div className="grid gap-6 rounded-[2rem] border border-mint/20 bg-white p-6 shadow-soft lg:grid-cols-[1.2fr_0.8fr] lg:p-8">
           <div>
             <p className="inline-flex items-center gap-2 rounded-full bg-coral/10 px-3 py-1 text-sm font-black text-coral">
-              <Sparkles size={16} /> 平台活动
+              <Sparkles size={16} />
+              平台活动
             </p>
             <h1 className="mt-5 max-w-3xl text-4xl font-black leading-tight text-ink md:text-5xl">
-              和优秀机构一起参加线上线下学习活动
+              和优质机构一起参加线上线下学习活动
             </h1>
             <p className="mt-4 max-w-2xl text-base leading-8 text-slate-600">
-              讲座、公开课、工作坊、线下体验营都可以在这里找到。选择适合自己的活动，填写信息即可完成报名。
+              讲座、公开课、工作坊和线下体验营都可以在这里找到。选择适合自己的活动，填写信息即可完成报名。
             </p>
             <p className="mt-4 text-sm font-semibold text-slate-500">{pageMessage}</p>
           </div>
@@ -200,6 +236,13 @@ export function ActivitiesPage() {
             {isLoading ? <p className="text-sm font-bold text-slate-500">正在加载...</p> : null}
           </div>
 
+          <ResourceTagFilters
+            value={filters}
+            onChange={setFilters}
+            className="mt-5"
+            title="按机构类型和标签筛选活动"
+          />
+
           <div className="mt-6 grid gap-5">
             {recommendedActivities.map((activity) => (
               <ActivityCard
@@ -213,7 +256,7 @@ export function ActivitiesPage() {
             ))}
             {!activityHome.activities.length && !isLoading ? (
               <div className="rounded-2xl border border-dashed border-slate-200 p-8 text-center text-sm font-semibold text-slate-500">
-                暂时还没有活动，稍后再来看看。
+                暂时还没有符合条件的活动，稍后再来看看。
               </div>
             ) : null}
           </div>
@@ -223,40 +266,39 @@ export function ActivitiesPage() {
   );
 }
 
-function ActivityPanel({
-  title,
-  icon,
-  activities
-}: {
-  title: string;
-  icon: React.ReactNode;
-  activities: PublicActivity[];
-}) {
+function ActivityPanel({ title, icon, activities }: { title: string; icon: ReactNode; activities: PublicActivity[] }) {
   return (
-    <section className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-soft">
-      <div className="flex items-center gap-2">
-        <span className="grid h-10 w-10 place-items-center rounded-xl bg-mint/12 text-mint">{icon}</span>
-        <h2 className="text-xl font-black text-ink">{title}</h2>
-      </div>
+    <div className="rounded-[1.5rem] border border-slate-200 bg-white p-5 shadow-soft">
+      <h2 className="flex items-center gap-2 text-xl font-black text-ink">
+        <span className="text-coral">{icon}</span>
+        {title}
+      </h2>
       <div className="mt-4 grid gap-3">
-        {activities.map((activity) => (
-          <div key={activity.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <p className="font-black text-ink">{activity.title}</p>
-                <p className="mt-1 text-sm font-semibold text-slate-500">
-                  {activity.institution_name} · {formatActivityDate(activity.starts_at)}
-                </p>
+        {activities.length ? (
+          activities.map((activity) => (
+            <div key={activity.id} className="rounded-2xl border border-slate-100 bg-slate-50 p-4">
+              <div className="flex items-start justify-between gap-4">
+                <div>
+                  <p className="text-xs font-black text-coral">{activity.institution_name}</p>
+                  <h3 className="mt-1 text-base font-black text-ink">{activity.title}</h3>
+                  <p className="mt-2 flex items-center gap-2 text-xs font-bold text-slate-500">
+                    <CalendarDays size={14} />
+                    {formatActivityDate(activity.starts_at)}
+                  </p>
+                </div>
+                <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-mint">
+                  {activity.registrations_count} 人
+                </span>
               </div>
-              <span className="rounded-full bg-white px-3 py-1 text-xs font-black text-mint">
-                {activity.registrations_count} 人
-              </span>
             </div>
-          </div>
-        ))}
-        {!activities.length ? <p className="rounded-2xl bg-slate-50 p-4 text-sm font-semibold text-slate-500">暂无活动。</p> : null}
+          ))
+        ) : (
+          <p className="rounded-2xl border border-dashed border-slate-200 p-5 text-sm font-semibold text-slate-500">
+            暂时还没有活动。
+          </p>
+        )}
       </div>
-    </section>
+    </div>
   );
 }
 
@@ -274,95 +316,108 @@ function ActivityCard({
   onRegister: () => void;
 }) {
   const isOpen = activity.registration_status === "open";
-  const isOnline = activity.mode === "online";
-  const seatsLabel = useMemo(() => {
-    if (!activity.capacity) return `${activity.registrations_count} 人已报名`;
-    return `${activity.registrations_count}/${activity.capacity} 人已报名`;
-  }, [activity.capacity, activity.registrations_count]);
 
   return (
-    <article className="grid gap-5 rounded-[1.25rem] border border-slate-200 bg-white p-5 lg:grid-cols-[1fr_22rem]">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <span className={`rounded-full px-3 py-1 text-xs font-black ${isOpen ? "bg-mint/12 text-mint" : "bg-slate-100 text-slate-500"}`}>
-            {statusLabel(activity.registration_status)}
-          </span>
-          <span className="rounded-full bg-coral/10 px-3 py-1 text-xs font-black text-coral">{modeLabel(activity.mode)}</span>
-          <span className="rounded-full bg-slate-100 px-3 py-1 text-xs font-black text-slate-600">{seatsLabel}</span>
-        </div>
+    <article className="grid overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-sm lg:grid-cols-[280px_1fr]">
+      <div className="min-h-56 bg-slate-100">
         {activity.cover_url ? (
-          <img src={activity.cover_url} alt={activity.title} className="mt-4 h-48 w-full rounded-2xl object-cover" />
-        ) : null}
-        <h3 className="mt-4 text-2xl font-black text-ink">{activity.title}</h3>
-        <p className="mt-2 text-sm font-bold text-slate-500">{activity.institution_name}</p>
-        {activity.description ? (
-          <div
-            className="rich-content mt-4 text-sm leading-7 text-slate-600"
-            dangerouslySetInnerHTML={{ __html: activity.description }}
-          />
-        ) : null}
-        <div className="mt-5 grid gap-3 text-sm font-semibold text-slate-600 md:grid-cols-2">
-          <p className="flex items-center gap-2">
-            <CalendarDays size={17} className="text-coral" /> {formatActivityDate(activity.starts_at)}
-          </p>
-          <p className="flex items-center gap-2">
-            <Users size={17} className="text-mint" /> {activity.audience || "适合学生人群不限"}
-          </p>
-          <p className="flex items-center gap-2 md:col-span-2">
-            {isOnline ? <MonitorPlay size={17} className="text-sky-500" /> : <MapPin size={17} className="text-sky-500" />}
-            {isOnline ? activity.meeting_url || "会议链接待公布" : activity.location || "地点待公布"}
-          </p>
-        </div>
+          <img src={activity.cover_url} alt={activity.title} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full min-h-56 items-center justify-center bg-gradient-to-br from-mint/20 to-coral/15 text-mint">
+            <CalendarDays size={56} />
+          </div>
+        )}
       </div>
+      <div className="grid gap-5 p-5 lg:grid-cols-[1fr_340px]">
+        <div>
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="rounded-full bg-coral/10 px-3 py-1 text-xs font-black text-coral">
+              {modeLabel(activity.mode)}
+            </span>
+            <span className={`rounded-full px-3 py-1 text-xs font-black ${isOpen ? "bg-mint/10 text-mint" : "bg-slate-100 text-slate-500"}`}>
+              {statusLabel(activity.registration_status)}
+            </span>
+            {activity.tag_list?.map((tagItem) => (
+              <span key={tagItem.id} className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-3 py-1 text-xs font-bold text-slate-600">
+                <Tag size={12} />
+                {tagItem.name}
+              </span>
+            ))}
+          </div>
+          <h3 className="mt-4 text-2xl font-black text-ink">{activity.title}</h3>
+          <p className="mt-3 text-sm font-semibold leading-7 text-slate-600">{activity.description}</p>
 
-      <aside className="rounded-2xl bg-slate-50 p-4">
-        <p className="font-black text-ink">活动报名</p>
-        <div className="mt-4 grid gap-3">
-          <input
-            value={draft.student_name}
-            onChange={(event) => onChange("student_name", event.target.value)}
-            disabled={!isOpen}
-            className="focus-ring rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold outline-none disabled:bg-slate-100"
-            placeholder="学生姓名"
-          />
-          <div className="relative">
-            <Mail size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              value={draft.student_email}
-              onChange={(event) => onChange("student_email", event.target.value)}
-              disabled={!isOpen}
-              className="focus-ring w-full rounded-xl border border-slate-200 bg-white py-3 pl-9 pr-3 text-sm font-semibold outline-none disabled:bg-slate-100"
-              placeholder="学生 Email"
-            />
+          <div className="mt-5 grid gap-3 text-sm font-bold text-slate-600 sm:grid-cols-2">
+            <span className="flex items-center gap-2">
+              <CalendarDays size={17} className="text-coral" />
+              {formatActivityDate(activity.starts_at)}
+            </span>
+            <span className="flex items-center gap-2">
+              <Users size={17} className="text-coral" />
+              {activity.registrations_count} 人已报名
+              {activity.capacity ? ` / ${activity.capacity} 人` : ""}
+            </span>
+            <span className="flex items-center gap-2">
+              {activity.mode === "online" ? <MonitorPlay size={17} className="text-coral" /> : <MapPin size={17} className="text-coral" />}
+              {activity.mode === "online" ? activity.meeting_url || "线上链接报名后通知" : activity.location || "地点待定"}
+            </span>
+            <span className="flex items-center gap-2">
+              <CheckCircle2 size={17} className="text-coral" />
+              {activity.audience || "适合所有学生"}
+            </span>
           </div>
-          <div className="relative">
-            <Phone size={16} className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
-            <input
-              value={draft.phone}
-              onChange={(event) => onChange("phone", event.target.value)}
-              disabled={!isOpen}
-              className="focus-ring w-full rounded-xl border border-slate-200 bg-white py-3 pl-9 pr-3 text-sm font-semibold outline-none disabled:bg-slate-100"
-              placeholder="联系电话，可选"
-            />
-          </div>
-          <textarea
-            value={draft.note}
-            onChange={(event) => onChange("note", event.target.value)}
-            disabled={!isOpen}
-            className="focus-ring min-h-24 rounded-xl border border-slate-200 bg-white px-3 py-3 text-sm font-semibold leading-6 outline-none disabled:bg-slate-100"
-            placeholder="备注，可选"
-          />
-          <button
-            type="button"
-            onClick={onRegister}
-            disabled={!isOpen}
-            className="focus-ring inline-flex items-center justify-center gap-2 rounded-xl bg-coral px-4 py-3 text-sm font-black text-white hover:bg-[#f25f54] disabled:bg-slate-300"
-          >
-            <CheckCircle2 size={17} /> {isOpen ? "确认报名" : "报名已关闭"}
-          </button>
-          {message ? <p className="rounded-xl bg-white px-3 py-2 text-sm font-semibold text-slate-600">{message}</p> : null}
         </div>
-      </aside>
+
+        <aside className="rounded-2xl bg-slate-50 p-4">
+          <p className="text-base font-black text-ink">活动报名</p>
+          <div className="mt-4 grid gap-3">
+            <input
+              value={draft.student_name}
+              onChange={(event) => onChange("student_name", event.target.value)}
+              placeholder="学生姓名"
+              disabled={!isOpen}
+              className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-ink disabled:bg-slate-100"
+            />
+            <label className="relative block">
+              <Mail size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={draft.student_email}
+                onChange={(event) => onChange("student_email", event.target.value)}
+                placeholder="Email"
+                disabled={!isOpen}
+                className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm font-bold text-ink disabled:bg-slate-100"
+              />
+            </label>
+            <label className="relative block">
+              <Phone size={16} className="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400" />
+              <input
+                value={draft.phone}
+                onChange={(event) => onChange("phone", event.target.value)}
+                placeholder="联系电话"
+                disabled={!isOpen}
+                className="w-full rounded-xl border border-slate-200 py-3 pl-10 pr-4 text-sm font-bold text-ink disabled:bg-slate-100"
+              />
+            </label>
+            <textarea
+              value={draft.note}
+              onChange={(event) => onChange("note", event.target.value)}
+              placeholder="备注，可选"
+              disabled={!isOpen}
+              rows={3}
+              className="rounded-xl border border-slate-200 px-4 py-3 text-sm font-bold text-ink disabled:bg-slate-100"
+            />
+            <button
+              type="button"
+              disabled={!isOpen}
+              onClick={onRegister}
+              className="rounded-xl bg-coral px-5 py-3 text-sm font-black text-white shadow-soft disabled:cursor-not-allowed disabled:bg-slate-300"
+            >
+              {isOpen ? "确认报名" : "报名已关闭"}
+            </button>
+            {message ? <p className="rounded-xl bg-white px-4 py-3 text-sm font-semibold text-slate-600">{message}</p> : null}
+          </div>
+        </aside>
+      </div>
     </article>
   );
 }
