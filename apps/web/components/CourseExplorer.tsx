@@ -154,7 +154,7 @@ export function CourseExplorer({
           effectiveSelectedCourseCategory === ALL_OPTION || course.category === effectiveSelectedCourseCategory;
         const levelMatch = !showLevelFilter || effectiveSelectedLevel === ALL_OPTION || course.level === effectiveSelectedLevel;
         const courseTagIds = new Set((course.tag_list ?? []).map((tag) => tag.id));
-        const tagMatch = selectedTagIds.every((tagId) => courseTagIds.has(tagId));
+        const tagMatch = selectedTagIds.length === 0 || selectedTagIds.some((tagId) => courseTagIds.has(tagId));
         return courseCategoryMatch && levelMatch && tagMatch;
       }),
     [coursesAfterInstitutionScope, effectiveSelectedCourseCategory, effectiveSelectedLevel, selectedTagIds, showLevelFilter]

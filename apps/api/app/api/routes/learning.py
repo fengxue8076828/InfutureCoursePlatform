@@ -129,7 +129,6 @@ def apply_question_tag_filter(stmt, tag_ids: str | None):
             ResourceTag.tag_id.in_(selected_tag_ids),
         )
         .group_by(ResourceTag.resource_id)
-        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
         .subquery()
     )
     return stmt.where(Question.id.in_(select(tagged_question_ids.c.resource_id)))

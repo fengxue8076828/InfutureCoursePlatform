@@ -163,7 +163,6 @@ def apply_resource_tag_filter(stmt, resource_type: ResourceType, id_column, tag_
             ResourceTag.tag_id.in_(selected_tag_ids),
         )
         .group_by(ResourceTag.resource_id)
-        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
         .subquery()
     )
     return stmt.where(id_column.in_(select(tagged_resource_ids.c.resource_id)))
@@ -181,7 +180,6 @@ def apply_learning_path_tag_filter(stmt, tag_ids: str | None):
             ResourceTag.tag_id.in_(selected_tag_ids),
         )
         .group_by(LearningPathCourse.learning_path_id)
-        .having(func.count(func.distinct(ResourceTag.tag_id)) == len(selected_tag_ids))
         .subquery()
     )
     return stmt.where(LearningPath.id.in_(select(tagged_path_ids.c.learning_path_id)))
