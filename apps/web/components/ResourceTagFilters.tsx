@@ -1,7 +1,7 @@
 "use client";
 
 import { Filter, RotateCcw, Tag } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { API_BASE_URL } from "@/lib/api-config";
 import type { ResourceTag } from "@/lib/types";
@@ -43,13 +43,25 @@ export function ResourceTagFilters({
   const [tags, setTags] = useState<ResourceTag[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const selectedIds = useMemo(() => normalizeIds(value.tagIds), [value.tagIds]);
+  const selectedIdsRef = useRef(selectedIds);
+  const onChangeRef = useRef(onChange);
+
+  useEffect(() => {
+    selectedIdsRef.current = selectedIds;
+  }, [selectedIds]);
+
+  useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
 
   useEffect(() => {
     let isActive = true;
-    if (!value.institutionCategory) {
+    const institutionCategory = value.institutionCategory;
+
+    if (!institutionCategory) {
       setTags([]);
-      if (selectedIds.length) {
-        onChange({ institutionCategory: "", tagIds: [] });
+      if (selectedIdsRef.current.length) {
+        onChangeRef.current({ institutionCategory: "", tagIds: [] });
       }
       return;
     }
@@ -58,7 +70,7 @@ export function ResourceTagFilters({
       setIsLoading(true);
       try {
         const response = await fetch(
-          `${API_BASE_URL}/tags?institution_category=${encodeURIComponent(value.institutionCategory)}`,
+          `${API_BASE_URL}/tags?institution_category=${encodeURIComponent(institutionCategory)}`,
           { cache: "no-store" }
         );
         if (!response.ok) {
@@ -70,9 +82,9 @@ export function ResourceTagFilters({
         }
         setTags(nextTags);
         const allowedIds = new Set(nextTags.map((tag) => tag.id));
-        const nextSelectedIds = selectedIds.filter((id) => allowedIds.has(id));
-        if (nextSelectedIds.length !== selectedIds.length) {
-          onChange({ institutionCategory: value.institutionCategory, tagIds: nextSelectedIds });
+        const nextSelectedIds = selectedIdsRef.current.filter((id) => allowedIds.has(id));
+        if (nextSelectedIds.length !== selectedIdsRef.current.length) {
+          onChangeRef.current({ institutionCategory, tagIds: nextSelectedIds });
         }
       } catch {
         if (isActive) {
@@ -89,7 +101,7 @@ export function ResourceTagFilters({
     return () => {
       isActive = false;
     };
-  }, [onChange, selectedIds, value.institutionCategory]);
+  }, [value.institutionCategory]);
 
   function updateCategory(institutionCategory: string) {
     onChange({ institutionCategory, tagIds: [] });
